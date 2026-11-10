@@ -5,6 +5,12 @@ use eframe::egui;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+enum ItemAction {
+    None,
+    Copy(String),
+    Delete(i64),
+}
+
 pub struct ClipboardApp {
     db: Database,
     search_query: String,
@@ -73,36 +79,37 @@ impl ClipboardApp {
             }
         }
     }
-}
 
-impl eframe::App for ClipboardApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 1. Check for global hotkey toggle trigger
+    fn handle_hotkey_toggle(&mut self, ctx: &egui::Context) {
         let mut toggle_requested = false;
         while self.hotkey_rx.try_recv().is_ok() {
             toggle_requested = true;
         }
 
-        if toggle_requested {
-            self.is_visible = !self.is_visible;
-            if self.is_visible {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                self.refresh_items();
-                self.focus_search_input = true;
-            } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            }
+        if !toggle_requested {
+            return;
         }
 
-        // 2. Hide window if Escape key is pressed
+        self.is_visible = !self.is_visible;
+        if self.is_visible {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.refresh_items();
+            self.focus_search_input = true;
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+    }
+
+    fn handle_escape_key(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.is_visible = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
+    }
 
-        // 3. Drain new clipboard entries from background monitor
+    fn handle_monitor_updates(&mut self) {
         let mut new_items_detected = false;
         while self.notify_rx.try_recv().is_ok() {
             new_items_detected = true;
@@ -112,63 +119,68 @@ impl eframe::App for ClipboardApp {
             self.refresh_items();
             self.last_query_cached = self.search_query.clone();
         }
+    }
 
-        // Top Panel: Header, Actions, and Search Bar
+    fn render_top_panel(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.heading("🔒 Clipboard");
-
-                #[cfg(target_os = "macos")]
-                let shortcut_hint = "⌘ ù";
-                #[cfg(not(target_os = "macos"))]
-                let shortcut_hint = "Ctrl+ù";
-
-                ui.label(
-                    egui::RichText::new(format!("({shortcut_hint})"))
-                        .weak()
-                        .size(11.0),
-                );
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("Hide (Esc)").clicked() {
-                        self.is_visible = false;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                    }
-
-                    if ui.small_button("🗑 Clear").on_hover_text("Permanently deletes all history").clicked() {
-                        let _ = self.db.clear();
-                        self.refresh_items();
-                        self.show_toast("History cleared.");
-                    }
-                });
-            });
-
+            self.render_header_row(ui, ctx);
             ui.add_space(4.0);
-
-            // Search bar with auto-focus support
-            ui.horizontal(|ui| {
-                ui.label("🔍");
-                let search_box = ui.add(
-                    egui::TextEdit::singleline(&mut self.search_query)
-                        .hint_text("Search clipboard history... (Esc to hide)")
-                        .desired_width(f32::INFINITY),
-                );
-
-                if self.focus_search_input {
-                    search_box.request_focus();
-                    self.focus_search_input = false;
-                }
-            });
-
+            self.render_search_bar(ui);
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.hide_on_copy, "Close window after copy");
             });
-
             ui.add_space(4.0);
         });
+    }
 
-        // Bottom Panel: Status / Toast Bar
+    fn render_header_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal(|ui| {
+            ui.heading("🔒 Clipboard");
+
+            #[cfg(target_os = "macos")]
+            let shortcut_hint = "⌘ ù";
+            #[cfg(not(target_os = "macos"))]
+            let shortcut_hint = "Ctrl+ù";
+
+            ui.label(
+                egui::RichText::new(format!("({shortcut_hint})"))
+                    .weak()
+                    .size(11.0),
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Hide (Esc)").clicked() {
+                    self.is_visible = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
+
+                if ui.small_button("🗑 Clear").on_hover_text("Permanently deletes all history").clicked() {
+                    let _ = self.db.clear();
+                    self.refresh_items();
+                    self.show_toast("History cleared.");
+                }
+            });
+        });
+    }
+
+    fn render_search_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("🔍");
+            let search_box = ui.add(
+                egui::TextEdit::singleline(&mut self.search_query)
+                    .hint_text("Search clipboard history... (Esc to hide)")
+                    .desired_width(f32::INFINITY),
+            );
+
+            if self.focus_search_input {
+                search_box.request_focus();
+                self.focus_search_input = false;
+            }
+        });
+    }
+
+    fn render_bottom_panel(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if let Some((msg, time)) = &self.toast {
@@ -194,8 +206,9 @@ impl eframe::App for ClipboardApp {
                 });
             });
         });
+    }
 
-        // Central Panel: Clipboard History List
+    fn render_central_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.items.is_empty() {
                 ui.vertical_centered(|ui| {
@@ -206,66 +219,89 @@ impl eframe::App for ClipboardApp {
                 return;
             }
 
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let mut item_to_delete: Option<i64> = None;
-                    let mut item_to_copy: Option<String> = None;
+            self.render_items_scroll_area(ui, ctx);
+        });
+    }
 
-                    for item in &self.items {
-                        egui::Frame::group(ui.style())
-                            .rounding(6.0)
-                            .inner_margin(8.0)
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    // Timestamp
-                                    ui.label(egui::RichText::new(&item.created_at).size(10.0).weak());
+    fn render_items_scroll_area(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let mut action = ItemAction::None;
 
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.small_button("✕").on_hover_text("Delete entry").clicked() {
-                                            item_to_delete = Some(item.id);
-                                        }
-                                        if ui.small_button("📋 Copy").on_hover_text("Copy back to clipboard").clicked() {
-                                            item_to_copy = Some(item.content.clone());
-                                        }
-                                    });
-                                });
-
-                                ui.add_space(2.0);
-
-                                // Truncated preview
-                                let preview = if item.content.len() > 180 {
-                                    format!("{}...", &item.content[..180])
-                                } else {
-                                    item.content.clone()
-                                };
-
-                                let label = ui.add(
-                                    egui::Label::new(egui::RichText::new(preview).monospace())
-                                        .sense(egui::Sense::click()),
-                                );
-
-                                if label.clicked() {
-                                    item_to_copy = Some(item.content.clone());
-                                }
-                                if label.hovered() {
-                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                                }
-                            });
-
-                        ui.add_space(4.0);
+                for item in &self.items {
+                    let item_action = Self::render_clipboard_item(ui, item);
+                    if !matches!(item_action, ItemAction::None) {
+                        action = item_action;
                     }
+                    ui.add_space(4.0);
+                }
 
-                    // Handle deferred actions outside iteration
-                    if let Some(content) = item_to_copy {
-                        self.copy_item_to_clipboard(&content, ctx);
-                    }
-                    if let Some(id) = item_to_delete {
+                match action {
+                    ItemAction::Copy(content) => self.copy_item_to_clipboard(&content, ctx),
+                    ItemAction::Delete(id) => {
                         let _ = self.db.delete(id);
                         self.refresh_items();
                         self.show_toast("Entry deleted.");
                     }
+                    ItemAction::None => {}
+                }
+            });
+    }
+
+    fn render_clipboard_item(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+        let mut action = ItemAction::None;
+
+        egui::Frame::group(ui.style())
+            .rounding(6.0)
+            .inner_margin(8.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&item.created_at).size(10.0).weak());
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("✕").on_hover_text("Delete entry").clicked() {
+                            action = ItemAction::Delete(item.id);
+                        }
+                        if ui.small_button("📋 Copy").on_hover_text("Copy back to clipboard").clicked() {
+                            action = ItemAction::Copy(item.content.clone());
+                        }
+                    });
                 });
-        });
+
+                ui.add_space(2.0);
+
+                let preview = if item.content.len() > 180 {
+                    format!("{}...", &item.content[..180])
+                } else {
+                    item.content.clone()
+                };
+
+                let label = ui.add(
+                    egui::Label::new(egui::RichText::new(preview).monospace())
+                        .sense(egui::Sense::click()),
+                );
+
+                if label.clicked() {
+                    action = ItemAction::Copy(item.content.clone());
+                }
+                if label.hovered() {
+                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                }
+            });
+
+        action
+    }
+}
+
+impl eframe::App for ClipboardApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_hotkey_toggle(ctx);
+        self.handle_escape_key(ctx);
+        self.handle_monitor_updates();
+
+        self.render_top_panel(ctx);
+        self.render_bottom_panel(ctx);
+        self.render_central_panel(ctx);
     }
 }
