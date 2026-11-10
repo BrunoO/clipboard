@@ -1,0 +1,30 @@
+[package]
+name = "rusty-clipboard"
+version = "0.1.0"
+edition = "2021"
+description = "A simple, encrypted cross-platform clipboard manager in Rust"
+authors = ["Your Name"]
+
+[dependencies]
+# Pure Rust immediate-mode GUI framework
+eframe = "0.29"
+
+# Cross-platform clipboard reading and writing
+arboard = "3.4"
+
+# Global OS shortcut manager (Cmd+Shift+V / Ctrl+Shift+V)
+global-hotkey = "0.9"
+
+# SQLite with bundled SQLCipher (full database encryption)
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
+
+# OS Keyring for secure key storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+keyring = "3.2"
+
+# Cross-platform standard directories (app data directory)
+dirs = "5.0"
+
+# Time and utilities
+chrono = { version = "0.4" }
+rand = "0.8"
+hex = "0.4"

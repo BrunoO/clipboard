@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+Cargo.lock
+data/
+.encryption_key
+.DS_Store
