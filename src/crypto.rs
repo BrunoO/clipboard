@@ -17,7 +17,7 @@ const KEY_NAME: &str = "db_encryption_key";
 ///    - If the database file ALREADY exists, fail loudly rather than generating a new random key!
 ///    - Otherwise, generate a new key, save it with restricted permissions (0600 on Unix),
 ///      and back it up to the OS Keyring.
-pub fn get_or_create_encryption_key(
+pub(crate) fn get_or_create_encryption_key(
     data_dir: &Path,
     db_exists: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -28,7 +28,10 @@ pub fn get_or_create_encryption_key(
         let key = fs::read_to_string(&key_file)?;
         let trimmed = key.trim().to_string();
         if !trimmed.is_empty() {
-            println!("🔐 Loaded encryption key from local key store: {}", key_file.display());
+            println!(
+                "🔐 Loaded encryption key from local key store: {}",
+                key_file.display()
+            );
             return Ok(trimmed);
         }
     }
@@ -69,7 +72,9 @@ pub fn get_or_create_encryption_key(
     // Best-effort backup to OS Keyring
     if let Some(entry) = keyring_entry {
         if let Err(e) = entry.set_password(&new_key) {
-            eprintln!("ℹ️ Could not write key to OS Keyring ({e}); using local secure file instead.");
+            eprintln!(
+                "ℹ️ Could not write key to OS Keyring ({e}); using local secure file instead."
+            );
         } else {
             println!("🔑 Backed up encryption key to OS Keyring.");
         }
@@ -102,4 +107,38 @@ fn set_restricted_permissions(path: &Path) {
 #[cfg(not(unix))]
 fn set_restricted_permissions(_path: &Path) {
     // Windows inherits folder ACLs in %LOCALAPPDATA%
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_generate_random_hex_key() {
+        let key = generate_random_hex_key();
+        assert_eq!(key.len(), 64);
+        assert!(hex::decode(&key).is_ok());
+    }
+
+    #[test]
+    fn test_save_and_read_key_file() {
+        let dir = tempdir().unwrap();
+        let key_file = dir.path().join(".encryption_key");
+        let test_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+        save_key_file(&key_file, test_key).unwrap();
+        assert!(key_file.exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&key_file).unwrap();
+            let mode = metadata.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "Key file permissions must be 0600 on Unix");
+        }
+
+        let loaded = get_or_create_encryption_key(dir.path(), false).unwrap();
+        assert_eq!(loaded, test_key);
+    }
 }

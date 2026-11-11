@@ -84,7 +84,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// - Windows: %LOCALAPPDATA%\rusty-clipboard\
 /// - Linux:   ~/.local/share/rusty-clipboard/
 fn get_app_data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .map(|p| p.join("rusty-clipboard"))
-        .unwrap_or_else(|| PathBuf::from("./data"))
+    dirs::data_local_dir().map_or_else(|| PathBuf::from("./data"), |p| p.join("rusty-clipboard"))
 }

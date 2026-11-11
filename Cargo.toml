@@ -28,3 +28,20 @@ dirs = "5.0"
 chrono = { version = "0.4" }
 rand = "0.8"
 hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3.17"
+
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cast_possible_wrap = "allow"
+module_name_repetitions = "allow"
+significant_drop_tightening = "allow"
+redundant_pub_crate = "allow"

@@ -2781,6 +2781,7 @@ dependencies = [
  "keyring",
  "rand",
  "rusqlite",
+ "tempfile",
 ]
 
 [[package]]

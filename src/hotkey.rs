@@ -5,14 +5,17 @@ use std::sync::mpsc::Sender;
 use std::thread;
 
 /// Manages system-wide global hotkey registration and event delivery.
-pub struct HotkeyService {
+pub(crate) struct HotkeyService {
     // Keep manager alive so the OS keyboard hook is not dropped
     _manager: GlobalHotKeyManager,
     _hotkeys: Vec<HotKey>,
 }
 
 impl HotkeyService {
-    pub fn new(hotkey_tx: Sender<()>, ctx: egui::Context) -> Result<Self, Box<dyn std::error::Error>> {
+    pub(crate) fn new(
+        hotkey_tx: Sender<()>,
+        ctx: egui::Context,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let manager = GlobalHotKeyManager::new()?;
 
         #[cfg(target_os = "macos")]
@@ -48,7 +51,9 @@ impl HotkeyService {
         // Background thread listens for OS hotkey events and wakes up egui
         thread::spawn(move || {
             while let Ok(event) = receiver.recv() {
-                if (event.id == id_base || event.id == id_shift) && event.state == HotKeyState::Pressed {
+                if (event.id == id_base || event.id == id_shift)
+                    && event.state == HotKeyState::Pressed
+                {
                     let _ = hotkey_tx.send(());
                     ctx.request_repaint();
                 }

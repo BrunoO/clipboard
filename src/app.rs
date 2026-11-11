@@ -11,7 +11,7 @@ enum ItemAction {
     Delete(i64),
 }
 
-pub struct ClipboardApp {
+pub(crate) struct ClipboardApp {
     db: Database,
     search_query: String,
     items: Vec<ClipboardItem>,
@@ -27,7 +27,7 @@ pub struct ClipboardApp {
 }
 
 impl ClipboardApp {
-    pub fn new(
+    pub(crate) fn new(
         _cc: &eframe::CreationContext<'_>,
         db: Database,
         notify_rx: Receiver<()>,
@@ -155,7 +155,11 @@ impl ClipboardApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 }
 
-                if ui.small_button("🗑 Clear").on_hover_text("Permanently deletes all history").clicked() {
+                if ui
+                    .small_button("🗑 Clear")
+                    .on_hover_text("Permanently deletes all history")
+                    .clicked()
+                {
                     let _ = self.db.clear();
                     self.refresh_items();
                     self.show_toast("History cleared.");
@@ -185,24 +189,27 @@ impl ClipboardApp {
             ui.horizontal(|ui| {
                 if let Some((msg, time)) = &self.toast {
                     if time.elapsed() < Duration::from_secs(2) {
-                        ui.label(egui::RichText::new(msg).color(egui::Color32::from_rgb(46, 204, 113)).strong());
+                        ui.label(
+                            egui::RichText::new(msg)
+                                .color(egui::Color32::from_rgb(46, 204, 113))
+                                .strong(),
+                        );
                     } else {
                         self.toast = None;
                     }
                 } else {
                     ui.label(
-                        egui::RichText::new(format!("{} entries • SQLCipher encrypted", self.items.len()))
-                            .weak()
-                            .size(11.0),
+                        egui::RichText::new(format!(
+                            "{} entries • SQLCipher encrypted",
+                            self.items.len()
+                        ))
+                        .weak()
+                        .size(11.0),
                     );
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new("Press Esc to hide")
-                            .weak()
-                            .size(11.0),
-                    );
+                    ui.label(egui::RichText::new("Press Esc to hide").weak().size(11.0));
                 });
             });
         });
@@ -214,7 +221,11 @@ impl ClipboardApp {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
                     ui.label(egui::RichText::new("No clipboard history found.").weak());
-                    ui.label(egui::RichText::new("Press Cmd+C in any app to save text here!").size(12.0).weak());
+                    ui.label(
+                        egui::RichText::new("Press Cmd+C in any app to save text here!")
+                            .size(12.0)
+                            .weak(),
+                    );
                 });
                 return;
             }
@@ -263,7 +274,11 @@ impl ClipboardApp {
                         if ui.small_button("✕").on_hover_text("Delete entry").clicked() {
                             action = ItemAction::Delete(item.id);
                         }
-                        if ui.small_button("📋 Copy").on_hover_text("Copy back to clipboard").clicked() {
+                        if ui
+                            .small_button("📋 Copy")
+                            .on_hover_text("Copy back to clipboard")
+                            .clicked()
+                        {
                             action = ItemAction::Copy(item.content.clone());
                         }
                     });
