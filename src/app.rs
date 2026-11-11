@@ -1,13 +1,16 @@
-use crate::db::{ClipboardItem, Database};
+use crate::db::{ClipboardItem, Database, ItemKind};
 use crate::hotkey::HotkeyService;
+use crate::media;
 use arboard::Clipboard;
 use eframe::egui;
+use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 enum ItemAction {
     None,
-    Copy(String),
+    CopyText(String),
+    CopyImage(Vec<u8>),
     Delete(i64),
 }
 
@@ -21,6 +24,7 @@ pub(crate) struct ClipboardApp {
     notify_rx: Receiver<()>,
     hotkey_rx: Receiver<()>,
     _hotkey_service: Option<HotkeyService>,
+    texture_cache: HashMap<i64, egui::TextureHandle>,
     is_visible: bool,
     hide_on_copy: bool,
     focus_search_input: bool,
@@ -47,6 +51,7 @@ impl ClipboardApp {
             notify_rx,
             hotkey_rx,
             _hotkey_service: hotkey_service,
+            texture_cache: HashMap::new(),
             is_visible: true,
             hide_on_copy: true,
             focus_search_input: true,
@@ -66,15 +71,41 @@ impl ClipboardApp {
         self.toast = Some((message.to_string(), Instant::now()));
     }
 
-    fn copy_item_to_clipboard(&mut self, content: &str, ctx: &egui::Context) {
+    fn copy_text_to_clipboard(&mut self, content: &str, ctx: &egui::Context) {
         if let Some(cb) = &mut self.clipboard_writer {
             if let Err(e) = cb.set_text(content.to_string()) {
-                eprintln!("Failed to write to clipboard: {e}");
+                eprintln!("Failed to write text to clipboard: {e}");
             } else {
-                self.show_toast("✓ Copied to clipboard!");
+                self.show_toast("✓ Copied text to clipboard!");
                 if self.hide_on_copy {
                     self.is_visible = false;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
+            }
+        }
+    }
+
+    fn copy_image_to_clipboard(&mut self, png_bytes: &[u8], ctx: &egui::Context) {
+        if let Some(cb) = &mut self.clipboard_writer {
+            match media::png_to_rgba(png_bytes) {
+                Ok((width, height, rgba)) => {
+                    let img_data = arboard::ImageData {
+                        width,
+                        height,
+                        bytes: std::borrow::Cow::Borrowed(&rgba),
+                    };
+                    if let Err(e) = cb.set_image(img_data) {
+                        eprintln!("Failed to write image to clipboard: {e}");
+                    } else {
+                        self.show_toast("✓ Copied image to clipboard!");
+                        if self.hide_on_copy {
+                            self.is_visible = false;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to decode PNG image for clipboard copy: {e}");
                 }
             }
         }
@@ -161,6 +192,7 @@ impl ClipboardApp {
                     .clicked()
                 {
                     let _ = self.db.clear();
+                    self.texture_cache.clear();
                     self.refresh_items();
                     self.show_toast("History cleared.");
                 }
@@ -222,7 +254,7 @@ impl ClipboardApp {
                     ui.add_space(40.0);
                     ui.label(egui::RichText::new("No clipboard history found.").weak());
                     ui.label(
-                        egui::RichText::new("Press Cmd+C in any app to save text here!")
+                        egui::RichText::new("Copy text or screenshots in any app to save here!")
                             .size(12.0)
                             .weak(),
                     );
@@ -241,7 +273,8 @@ impl ClipboardApp {
                 let mut action = ItemAction::None;
 
                 for item in &self.items {
-                    let item_action = Self::render_clipboard_item(ui, item);
+                    let item_action =
+                        Self::render_clipboard_item(ui, item, &mut self.texture_cache, ctx);
                     if !matches!(item_action, ItemAction::None) {
                         action = item_action;
                     }
@@ -249,9 +282,13 @@ impl ClipboardApp {
                 }
 
                 match action {
-                    ItemAction::Copy(content) => self.copy_item_to_clipboard(&content, ctx),
+                    ItemAction::CopyText(content) => self.copy_text_to_clipboard(&content, ctx),
+                    ItemAction::CopyImage(png_bytes) => {
+                        self.copy_image_to_clipboard(&png_bytes, ctx);
+                    }
                     ItemAction::Delete(id) => {
                         let _ = self.db.delete(id);
+                        self.texture_cache.remove(&id);
                         self.refresh_items();
                         self.show_toast("Entry deleted.");
                     }
@@ -260,7 +297,12 @@ impl ClipboardApp {
             });
     }
 
-    fn render_clipboard_item(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+    fn render_clipboard_item(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        texture_cache: &mut HashMap<i64, egui::TextureHandle>,
+        ctx: &egui::Context,
+    ) -> ItemAction {
         let mut action = ItemAction::None;
 
         egui::Frame::group(ui.style())
@@ -268,7 +310,15 @@ impl ClipboardApp {
             .inner_margin(8.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&item.created_at).size(10.0).weak());
+                    let type_badge = match item.kind {
+                        ItemKind::Text => "📝 Text",
+                        ItemKind::Image => "🖼️ Image",
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("{} • {}", type_badge, item.created_at))
+                            .size(10.0)
+                            .weak(),
+                    );
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("✕").on_hover_text("Delete entry").clicked() {
@@ -279,33 +329,110 @@ impl ClipboardApp {
                             .on_hover_text("Copy back to clipboard")
                             .clicked()
                         {
-                            action = ItemAction::Copy(item.content.clone());
+                            match item.kind {
+                                ItemKind::Text => {
+                                    action = ItemAction::CopyText(item.content.clone());
+                                }
+                                ItemKind::Image => {
+                                    if let Some(png_bytes) = &item.image_data {
+                                        action = ItemAction::CopyImage(png_bytes.clone());
+                                    }
+                                }
+                            }
                         }
                     });
                 });
 
                 ui.add_space(2.0);
 
-                let preview = if item.content.len() > 180 {
-                    format!("{}...", &item.content[..180])
-                } else {
-                    item.content.clone()
+                let content_action = match item.kind {
+                    ItemKind::Text => Self::render_text_content(ui, &item.content),
+                    ItemKind::Image => Self::render_image_content(ui, item, texture_cache, ctx),
                 };
 
-                let label = ui.add(
-                    egui::Label::new(egui::RichText::new(preview).monospace())
-                        .sense(egui::Sense::click()),
-                );
-
-                if label.clicked() {
-                    action = ItemAction::Copy(item.content.clone());
-                }
-                if label.hovered() {
-                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                if !matches!(content_action, ItemAction::None) {
+                    action = content_action;
                 }
             });
 
         action
+    }
+
+    fn render_text_content(ui: &mut egui::Ui, content: &str) -> ItemAction {
+        let preview = if content.len() > 180 {
+            format!("{}...", &content[..180])
+        } else {
+            content.to_string()
+        };
+
+        let label = ui.add(
+            egui::Label::new(egui::RichText::new(preview).monospace()).sense(egui::Sense::click()),
+        );
+
+        if label.clicked() {
+            ItemAction::CopyText(content.to_string())
+        } else {
+            if label.hovered() {
+                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+            }
+            ItemAction::None
+        }
+    }
+
+    fn render_image_content(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        texture_cache: &mut HashMap<i64, egui::TextureHandle>,
+        ctx: &egui::Context,
+    ) -> ItemAction {
+        let Some(png_bytes) = &item.image_data else {
+            return ItemAction::None;
+        };
+
+        let texture = match texture_cache.entry(item.id) {
+            std::collections::hash_map::Entry::Occupied(e) => Some(e.into_mut()),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                if let Ok((w, h, rgba)) = media::png_to_rgba(png_bytes) {
+                    let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+                    let handle = ctx.load_texture(
+                        format!("clip_img_{}", item.id),
+                        color_image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    Some(e.insert(handle))
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(texture) = texture {
+            let img_widget = egui::Image::new(&*texture)
+                .max_size(egui::vec2(340.0, 160.0))
+                .sense(egui::Sense::click());
+            let response = ui.add(img_widget);
+
+            if let (Some(w), Some(h)) = (item.width, item.height) {
+                ui.label(
+                    egui::RichText::new(format!("{w} × {h} px"))
+                        .size(10.0)
+                        .weak(),
+                );
+            }
+
+            if response.clicked() {
+                return ItemAction::CopyImage(png_bytes.clone());
+            }
+            if response.hovered() {
+                ui.output_mut(|o| {
+                    o.cursor_icon = egui::CursorIcon::PointingHand;
+                });
+            }
+        } else {
+            ui.label(egui::RichText::new("Failed to load image preview").weak());
+        }
+
+        ItemAction::None
     }
 }
 

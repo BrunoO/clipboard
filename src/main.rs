@@ -2,6 +2,7 @@ mod app;
 mod crypto;
 mod db;
 mod hotkey;
+mod media;
 mod monitor;
 
 use app::ClipboardApp;

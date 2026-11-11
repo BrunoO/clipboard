@@ -3,12 +3,23 @@ use rusqlite::{params, Connection, Result};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+/// Represents the type of clipboard content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ItemKind {
+    Text,
+    Image,
+}
+
 /// Represents a single clipboard record in history.
 #[derive(Debug, Clone)]
 pub(crate) struct ClipboardItem {
-    pub id: i64,
-    pub content: String,
-    pub created_at: String,
+    pub(crate) id: i64,
+    pub(crate) kind: ItemKind,
+    pub(crate) content: String,
+    pub(crate) image_data: Option<Vec<u8>>,
+    pub(crate) width: Option<u32>,
+    pub(crate) height: Option<u32>,
+    pub(crate) created_at: String,
 }
 
 /// Thread-safe handle to the encrypted `SQLCipher` database.
@@ -25,7 +36,7 @@ impl std::fmt::Debug for Database {
 
 impl Database {
     /// Opens or creates the SQLite database, unlocks it with the `SQLCipher` key,
-    /// and initializes the schema.
+    /// and initializes or migrates the schema.
     pub(crate) fn open(
         path: &Path,
         encryption_key: &str,
@@ -45,37 +56,93 @@ impl Database {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS clipboard_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL DEFAULT 'text',
                 content TEXT NOT NULL,
+                image_data BLOB,
+                width INTEGER,
+                height INTEGER,
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_clipboard_history_id ON clipboard_history(id DESC);",
         )?;
+
+        // Graceful migration: ensure all columns exist if created with an older schema
+        let _ = conn.execute(
+            "ALTER TABLE clipboard_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE clipboard_history ADD COLUMN image_data BLOB",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE clipboard_history ADD COLUMN width INTEGER", []);
+        let _ = conn.execute(
+            "ALTER TABLE clipboard_history ADD COLUMN height INTEGER",
+            [],
+        );
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
     }
 
-    /// Inserts a new clipboard entry, deduplicating against the latest entry.
+    /// Inserts a new text clipboard entry, deduplicating against the latest entry.
     /// Returns `Ok(Some(id))` if inserted, or `Ok(None)` if duplicate.
     pub(crate) fn insert(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
 
         // Check if the most recent entry has the exact same content
         let mut stmt =
-            conn.prepare("SELECT content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
+            conn.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
         let mut rows = stmt.query([])?;
         if let Some(row) = rows.next()? {
-            let last_content: String = row.get(0)?;
-            if last_content == content {
+            let last_kind: String = row.get(0)?;
+            let last_content: String = row.get(1)?;
+            if last_kind == "text" && last_content == content {
                 return Ok(None); // Duplicate, ignore
             }
         }
 
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         conn.execute(
-            "INSERT INTO clipboard_history (content, created_at) VALUES (?1, ?2)",
+            "INSERT INTO clipboard_history (kind, content, created_at) VALUES ('text', ?1, ?2)",
             params![content, now],
+        )?;
+
+        Ok(Some(conn.last_insert_rowid()))
+    }
+
+    /// Inserts a new image clipboard entry, deduplicating against the latest entry.
+    /// Returns `Ok(Some(id))` if inserted, or `Ok(None)` if duplicate.
+    pub(crate) fn insert_image(
+        &self,
+        width: u32,
+        height: u32,
+        png_bytes: &[u8],
+    ) -> Result<Option<i64>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+
+        // Check if the most recent entry has the exact same image content
+        let mut stmt = conn
+            .prepare("SELECT kind, image_data FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            let last_kind: String = row.get(0)?;
+            if last_kind == "image" {
+                if let Ok(last_bytes) = row.get::<_, Vec<u8>>(1) {
+                    if last_bytes == png_bytes {
+                        return Ok(None); // Duplicate, ignore
+                    }
+                }
+            }
+        }
+
+        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let content = format!("[Image {width}x{height}]");
+        conn.execute(
+            "INSERT INTO clipboard_history (kind, content, image_data, width, height, created_at)
+             VALUES ('image', ?1, ?2, ?3, ?4, ?5)",
+            params![content, png_bytes, width, height, now],
         )?;
 
         Ok(Some(conn.last_insert_rowid()))
@@ -91,33 +158,45 @@ impl Database {
         let mut items = Vec::new();
         let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
 
+        let row_to_item = |row: &rusqlite::Row| -> Result<ClipboardItem, rusqlite::Error> {
+            let kind_str: String = row.get(1).unwrap_or_else(|_| "text".to_string());
+            let kind = if kind_str == "image" {
+                ItemKind::Image
+            } else {
+                ItemKind::Text
+            };
+            Ok(ClipboardItem {
+                id: row.get(0)?,
+                kind,
+                content: row.get(2)?,
+                image_data: row.get(3)?,
+                width: row.get(4)?,
+                height: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        };
+
         if let Some(search) = filter.filter(|s| !s.trim().is_empty()) {
             let pattern = format!("%{}%", search.trim());
             let mut stmt = conn.prepare(
-                "SELECT id, content, created_at FROM clipboard_history
+                "SELECT id, kind, content, image_data, width, height, created_at
+                 FROM clipboard_history
                  WHERE content LIKE ?1
                  ORDER BY id DESC LIMIT ?2",
             )?;
             let mut rows = stmt.query(params![pattern, limit_i64])?;
             while let Some(row) = rows.next()? {
-                items.push(ClipboardItem {
-                    id: row.get(0)?,
-                    content: row.get(1)?,
-                    created_at: row.get(2)?,
-                });
+                items.push(row_to_item(row)?);
             }
         } else {
             let mut stmt = conn.prepare(
-                "SELECT id, content, created_at FROM clipboard_history
+                "SELECT id, kind, content, image_data, width, height, created_at
+                 FROM clipboard_history
                  ORDER BY id DESC LIMIT ?1",
             )?;
             let mut rows = stmt.query(params![limit_i64])?;
             while let Some(row) = rows.next()? {
-                items.push(ClipboardItem {
-                    id: row.get(0)?,
-                    content: row.get(1)?,
-                    created_at: row.get(2)?,
-                });
+                items.push(row_to_item(row)?);
             }
         }
 
@@ -157,7 +236,30 @@ mod tests {
 
         let items = db.get_recent(10, None).expect("Query failed");
         assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, ItemKind::Text);
         assert_eq!(items[0].content, "Hello World");
+    }
+
+    #[test]
+    fn test_insert_image_and_deduplication() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("image_test.db");
+        let db = Database::open(&db_path, TEST_KEY).unwrap();
+
+        let dummy_png = vec![137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4];
+        let id = db.insert_image(320, 240, &dummy_png).unwrap();
+        assert_eq!(id, Some(1));
+
+        // Duplicate insert should be skipped
+        let dup = db.insert_image(320, 240, &dummy_png).unwrap();
+        assert_eq!(dup, None);
+
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, ItemKind::Image);
+        assert_eq!(items[0].width, Some(320));
+        assert_eq!(items[0].height, Some(240));
+        assert_eq!(items[0].image_data.as_deref(), Some(dummy_png.as_slice()));
     }
 
     #[test]
@@ -185,6 +287,8 @@ mod tests {
         db.insert("cargo build --release").unwrap();
         db.insert("git commit -m 'feat: add tests'").unwrap();
         db.insert("cargo clippy --all-targets").unwrap();
+        let dummy_png = vec![1, 2, 3];
+        db.insert_image(1920, 1080, &dummy_png).unwrap();
 
         let cargo_items = db.get_recent(10, Some("cargo")).unwrap();
         assert_eq!(cargo_items.len(), 2);
@@ -193,8 +297,12 @@ mod tests {
         assert_eq!(git_items.len(), 1);
         assert_eq!(git_items[0].content, "git commit -m 'feat: add tests'");
 
+        let image_items = db.get_recent(10, Some("Image")).unwrap();
+        assert_eq!(image_items.len(), 1);
+        assert_eq!(image_items[0].kind, ItemKind::Image);
+
         let empty_search = db.get_recent(10, Some("   ")).unwrap();
-        assert_eq!(empty_search.len(), 3);
+        assert_eq!(empty_search.len(), 4);
     }
 
     #[test]

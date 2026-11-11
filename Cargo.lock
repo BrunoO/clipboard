@@ -2778,6 +2778,7 @@ dependencies = [
  "eframe",
  "global-hotkey",
  "hex",
+ "image",
  "keyring",
  "rand",
  "rusqlite",

@@ -4,10 +4,11 @@ A lightweight, encrypted cross-platform clipboard manager written in Rust.
 
 Designed as a clean, idiomatic project for learning Rust, featuring:
 * **Immediate-mode GUI** using [`eframe`](https://github.com/emilk/egui) / [`egui`](https://github.com/emilk/egui).
-* **Cross-platform clipboard access** via [`arboard`](https://github.com/1Password/arboard).
+* **Cross-platform clipboard access** for both text and images via [`arboard`](https://github.com/1Password/arboard).
 * **Global OS hotkey summoning** (`Cmd+Shift+V` / `Ctrl+Shift+V`) via [`global-hotkey`](https://github.com/tauri-apps/global-hotkey).
 * **Full-database encryption** at rest using **SQLCipher** (via [`rusqlite`](https://github.com/rusqlite/rusqlite) with `bundled-sqlcipher`).
 * **Secure key storage** via OS Keyring ([`keyring`](https://github.com/hwchen/keyring-rs): macOS Keychain, Windows Credential Manager, Linux Secret Service).
+* **Lossless PNG compression** for clipboard images via [`image`](https://crates.io/crates/image).
 
 ---
 
@@ -23,15 +24,15 @@ Designed as a clean, idiomatic project for learning Rust, featuring:
 ┌──────────────────────┐      ┌──────────────────────────────┐
 │  Background Monitor  │      │     SQLCipher Database       │
 │      (arboard)       ├─────►│  (rusqlite, 256-bit AES)     │
-│ Polls OS clipboard   │      │  Table: clipboard_history    │
+│ Polls text & images  │      │  Table: clipboard_history    │
 └──────────┬───────────┘      └──────────────┬───────────────┘
            │                                 │
            │ ctx.request_repaint()           │ Queries / Filter
            ▼                                 ▼
 ┌────────────────────────────────────────────────────────────┐
 │                  eframe / egui GUI Window                  │
-│  - Instant search & history filter                         │
-│  - One-click copy back to clipboard                        │
+│  - Instant search & history filter (text & images)         │
+│  - Interactive thumbnail preview & one-click copy back     │
 │  - Single item delete & Clear All                          │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -49,6 +50,7 @@ rusty-clipboard/
 │   ├── db.rs             # rusqlite + SQLCipher encrypted database wrapper
 │   ├── crypto.rs         # OS Keyring integration & key generation
 │   ├── hotkey.rs         # Global OS shortcut listener (Cmd+Shift+V / Ctrl+Shift+V)
+│   ├── media.rs          # Image encoding/decoding (RGBA <-> PNG)
 │   └── monitor.rs        # Background thread monitoring OS clipboard
 └── README.md
 ```
