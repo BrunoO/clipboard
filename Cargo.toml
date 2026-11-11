@@ -45,3 +45,11 @@ cast_possible_wrap = "allow"
 module_name_repetitions = "allow"
 significant_drop_tightening = "allow"
 redundant_pub_crate = "allow"
+
+# Production release configuration: maximal optimization, thin LTO, symbol stripping
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
