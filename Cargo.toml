@@ -22,7 +22,7 @@ rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
 keyring = "3.2"
 
 # Cross-platform standard directories (app data directory)
-dirs = "5.0"
+dirs = "7.0"
 
 # Time and utilities
 chrono = { version = "0.4" }
