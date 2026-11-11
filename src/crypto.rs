@@ -1,5 +1,5 @@
 use keyring::Entry;
-use rand::RngCore;
+use rand::Rng;
 use std::fs;
 use std::path::Path;
 
@@ -94,7 +94,7 @@ fn save_key_file(path: &Path, key: &str) -> Result<(), std::io::Error> {
 
 fn generate_random_hex_key() -> String {
     let mut key_bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key_bytes);
+    rand::rng().fill_bytes(&mut key_bytes);
     hex::encode(key_bytes)
 }
 

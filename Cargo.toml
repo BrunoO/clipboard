@@ -16,17 +16,17 @@ arboard = "3.4"
 global-hotkey = "0.9"
 
 # SQLite with bundled SQLCipher (full database encryption)
-rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
+rusqlite = { version = "0.41", features = ["bundled-sqlcipher"] }
 
 # OS Keyring for secure key storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)
-keyring = "3.2"
+keyring = "4.2"
 
 # Cross-platform standard directories (app data directory)
-dirs = "5.0"
+dirs = "7.0"
 
 # Time and utilities
 chrono = { version = "0.4" }
-rand = "0.8"
+rand = "0.10"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 

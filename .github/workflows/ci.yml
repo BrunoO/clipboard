@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         run: |
@@ -27,7 +27,7 @@ jobs:
           sudo apt-get install -y libx11-dev libxcb1-dev libdbus-1-dev
 
       - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           components: rustfmt, clippy
 
@@ -47,7 +47,7 @@ jobs:
     continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -62,7 +62,7 @@ jobs:
           echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
 
       - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
 
       - name: Run unit and integration tests
         run: cargo test --all-targets --verbose
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Run cargo-deny security & license check
         uses: EmbarkStudios/cargo-deny-action@v2

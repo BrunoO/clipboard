@@ -31,6 +31,11 @@ allow = [
     "CC0-1.0",
     "MPL-2.0",
     "Unlicense",
+    "BSL-1.0",
+    "0BSD",
+    "OFL-1.1",
+    "blessing",
+    "WTFPL",
 ]
 
 [licenses.private]
