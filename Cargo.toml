@@ -19,7 +19,7 @@ global-hotkey = "0.9"
 rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
 
 # OS Keyring for secure key storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)
-keyring = "3.2"
+keyring = "4.2"
 
 # Cross-platform standard directories (app data directory)
 dirs = "5.0"
