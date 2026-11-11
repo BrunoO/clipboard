@@ -16,7 +16,7 @@ arboard = "3.4"
 global-hotkey = "0.9"
 
 # SQLite with bundled SQLCipher (full database encryption)
-rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
+rusqlite = { version = "0.41", features = ["bundled-sqlcipher"] }
 
 # OS Keyring for secure key storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 keyring = "3.2"
