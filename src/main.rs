@@ -1,4 +1,5 @@
 mod app;
+mod code;
 mod crypto;
 mod db;
 mod hotkey;

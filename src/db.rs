@@ -9,6 +9,7 @@ pub(crate) enum ItemKind {
     Text,
     Image,
     Url,
+    Code,
 }
 
 /// Returns true if the string is a valid HTTP or HTTPS URL with a host.
@@ -55,6 +56,14 @@ impl ClipboardItem {
     pub(crate) fn url_host(&self) -> Option<String> {
         self.parsed_url()
             .and_then(|u| u.host_str().map(str::to_lowercase))
+    }
+
+    /// Detects if the item content is a recognized programming language or data format.
+    pub(crate) fn code_language(&self) -> Option<crate::code::CodeLanguage> {
+        if self.kind == ItemKind::Image || self.kind == ItemKind::Url {
+            return None;
+        }
+        crate::code::detect_code_language(&self.content)
     }
 }
 
@@ -134,13 +143,22 @@ impl Database {
         if let Some(row) = rows.next()? {
             let last_kind: String = row.get(0)?;
             let last_content: String = row.get(1)?;
-            if (last_kind == "text" || last_kind == "url") && last_content == content {
+            if (last_kind == "text" || last_kind == "url" || last_kind == "code")
+                && last_content == content
+            {
                 return Ok(None); // Duplicate, ignore
             }
         }
 
         let is_url = is_valid_url(content);
-        let kind_str = if is_url { "url" } else { "text" };
+        let is_code = !is_url && crate::code::detect_code_language(content).is_some();
+        let kind_str = if is_url {
+            "url"
+        } else if is_code {
+            "code"
+        } else {
+            "text"
+        };
 
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         conn.execute(
@@ -203,9 +221,12 @@ impl Database {
             let kind = match kind_str.as_str() {
                 "image" => ItemKind::Image,
                 "url" => ItemKind::Url,
+                "code" => ItemKind::Code,
                 _ => {
                     if is_valid_url(&content) {
                         ItemKind::Url
+                    } else if crate::code::detect_code_language(&content).is_some() {
+                        ItemKind::Code
                     } else {
                         ItemKind::Text
                     }
@@ -417,6 +438,29 @@ mod tests {
 
         // Deduplication for URLs
         let dup = db.insert("https://github.com/BrunoO/clipboard").unwrap();
+        assert_eq!(dup, None);
+    }
+
+    #[test]
+    fn test_insert_code_and_detection() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("code_test.db");
+        let db = Database::open(&db_path, TEST_KEY).unwrap();
+
+        let rust_code = "pub fn add(x: i32, y: i32) -> i32 {\n    x + y\n}";
+        let id = db.insert(rust_code).unwrap().unwrap();
+        assert_eq!(id, 1);
+
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, ItemKind::Code);
+        assert_eq!(
+            items[0].code_language(),
+            Some(crate::code::CodeLanguage::Rust)
+        );
+
+        // Deduplication for code
+        let dup = db.insert(rust_code).unwrap();
         assert_eq!(dup, None);
     }
 }

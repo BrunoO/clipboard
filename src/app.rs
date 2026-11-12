@@ -13,12 +13,14 @@ pub(crate) enum ContentFilter {
     All,
     Text,
     Links,
+    Code,
     Image,
 }
 
 enum ItemAction {
     None,
     CopyText(String),
+    CopyFormattedJson(String),
     CopyImage(Vec<u8>),
     OpenBrowser(String),
     Delete(i64),
@@ -192,6 +194,11 @@ impl ClipboardApp {
             .iter()
             .filter(|i| i.kind == ItemKind::Url)
             .count();
+        let code_count = self
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Code)
+            .count();
         let img_count = self
             .items
             .iter()
@@ -213,6 +220,11 @@ impl ClipboardApp {
                 &mut self.content_filter,
                 ContentFilter::Links,
                 format!("🌐 Links ({link_count})"),
+            );
+            ui.selectable_value(
+                &mut self.content_filter,
+                ContentFilter::Code,
+                format!("💻 Code ({code_count})"),
             );
             ui.selectable_value(
                 &mut self.content_filter,
@@ -315,6 +327,7 @@ impl ClipboardApp {
                     ContentFilter::All => true,
                     ContentFilter::Text => item.kind == ItemKind::Text,
                     ContentFilter::Links => item.kind == ItemKind::Url,
+                    ContentFilter::Code => item.kind == ItemKind::Code,
                     ContentFilter::Image => item.kind == ItemKind::Image,
                 };
                 if matches {
@@ -333,6 +346,7 @@ impl ClipboardApp {
                         ContentFilter::All => "No clipboard history found.",
                         ContentFilter::Text => "No text entries found.",
                         ContentFilter::Links => "No links found in clipboard history.",
+                        ContentFilter::Code => "No code snippets found in clipboard history.",
                         ContentFilter::Image => "No image entries found.",
                     };
                     ui.label(egui::RichText::new(empty_hint).weak());
@@ -375,6 +389,10 @@ impl ClipboardApp {
 
                 match action {
                     ItemAction::CopyText(content) => self.copy_text_to_clipboard(&content, ctx),
+                    ItemAction::CopyFormattedJson(formatted) => {
+                        self.copy_text_to_clipboard(&formatted, ctx);
+                        self.show_toast("✓ Copied formatted JSON to clipboard!");
+                    }
                     ItemAction::CopyImage(png_bytes) => {
                         self.copy_image_to_clipboard(&png_bytes, ctx);
                     }
@@ -409,79 +427,157 @@ impl ClipboardApp {
             .rounding(6.0)
             .inner_margin(8.0)
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    match item.kind {
-                        ItemKind::Text => {
-                            ui.label(
-                                egui::RichText::new(format!("📝 Text • {}", item.created_at))
-                                    .size(10.0)
-                                    .weak(),
-                            );
-                        }
-                        ItemKind::Url => {
-                            let host = item.url_host().unwrap_or_else(|| "link".to_string());
-                            ui.label(
-                                egui::RichText::new("🌐 Link")
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgb(52, 152, 219))
-                                    .strong(),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("• {host} • {}", item.created_at))
-                                    .size(10.0)
-                                    .weak(),
-                            );
-                        }
-                        ItemKind::Image => {
-                            ui.label(
-                                egui::RichText::new(format!("🖼️ Image • {}", item.created_at))
-                                    .size(10.0)
-                                    .weak(),
-                            );
-                        }
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("✕").on_hover_text("Delete entry").clicked() {
-                            action = ItemAction::Delete(item.id);
-                        }
-                        if ui
-                            .small_button("📋 Copy")
-                            .on_hover_text("Copy back to clipboard")
-                            .clicked()
-                        {
-                            match item.kind {
-                                ItemKind::Text | ItemKind::Url => {
-                                    action = ItemAction::CopyText(item.content.clone());
-                                }
-                                ItemKind::Image => {
-                                    if let Some(png_bytes) = &item.image_data {
-                                        action = ItemAction::CopyImage(png_bytes.clone());
-                                    }
-                                }
-                            }
-                        }
-                        if item.kind == ItemKind::Url
-                            && ui
-                                .small_button("↗ Open")
-                                .on_hover_text("Open link in default browser")
-                                .clicked()
-                        {
-                            action = ItemAction::OpenBrowser(item.content.trim().to_string());
-                        }
-                    });
-                });
+                let header_action = Self::render_item_header(ui, item);
+                if !matches!(header_action, ItemAction::None) {
+                    action = header_action;
+                }
 
                 ui.add_space(2.0);
 
                 let content_action = match item.kind {
                     ItemKind::Text => Self::render_text_content(ui, &item.content),
                     ItemKind::Url => Self::render_url_content(ui, &item.content),
+                    ItemKind::Code => Self::render_code_content(ui, item),
                     ItemKind::Image => Self::render_image_content(ui, item, texture_cache, ctx),
                 };
 
                 if !matches!(content_action, ItemAction::None) {
                     action = content_action;
+                }
+            });
+
+        action
+    }
+
+    fn render_item_header(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+        let mut action = ItemAction::None;
+
+        ui.horizontal(|ui| {
+            match item.kind {
+                ItemKind::Text => {
+                    ui.label(
+                        egui::RichText::new(format!("📝 Text • {}", item.created_at))
+                            .size(10.0)
+                            .weak(),
+                    );
+                }
+                ItemKind::Url => {
+                    let host = item.url_host().unwrap_or_else(|| "link".to_string());
+                    ui.label(
+                        egui::RichText::new("🌐 Link")
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(52, 152, 219))
+                            .strong(),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("• {host} • {}", item.created_at))
+                            .size(10.0)
+                            .weak(),
+                    );
+                }
+                ItemKind::Code => {
+                    let lang_badge = item
+                        .code_language()
+                        .map_or("💻 Code", crate::code::CodeLanguage::badge);
+                    let line_count = item.content.lines().count();
+                    ui.label(
+                        egui::RichText::new(lang_badge)
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(224, 108, 117))
+                            .strong(),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("• {line_count} lines • {}", item.created_at))
+                            .size(10.0)
+                            .weak(),
+                    );
+                }
+                ItemKind::Image => {
+                    ui.label(
+                        egui::RichText::new(format!("🖼️ Image • {}", item.created_at))
+                            .size(10.0)
+                            .weak(),
+                    );
+                }
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("✕").on_hover_text("Delete entry").clicked() {
+                    action = ItemAction::Delete(item.id);
+                }
+                if ui
+                    .small_button("📋 Copy")
+                    .on_hover_text("Copy back to clipboard")
+                    .clicked()
+                {
+                    match item.kind {
+                        ItemKind::Text | ItemKind::Url | ItemKind::Code => {
+                            action = ItemAction::CopyText(item.content.clone());
+                        }
+                        ItemKind::Image => {
+                            if let Some(png_bytes) = &item.image_data {
+                                action = ItemAction::CopyImage(png_bytes.clone());
+                            }
+                        }
+                    }
+                }
+                if item.kind == ItemKind::Url
+                    && ui
+                        .small_button("↗ Open")
+                        .on_hover_text("Open link in default browser")
+                        .clicked()
+                {
+                    action = ItemAction::OpenBrowser(item.content.trim().to_string());
+                }
+                if item.code_language() == Some(crate::code::CodeLanguage::Json) {
+                    if let Some(pretty) = crate::code::format_json(&item.content) {
+                        if ui
+                            .small_button("🪄 Prettify")
+                            .on_hover_text("Copy formatted JSON with indentation")
+                            .clicked()
+                        {
+                            action = ItemAction::CopyFormattedJson(pretty);
+                        }
+                    }
+                }
+            });
+        });
+
+        action
+    }
+
+    fn render_code_content(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+        let lang = item
+            .code_language()
+            .unwrap_or(crate::code::CodeLanguage::Rust);
+
+        let mut action = ItemAction::None;
+
+        egui::Frame::canvas(ui.style())
+            .rounding(4.0)
+            .fill(egui::Color32::from_rgb(26, 27, 34))
+            .inner_margin(6.0)
+            .show(ui, |ui| {
+                let preview: String = item
+                    .content
+                    .lines()
+                    .take(8)
+                    .collect::<Vec<&str>>()
+                    .join("\n");
+                let has_more = item.content.lines().count() > 8;
+                let display_text = if has_more {
+                    format!("{preview}\n// ... (more lines)")
+                } else {
+                    preview
+                };
+
+                let job = crate::code::highlight_code(&display_text, lang);
+                let label = ui.add(egui::Label::new(job).sense(egui::Sense::click()));
+
+                if label.clicked() {
+                    action = ItemAction::CopyText(item.content.clone());
+                } else if label.hovered() {
+                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
                 }
             });
 
