@@ -29,6 +29,8 @@ pub(crate) fn get_or_create_encryption_key(
         let key = fs::read_to_string(&key_file)?;
         let trimmed = key.trim().to_string();
         if !trimmed.is_empty() {
+            // Best-effort: enforce restrictive permissions for existing key files (e.g. legacy/plain ACLs on Windows).
+            set_restricted_permissions(&key_file);
             println!(
                 "🔐 Loaded encryption key from local key store: {}",
                 key_file.display()
@@ -106,9 +108,30 @@ fn set_restricted_permissions(path: &Path) {
     let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_restricted_permissions(path: &Path) {
+    use std::process::Command;
+
+    let Some(path_str) = path.to_str() else {
+        return;
+    };
+
+    // Best-effort hardening: remove inherited ACLs and grant only the current user full control.
+    // This reduces exposure compared to inheriting broad folder ACLs in %LOCALAPPDATA%.
+    let username = match std::env::var("USERNAME") {
+        Ok(u) if !u.trim().is_empty() => u,
+        _ => return,
+    };
+    let grant = format!("{username}:(F)");
+
+    let _ = Command::new("icacls")
+        .args([path_str, "/inheritance:r", "/grant:r", &grant])
+        .output();
+}
+
+#[cfg(not(any(unix, windows)))]
 fn set_restricted_permissions(_path: &Path) {
-    // Windows inherits folder ACLs in %LOCALAPPDATA%
+    // No platform-specific hardening implemented.
 }
 
 #[cfg(test)]
