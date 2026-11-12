@@ -406,7 +406,19 @@ impl ClipboardApp {
             if is_focused {
                 self.has_been_focused = true;
             } else if self.has_been_focused && self.settings.hide_on_blur {
-                self.hide_window(ctx, false, false);
+                // On macOS and Windows, only dismiss when the user actually switches away to
+                // another application (!is_active). Interacting with the system menu bar,
+                // the standard "About" dialog, or auxiliary panels belongs to this application
+                // and must not cause the window to disappear.
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                let is_outside = !is_active;
+
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                let is_outside = !is_focused;
+
+                if is_outside {
+                    self.hide_window(ctx, false, false);
+                }
             }
         } else {
             if !is_active && !is_focused {
@@ -835,6 +847,9 @@ impl ClipboardApp {
                 ui.add_space(10.0);
 
                 self.render_security_settings_group(ui);
+                ui.add_space(10.0);
+
+                Self::render_about_settings_group(ui);
                 ui.add_space(12.0);
 
                 if ui
@@ -1055,6 +1070,32 @@ impl ClipboardApp {
                     .clicked()
                 {
                     self.show_clear_confirm_dialog = true;
+                }
+            });
+        });
+    }
+
+    fn render_about_settings_group(ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{} About CipherClipboard", icons::INFO))
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "CipherClipboard v0.1.0\nA secure, platform-native clipboard manager with SQLCipher 256-bit AES encryption.",
+                )
+                .weak()
+                .size(11.0),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button(format!("{} GitHub Repository", icons::ARROW_SQUARE_OUT))
+                    .clicked()
+                {
+                    let _ = webbrowser::open("https://github.com/BrunoO/clipboard");
                 }
             });
         });
