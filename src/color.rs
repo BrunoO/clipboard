@@ -393,6 +393,193 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     (r, g, b)
 }
 
+fn push_unique_color(colors: &mut Vec<ParsedColor>, color: ParsedColor) {
+    if !colors.contains(&color) {
+        colors.push(color);
+    }
+}
+
+fn try_extract_hex(chars: &[char], i: usize) -> Option<(ParsedColor, usize)> {
+    if *chars.get(i)? != '#' {
+        return None;
+    }
+
+    let prev_char = if i > 0 {
+        chars.get(i - 1).copied()
+    } else {
+        None
+    };
+    let valid_start = prev_char.is_none_or(|c| {
+        c.is_ascii_whitespace()
+            || matches!(
+                c,
+                '"' | '\''
+                    | '`'
+                    | ':'
+                    | '='
+                    | '('
+                    | '['
+                    | '{'
+                    | ','
+                    | ';'
+                    | '>'
+                    | '<'
+                    | '!'
+                    | '|'
+                    | '&'
+            )
+    });
+
+    if !valid_start {
+        return None;
+    }
+
+    let start = i + 1;
+    let mut end = start;
+    while end < chars.len() && chars[end].is_ascii_hexdigit() {
+        end += 1;
+    }
+    let hex_len = end - start;
+
+    let next_char = chars.get(end).copied();
+    let valid_end = next_char.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
+
+    if !valid_end || !matches!(hex_len, 3 | 4 | 6 | 8) {
+        return None;
+    }
+
+    let hex_slice: String = chars[start..end].iter().collect();
+
+    // Prevent false positives on issue numbers like #123
+    if hex_len == 3 && hex_slice.chars().all(|c| c.is_ascii_digit()) {
+        let first = hex_slice.chars().next();
+        let all_same = hex_slice.chars().all(|c| Some(c) == first);
+        if !all_same
+            && !prev_char
+                .is_some_and(|c| matches!(c, ':' | '=' | '\'' | '"' | '`' | '(' | '{' | '[' | ','))
+        {
+            return None;
+        }
+    }
+
+    let candidate = format!("#{hex_slice}");
+    let parsed = parse_hex_color(&candidate)?;
+    Some((parsed, end))
+}
+
+fn try_extract_0x(chars: &[char], i: usize) -> Option<(ParsedColor, usize)> {
+    if *chars.get(i)? != '0' {
+        return None;
+    }
+    let next = *chars.get(i + 1)?;
+    if next != 'x' && next != 'X' {
+        return None;
+    }
+
+    let prev_char = if i > 0 {
+        chars.get(i - 1).copied()
+    } else {
+        None
+    };
+    let valid_start = prev_char.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_');
+    if !valid_start {
+        return None;
+    }
+
+    let start = i + 2;
+    let mut end = start;
+    while end < chars.len() && chars[end].is_ascii_hexdigit() {
+        end += 1;
+    }
+    let hex_len = end - start;
+
+    let next_char = chars.get(end).copied();
+    let valid_end = next_char.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_');
+
+    if !valid_end || !matches!(hex_len, 6 | 8) {
+        return None;
+    }
+
+    let hex_slice: String = chars[start..end].iter().collect();
+    let candidate = format!("0x{hex_slice}");
+    let parsed = parse_hex_color(&candidate)?;
+    Some((parsed, end))
+}
+
+fn try_extract_func(chars: &[char], i: usize) -> Option<(ParsedColor, usize)> {
+    let remaining: String = chars[i..].iter().take(6).collect();
+    let is_rgb = remaining.starts_with("rgb(");
+    let is_rgba = remaining.starts_with("rgba(");
+    let is_hsl = remaining.starts_with("hsl(");
+    let is_hsla = remaining.starts_with("hsla(");
+
+    if !is_rgb && !is_rgba && !is_hsl && !is_hsla {
+        return None;
+    }
+
+    let prev_char = if i > 0 {
+        chars.get(i - 1).copied()
+    } else {
+        None
+    };
+    if !prev_char.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_') {
+        return None;
+    }
+
+    let prefix_len = if is_rgba || is_hsla { 5 } else { 4 };
+    let mut end = i + prefix_len;
+    while end < chars.len() && end - i < 40 && chars[end] != ')' {
+        end += 1;
+    }
+
+    if end >= chars.len() || chars[end] != ')' {
+        return None;
+    }
+
+    let fn_str: String = chars[i..=end].iter().collect();
+    let lower = fn_str.to_ascii_lowercase();
+
+    let parsed = if is_rgb || is_rgba {
+        parse_rgb_function(&lower)?
+    } else {
+        parse_hsl_function(&lower)?
+    };
+
+    Some((parsed, end + 1))
+}
+
+/// Extracts distinct colors embedded within arbitrary text or code snippets.
+/// Supports `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, `0xRRGGBB`, `0xRRGGBBAA`,
+/// and CSS functional notations `rgb(...)`, `rgba(...)`, `hsl(...)`, `hsla(...)`.
+#[must_use]
+pub(crate) fn extract_colors(text: &str) -> Vec<ParsedColor> {
+    let mut colors = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        if let Some((color, next_idx)) = try_extract_hex(&chars, i) {
+            push_unique_color(&mut colors, color);
+            i = next_idx;
+        } else if let Some((color, next_idx)) = try_extract_0x(&chars, i) {
+            push_unique_color(&mut colors, color);
+            i = next_idx;
+        } else if let Some((color, next_idx)) = try_extract_func(&chars, i) {
+            push_unique_color(&mut colors, color);
+            i = next_idx;
+        } else {
+            i += 1;
+        }
+
+        if colors.len() >= 8 {
+            break;
+        }
+    }
+
+    colors
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,5 +664,63 @@ mod tests {
         assert_eq!(argb.r, 0x2A);
         assert_eq!(argb.g, 0x24);
         assert_eq!(argb.b, 0x67);
+    }
+
+    #[test]
+    fn test_extract_colors_from_css() {
+        let css = r"
+            button {
+                background: #3498db;
+                color: #ffffff;
+                border: 1px solid rgba(0, 0, 0, 0.15);
+                box-shadow: 0 2px 4px #00000022;
+            }
+        ";
+        let colors = extract_colors(css);
+        assert_eq!(colors.len(), 4);
+        assert_eq!(colors[0], ParsedColor::rgb(52, 152, 219));
+        assert_eq!(colors[1], ParsedColor::rgb(255, 255, 255));
+        assert_eq!(colors[2], ParsedColor::rgba(0, 0, 0, 38));
+        assert_eq!(colors[3], ParsedColor::rgba(0, 0, 0, 34));
+    }
+
+    #[test]
+    fn test_extract_colors_avoids_false_positives() {
+        // Plain text mentioning issue numbers or git commits
+        let text =
+            "Fixed issue #123 in commit 4f48247 on branch main; visit https://example.com#section";
+        let colors = extract_colors(text);
+        assert!(
+            colors.is_empty(),
+            "Should not extract issue numbers or URLs as colors"
+        );
+
+        // User's exact prompt snippet
+        let prompt_text = r"
+            One-Click Format Conversion Buttons:
+            [ # HEX ] — copies #RRGGBB or #RRGGBBAA.
+            [ RGB ] — copies rgb(r, g, b) or rgba(r, g, b, a).
+            [ HSL ] — copies hsl(h, s%, l%) or hsla(h, s%, l%, a).
+        ";
+        let colors = extract_colors(prompt_text);
+        assert!(
+            colors.is_empty(),
+            "Placeholder docs text should not produce phantom colors"
+        );
+    }
+
+    #[test]
+    fn test_extract_colors_embedded_and_deduplication() {
+        let text = "Palette: #792A2467, #792a2467, #000, 0x2ECC71, hsl(14, 100%, 60%)";
+        let colors = extract_colors(text);
+        assert_eq!(
+            colors.len(),
+            4,
+            "Duplicate #792A2467 should be deduplicated"
+        );
+        assert_eq!(colors[0], ParsedColor::rgba(0x79, 0x2A, 0x24, 0x67));
+        assert_eq!(colors[1], ParsedColor::rgb(0, 0, 0));
+        assert_eq!(colors[2], ParsedColor::rgb(46, 204, 113));
+        assert_eq!(colors[3].r, 255);
     }
 }

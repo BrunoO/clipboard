@@ -204,7 +204,7 @@ impl ClipboardApp {
         let color_count = self
             .items
             .iter()
-            .filter(|i| i.kind == ItemKind::Color)
+            .filter(|i| i.kind == ItemKind::Color || !i.embedded_colors().is_empty())
             .count();
         let img_count = self
             .items
@@ -340,7 +340,9 @@ impl ClipboardApp {
                     ContentFilter::Text => item.kind == ItemKind::Text,
                     ContentFilter::Links => item.kind == ItemKind::Url,
                     ContentFilter::Code => item.kind == ItemKind::Code,
-                    ContentFilter::Colors => item.kind == ItemKind::Color,
+                    ContentFilter::Colors => {
+                        item.kind == ItemKind::Color || !item.embedded_colors().is_empty()
+                    }
                     ContentFilter::Image => item.kind == ItemKind::Image,
                 };
                 if matches {
@@ -463,6 +465,17 @@ impl ClipboardApp {
                 if !matches!(content_action, ItemAction::None) {
                     action = content_action;
                 }
+
+                if item.kind == ItemKind::Text || item.kind == ItemKind::Code {
+                    let embedded = item.embedded_colors();
+                    if !embedded.is_empty() {
+                        ui.add_space(4.0);
+                        let color_action = Self::render_embedded_colors(ui, &embedded);
+                        if !matches!(color_action, ItemAction::None) {
+                            action = color_action;
+                        }
+                    }
+                }
             });
 
         action
@@ -471,8 +484,14 @@ impl ClipboardApp {
     fn render_item_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
         match item.kind {
             ItemKind::Text => {
+                let embedded = item.embedded_colors();
+                let color_hint = match embedded.len() {
+                    0 => String::new(),
+                    1 => " • 🎨 1 color".to_string(),
+                    n => format!(" • 🎨 {n} colors"),
+                };
                 ui.label(
-                    egui::RichText::new(format!("📝 Text • {}", item.created_at))
+                    egui::RichText::new(format!("📝 Text{color_hint} • {}", item.created_at))
                         .size(10.0)
                         .weak(),
                 );
@@ -496,6 +515,12 @@ impl ClipboardApp {
                     .code_language()
                     .map_or("💻 Code", crate::code::CodeLanguage::badge);
                 let line_count = item.content.lines().count();
+                let embedded = item.embedded_colors();
+                let color_hint = match embedded.len() {
+                    0 => String::new(),
+                    1 => " • 🎨 1 color".to_string(),
+                    n => format!(" • 🎨 {n} colors"),
+                };
                 ui.label(
                     egui::RichText::new(lang_badge)
                         .size(10.0)
@@ -503,9 +528,12 @@ impl ClipboardApp {
                         .strong(),
                 );
                 ui.label(
-                    egui::RichText::new(format!("• {line_count} lines • {}", item.created_at))
-                        .size(10.0)
-                        .weak(),
+                    egui::RichText::new(format!(
+                        "• {line_count} lines{color_hint} • {}",
+                        item.created_at
+                    ))
+                    .size(10.0)
+                    .weak(),
                 );
             }
             ItemKind::Color => {
@@ -711,12 +739,12 @@ impl ClipboardApp {
         action
     }
 
-    fn render_color_swatch(ui: &mut egui::Ui, parsed: crate::color::ParsedColor) -> egui::Response {
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(44.0, 32.0), egui::Sense::click());
-
-        let painter = ui.painter();
-        let r_radius = 4.0;
-
+    fn paint_color_swatch(
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        parsed: crate::color::ParsedColor,
+        r_radius: f32,
+    ) {
         if parsed.a == 255 {
             // Fully opaque color: clean solid rounded fill
             painter.rect_filled(rect, r_radius, parsed.to_color32());
@@ -755,7 +783,7 @@ impl ClipboardApp {
                 egui::Color32::from_gray(245),
             );
 
-            let cell = 6.0;
+            let cell = (rect.height() / 4.0).clamp(3.0, 6.0);
             let q_top_left = egui::Rect::from_min_size(right_rect.min, egui::vec2(cell, cell));
             let q_mid = egui::Rect::from_min_size(
                 right_rect.min + egui::vec2(cell, cell),
@@ -792,19 +820,132 @@ impl ClipboardApp {
             r_radius,
             egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(50)),
         );
+    }
 
+    fn render_color_tooltip(ui: &mut egui::Ui, parsed: crate::color::ParsedColor) {
+        if parsed.a == 255 {
+            ui.label(format!("Color: {}", parsed.to_hex()));
+            ui.label(format!("RGB: {}", parsed.to_rgb_string()));
+            ui.label(format!("HSL: {}", parsed.to_hsl_string()));
+        } else {
+            let opacity_pct = u32::from(parsed.a) * 100 / 255;
+            ui.label(format!(
+                "Left: 100% Opaque (#{:02X}{:02X}{:02X})",
+                parsed.r, parsed.g, parsed.b
+            ));
+            ui.label(format!("Right: {opacity_pct}% Opacity over light canvas"));
+            ui.label(format!("RGBA: {}", parsed.to_rgb_string()));
+            ui.label(format!("HSLA: {}", parsed.to_hsl_string()));
+        }
+    }
+
+    fn render_color_swatch(ui: &mut egui::Ui, parsed: crate::color::ParsedColor) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(44.0, 32.0), egui::Sense::click());
+        Self::paint_color_swatch(ui.painter(), rect, parsed, 4.0);
         response.on_hover_ui(|ui| {
-            if parsed.a == 255 {
-                ui.label(format!("Opaque Color: {}", parsed.to_hex()));
-            } else {
-                let opacity_pct = u32::from(parsed.a) * 100 / 255;
-                ui.label(format!(
-                    "Left: 100% Opaque (#{:02X}{:02X}{:02X})",
-                    parsed.r, parsed.g, parsed.b
-                ));
-                ui.label(format!("Right: {opacity_pct}% Opacity over light canvas"));
-            }
+            Self::render_color_tooltip(ui, parsed);
         })
+    }
+
+    fn render_mini_color_swatch(
+        ui: &mut egui::Ui,
+        parsed: crate::color::ParsedColor,
+    ) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 16.0), egui::Sense::click());
+        Self::paint_color_swatch(ui.painter(), rect, parsed, 3.0);
+        response.on_hover_ui(|ui| {
+            Self::render_color_tooltip(ui, parsed);
+        })
+    }
+
+    fn render_embedded_colors(
+        ui: &mut egui::Ui,
+        colors: &[crate::color::ParsedColor],
+    ) -> ItemAction {
+        let mut action = ItemAction::None;
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new("🎨 Colors:")
+                    .size(11.0)
+                    .color(egui::Color32::from_rgb(230, 126, 34))
+                    .strong(),
+            );
+
+            for &color in colors {
+                egui::Frame::none()
+                    .fill(egui::Color32::from_white_alpha(8))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_white_alpha(24),
+                    ))
+                    .rounding(4.0)
+                    .inner_margin(egui::vec2(5.0, 2.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let swatch_res = Self::render_mini_color_swatch(ui, color);
+                            if swatch_res.clicked() {
+                                action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());
+                            } else if swatch_res.hovered() {
+                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                            }
+
+                            let hex_label = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(color.to_hex())
+                                        .monospace()
+                                        .size(11.0)
+                                        .strong(),
+                                )
+                                .sense(egui::Sense::click()),
+                            );
+                            if hex_label.clicked() {
+                                action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());
+                            } else if hex_label.hovered() {
+                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                            }
+
+                            if ui
+                                .small_button("# HEX")
+                                .on_hover_text(format!("Copy {}", color.to_hex()))
+                                .clicked()
+                            {
+                                action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());
+                            }
+                            if ui
+                                .small_button("RGB")
+                                .on_hover_text(format!("Copy {}", color.to_rgb_string()))
+                                .clicked()
+                            {
+                                action =
+                                    ItemAction::CopyColor(color.to_rgb_string(), "RGB".to_string());
+                            }
+                            if ui
+                                .small_button("HSL")
+                                .on_hover_text(format!("Copy {}", color.to_hsl_string()))
+                                .clicked()
+                            {
+                                action =
+                                    ItemAction::CopyColor(color.to_hsl_string(), "HSL".to_string());
+                            }
+                            if color.a < 255
+                                && ui
+                                    .small_button("ARGB")
+                                    .on_hover_text("Copy as Android/Flutter ARGB")
+                                    .clicked()
+                            {
+                                let argb_hex = format!(
+                                    "#{:02X}{:02X}{:02X}{:02X}",
+                                    color.a, color.r, color.g, color.b
+                                );
+                                action = ItemAction::CopyColor(argb_hex, "ARGB".to_string());
+                            }
+                        });
+                    });
+            }
+        });
+
+        action
     }
 
     fn render_url_content(ui: &mut egui::Ui, content: &str) -> ItemAction {

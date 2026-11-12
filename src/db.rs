@@ -77,6 +77,18 @@ impl ClipboardItem {
         }
         crate::color::parse_color(&self.content)
     }
+
+    /// Extracts distinct colors embedded within the text or code content.
+    #[must_use]
+    pub(crate) fn embedded_colors(&self) -> Vec<crate::color::ParsedColor> {
+        if self.kind == ItemKind::Image || self.kind == ItemKind::Url {
+            return Vec::new();
+        }
+        if self.kind == ItemKind::Color {
+            return self.parsed_color().into_iter().collect();
+        }
+        crate::color::extract_colors(&self.content)
+    }
 }
 
 /// Thread-safe handle to the encrypted `SQLCipher` database.
