@@ -635,31 +635,7 @@ impl ClipboardApp {
         let mut action = ItemAction::None;
 
         ui.horizontal(|ui| {
-            // Visual color swatch pill (with checkerboard for transparency)
-            let (rect, response) =
-                ui.allocate_exact_size(egui::vec2(40.0, 32.0), egui::Sense::click());
-
-            if parsed.a < 255 {
-                let painter = ui.painter();
-                painter.rect_filled(rect, 4.0, egui::Color32::from_gray(50));
-                let half_w = rect.width() / 2.0;
-                let half_h = rect.height() / 2.0;
-                let q1 = egui::Rect::from_min_size(rect.min, egui::vec2(half_w, half_h));
-                let q4 = egui::Rect::from_min_size(
-                    rect.min + egui::vec2(half_w, half_h),
-                    egui::vec2(half_w, half_h),
-                );
-                painter.rect_filled(q1, 0.0, egui::Color32::from_gray(90));
-                painter.rect_filled(q4, 0.0, egui::Color32::from_gray(90));
-            }
-
-            ui.painter().rect_filled(rect, 4.0, parsed.to_color32());
-            ui.painter().rect_stroke(
-                rect,
-                4.0,
-                egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(40)),
-            );
-
+            let response = Self::render_color_swatch(ui, parsed);
             if response.clicked() {
                 action = ItemAction::CopyText(item.content.clone());
             } else if response.hovered() {
@@ -678,8 +654,15 @@ impl ClipboardApp {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
                     }
 
+                    let opacity_pct = u32::from(parsed.a) * 100 / 255;
+                    let opacity_note = if parsed.a < 255 {
+                        format!(" • {opacity_pct}% alpha")
+                    } else {
+                        String::new()
+                    };
+
                     ui.label(
-                        egui::RichText::new(parsed.to_rgb_string())
+                        egui::RichText::new(format!("{}{}", parsed.to_rgb_string(), opacity_note))
                             .monospace()
                             .size(11.0)
                             .weak(),
@@ -689,30 +672,139 @@ impl ClipboardApp {
                 ui.horizontal(|ui| {
                     if ui
                         .small_button("# HEX")
-                        .on_hover_text("Copy HEX code")
+                        .on_hover_text("Copy HEX code (RGBA order)")
                         .clicked()
                     {
                         action = ItemAction::CopyColor(parsed.to_hex(), "HEX".to_string());
                     }
                     if ui
                         .small_button("RGB")
-                        .on_hover_text("Copy RGB values")
+                        .on_hover_text("Copy RGB / RGBA values")
                         .clicked()
                     {
                         action = ItemAction::CopyColor(parsed.to_rgb_string(), "RGB".to_string());
                     }
                     if ui
                         .small_button("HSL")
-                        .on_hover_text("Copy HSL values")
+                        .on_hover_text("Copy HSL / HSLA values")
                         .clicked()
                     {
                         action = ItemAction::CopyColor(parsed.to_hsl_string(), "HSL".to_string());
+                    }
+
+                    if crate::color::is_eight_digit_hex(&item.content) {
+                        if let Some(argb) = crate::color::parse_argb_hex(&item.content) {
+                            if ui
+                                .small_button("ARGB")
+                                .on_hover_text("Copy as Android/Flutter ARGB (AARRGGBB)")
+                                .clicked()
+                            {
+                                action =
+                                    ItemAction::CopyColor(argb.to_rgb_string(), "ARGB".to_string());
+                            }
+                        }
                     }
                 });
             });
         });
 
         action
+    }
+
+    fn render_color_swatch(ui: &mut egui::Ui, parsed: crate::color::ParsedColor) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(44.0, 32.0), egui::Sense::click());
+
+        let painter = ui.painter();
+        let r_radius = 4.0;
+
+        if parsed.a == 255 {
+            // Fully opaque color: clean solid rounded fill
+            painter.rect_filled(rect, r_radius, parsed.to_color32());
+        } else {
+            // Semi-transparent color:
+            // Left half: Pure opaque base color (clearly identifies true hue)
+            // Right half: Translucent color rendered over a standard light checkerboard
+            let half_w = rect.width() / 2.0;
+            let left_rect = egui::Rect::from_min_size(rect.min, egui::vec2(half_w, rect.height()));
+            let right_rect = egui::Rect::from_min_size(
+                rect.min + egui::vec2(half_w, 0.0),
+                egui::vec2(half_w, rect.height()),
+            );
+
+            // Left half: Opaque base color
+            painter.rect_filled(
+                left_rect,
+                egui::Rounding {
+                    nw: r_radius,
+                    ne: 0.0,
+                    sw: r_radius,
+                    se: 0.0,
+                },
+                egui::Color32::from_rgb(parsed.r, parsed.g, parsed.b),
+            );
+
+            // Right half: Light checkerboard base
+            painter.rect_filled(
+                right_rect,
+                egui::Rounding {
+                    nw: 0.0,
+                    ne: r_radius,
+                    sw: 0.0,
+                    se: r_radius,
+                },
+                egui::Color32::from_gray(245),
+            );
+
+            let cell = 6.0;
+            let q_top_left = egui::Rect::from_min_size(right_rect.min, egui::vec2(cell, cell));
+            let q_mid = egui::Rect::from_min_size(
+                right_rect.min + egui::vec2(cell, cell),
+                egui::vec2(cell, cell),
+            );
+            painter.rect_filled(q_top_left, 0.0, egui::Color32::from_gray(190));
+            painter.rect_filled(q_mid, 0.0, egui::Color32::from_gray(190));
+
+            // Alpha overlay on right half
+            painter.rect_filled(
+                right_rect,
+                egui::Rounding {
+                    nw: 0.0,
+                    ne: r_radius,
+                    sw: 0.0,
+                    se: r_radius,
+                },
+                parsed.to_color32(),
+            );
+
+            // Subtle divider line between opaque and alpha preview
+            painter.line_segment(
+                [
+                    egui::pos2(rect.min.x + half_w, rect.min.y),
+                    egui::pos2(rect.min.x + half_w, rect.max.y),
+                ],
+                egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(50)),
+            );
+        }
+
+        // Crisp border around entire swatch
+        painter.rect_stroke(
+            rect,
+            r_radius,
+            egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(50)),
+        );
+
+        response.on_hover_ui(|ui| {
+            if parsed.a == 255 {
+                ui.label(format!("Opaque Color: {}", parsed.to_hex()));
+            } else {
+                let opacity_pct = u32::from(parsed.a) * 100 / 255;
+                ui.label(format!(
+                    "Left: 100% Opaque (#{:02X}{:02X}{:02X})",
+                    parsed.r, parsed.g, parsed.b
+                ));
+                ui.label(format!("Right: {opacity_pct}% Opacity over light canvas"));
+            }
+        })
     }
 
     fn render_url_content(ui: &mut egui::Ui, content: &str) -> ItemAction {

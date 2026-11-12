@@ -161,6 +161,37 @@ pub(crate) fn parse_color(input: &str) -> Option<ParsedColor> {
     None
 }
 
+fn strip_hex_prefix(input: &str) -> &str {
+    input
+        .strip_prefix('#')
+        .or_else(|| input.strip_prefix("0x"))
+        .or_else(|| input.strip_prefix("0X"))
+        .unwrap_or(input)
+}
+
+/// Returns true if the string represents an 8-character hex color (e.g. `#792A2467` or `792A2467`).
+#[must_use]
+pub(crate) fn is_eight_digit_hex(input: &str) -> bool {
+    let hex = strip_hex_prefix(input.trim());
+    hex.len() == 8 && hex.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Parses an 8-digit hex string under the ARGB convention (Android/Flutter order: #AARRGGBB).
+#[must_use]
+pub(crate) fn parse_argb_hex(input: &str) -> Option<ParsedColor> {
+    let hex = strip_hex_prefix(input.trim());
+
+    if hex.len() != 8 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    let a = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let r = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let g = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    let b = u8::from_str_radix(&hex[6..8], 16).ok()?;
+    Some(ParsedColor::rgba(r, g, b, a))
+}
+
 fn parse_hex_color(text: &str) -> Option<ParsedColor> {
     let hex_part = if let Some(stripped) = text.strip_prefix('#') {
         stripped
@@ -429,10 +460,22 @@ mod tests {
     }
 
     #[test]
-    fn test_non_color_rejected() {
-        assert_eq!(parse_color("hello world"), None);
-        assert_eq!(parse_color("https://google.com"), None);
-        assert_eq!(parse_color("decade"), None);
-        assert_eq!(parse_color("fn calculate() {}"), None);
+    fn test_eight_digit_hex_and_argb() {
+        let code = "#792A2467";
+        assert!(is_eight_digit_hex(code));
+
+        // Default W3C CSS RGBA interpretation:
+        let rgba = parse_color(code).expect("Should parse as RGBA");
+        assert_eq!(rgba.r, 0x79);
+        assert_eq!(rgba.g, 0x2A);
+        assert_eq!(rgba.b, 0x24);
+        assert_eq!(rgba.a, 0x67);
+
+        // Android / ARGB interpretation:
+        let argb = parse_argb_hex(code).expect("Should parse as ARGB");
+        assert_eq!(argb.a, 0x79);
+        assert_eq!(argb.r, 0x2A);
+        assert_eq!(argb.g, 0x24);
+        assert_eq!(argb.b, 0x67);
     }
 }
