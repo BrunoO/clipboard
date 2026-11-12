@@ -10,6 +10,7 @@ pub(crate) enum ItemKind {
     Image,
     Url,
     Code,
+    Color,
 }
 
 /// Returns true if the string is a valid HTTP or HTTPS URL with a host.
@@ -60,10 +61,21 @@ impl ClipboardItem {
 
     /// Detects if the item content is a recognized programming language or data format.
     pub(crate) fn code_language(&self) -> Option<crate::code::CodeLanguage> {
-        if self.kind == ItemKind::Image || self.kind == ItemKind::Url {
+        if self.kind == ItemKind::Image
+            || self.kind == ItemKind::Url
+            || self.kind == ItemKind::Color
+        {
             return None;
         }
         crate::code::detect_code_language(&self.content)
+    }
+
+    /// Parses the item content as a color if recognized.
+    pub(crate) fn parsed_color(&self) -> Option<crate::color::ParsedColor> {
+        if self.kind == ItemKind::Image || self.kind == ItemKind::Url {
+            return None;
+        }
+        crate::color::parse_color(&self.content)
     }
 }
 
@@ -143,7 +155,10 @@ impl Database {
         if let Some(row) = rows.next()? {
             let last_kind: String = row.get(0)?;
             let last_content: String = row.get(1)?;
-            if (last_kind == "text" || last_kind == "url" || last_kind == "code")
+            if (last_kind == "text"
+                || last_kind == "url"
+                || last_kind == "code"
+                || last_kind == "color")
                 && last_content == content
             {
                 return Ok(None); // Duplicate, ignore
@@ -151,9 +166,12 @@ impl Database {
         }
 
         let is_url = is_valid_url(content);
-        let is_code = !is_url && crate::code::detect_code_language(content).is_some();
+        let is_color = !is_url && crate::color::parse_color(content).is_some();
+        let is_code = !is_url && !is_color && crate::code::detect_code_language(content).is_some();
         let kind_str = if is_url {
             "url"
+        } else if is_color {
+            "color"
         } else if is_code {
             "code"
         } else {
@@ -222,9 +240,12 @@ impl Database {
                 "image" => ItemKind::Image,
                 "url" => ItemKind::Url,
                 "code" => ItemKind::Code,
+                "color" => ItemKind::Color,
                 _ => {
                     if is_valid_url(&content) {
                         ItemKind::Url
+                    } else if crate::color::parse_color(&content).is_some() {
+                        ItemKind::Color
                     } else if crate::code::detect_code_language(&content).is_some() {
                         ItemKind::Code
                     } else {
@@ -461,6 +482,30 @@ mod tests {
 
         // Deduplication for code
         let dup = db.insert(rust_code).unwrap();
+        assert_eq!(dup, None);
+    }
+
+    #[test]
+    fn test_insert_color_and_detection() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("color_test.db");
+        let db = Database::open(&db_path, TEST_KEY).unwrap();
+
+        let hex_color = "#FF5733";
+        let id = db.insert(hex_color).unwrap().unwrap();
+        assert_eq!(id, 1);
+
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, ItemKind::Color);
+        let parsed = items[0].parsed_color().expect("Should parse color");
+        assert_eq!(parsed.r, 255);
+        assert_eq!(parsed.g, 87);
+        assert_eq!(parsed.b, 51);
+        assert_eq!(parsed.to_hex(), "#FF5733");
+
+        // Deduplication for colors
+        let dup = db.insert(hex_color).unwrap();
         assert_eq!(dup, None);
     }
 }

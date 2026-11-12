@@ -1,5 +1,6 @@
 mod app;
 mod code;
+mod color;
 mod crypto;
 mod db;
 mod hotkey;

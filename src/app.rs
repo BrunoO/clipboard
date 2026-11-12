@@ -14,6 +14,7 @@ pub(crate) enum ContentFilter {
     Text,
     Links,
     Code,
+    Colors,
     Image,
 }
 
@@ -21,6 +22,7 @@ enum ItemAction {
     None,
     CopyText(String),
     CopyFormattedJson(String),
+    CopyColor(String, String),
     CopyImage(Vec<u8>),
     OpenBrowser(String),
     Delete(i64),
@@ -199,6 +201,11 @@ impl ClipboardApp {
             .iter()
             .filter(|i| i.kind == ItemKind::Code)
             .count();
+        let color_count = self
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Color)
+            .count();
         let img_count = self
             .items
             .iter()
@@ -225,6 +232,11 @@ impl ClipboardApp {
                 &mut self.content_filter,
                 ContentFilter::Code,
                 format!("💻 Code ({code_count})"),
+            );
+            ui.selectable_value(
+                &mut self.content_filter,
+                ContentFilter::Colors,
+                format!("🎨 Colors ({color_count})"),
             );
             ui.selectable_value(
                 &mut self.content_filter,
@@ -328,6 +340,7 @@ impl ClipboardApp {
                     ContentFilter::Text => item.kind == ItemKind::Text,
                     ContentFilter::Links => item.kind == ItemKind::Url,
                     ContentFilter::Code => item.kind == ItemKind::Code,
+                    ContentFilter::Colors => item.kind == ItemKind::Color,
                     ContentFilter::Image => item.kind == ItemKind::Image,
                 };
                 if matches {
@@ -347,6 +360,7 @@ impl ClipboardApp {
                         ContentFilter::Text => "No text entries found.",
                         ContentFilter::Links => "No links found in clipboard history.",
                         ContentFilter::Code => "No code snippets found in clipboard history.",
+                        ContentFilter::Colors => "No colors found in clipboard history.",
                         ContentFilter::Image => "No image entries found.",
                     };
                     ui.label(egui::RichText::new(empty_hint).weak());
@@ -393,6 +407,10 @@ impl ClipboardApp {
                         self.copy_text_to_clipboard(&formatted, ctx);
                         self.show_toast("✓ Copied formatted JSON to clipboard!");
                     }
+                    ItemAction::CopyColor(val, name) => {
+                        self.copy_text_to_clipboard(&val, ctx);
+                        self.show_toast(&format!("Copied {name}: {val}"));
+                    }
                     ItemAction::CopyImage(png_bytes) => {
                         self.copy_image_to_clipboard(&png_bytes, ctx);
                     }
@@ -438,6 +456,7 @@ impl ClipboardApp {
                     ItemKind::Text => Self::render_text_content(ui, &item.content),
                     ItemKind::Url => Self::render_url_content(ui, &item.content),
                     ItemKind::Code => Self::render_code_content(ui, item),
+                    ItemKind::Color => Self::render_color_content(ui, item),
                     ItemKind::Image => Self::render_image_content(ui, item, texture_cache, ctx),
                 };
 
@@ -449,57 +468,77 @@ impl ClipboardApp {
         action
     }
 
+    fn render_item_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+        match item.kind {
+            ItemKind::Text => {
+                ui.label(
+                    egui::RichText::new(format!("📝 Text • {}", item.created_at))
+                        .size(10.0)
+                        .weak(),
+                );
+            }
+            ItemKind::Url => {
+                let host = item.url_host().unwrap_or_else(|| "link".to_string());
+                ui.label(
+                    egui::RichText::new("🌐 Link")
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(52, 152, 219))
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!("• {host} • {}", item.created_at))
+                        .size(10.0)
+                        .weak(),
+                );
+            }
+            ItemKind::Code => {
+                let lang_badge = item
+                    .code_language()
+                    .map_or("💻 Code", crate::code::CodeLanguage::badge);
+                let line_count = item.content.lines().count();
+                ui.label(
+                    egui::RichText::new(lang_badge)
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(224, 108, 117))
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!("• {line_count} lines • {}", item.created_at))
+                        .size(10.0)
+                        .weak(),
+                );
+            }
+            ItemKind::Color => {
+                let hex = item
+                    .parsed_color()
+                    .map_or_else(|| item.content.clone(), crate::color::ParsedColor::to_hex);
+                ui.label(
+                    egui::RichText::new("🎨 Color")
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(230, 126, 34))
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!("• {hex} • {}", item.created_at))
+                        .size(10.0)
+                        .weak(),
+                );
+            }
+            ItemKind::Image => {
+                ui.label(
+                    egui::RichText::new(format!("🖼️ Image • {}", item.created_at))
+                        .size(10.0)
+                        .weak(),
+                );
+            }
+        }
+    }
+
     fn render_item_header(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
         let mut action = ItemAction::None;
 
         ui.horizontal(|ui| {
-            match item.kind {
-                ItemKind::Text => {
-                    ui.label(
-                        egui::RichText::new(format!("📝 Text • {}", item.created_at))
-                            .size(10.0)
-                            .weak(),
-                    );
-                }
-                ItemKind::Url => {
-                    let host = item.url_host().unwrap_or_else(|| "link".to_string());
-                    ui.label(
-                        egui::RichText::new("🌐 Link")
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(52, 152, 219))
-                            .strong(),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!("• {host} • {}", item.created_at))
-                            .size(10.0)
-                            .weak(),
-                    );
-                }
-                ItemKind::Code => {
-                    let lang_badge = item
-                        .code_language()
-                        .map_or("💻 Code", crate::code::CodeLanguage::badge);
-                    let line_count = item.content.lines().count();
-                    ui.label(
-                        egui::RichText::new(lang_badge)
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(224, 108, 117))
-                            .strong(),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!("• {line_count} lines • {}", item.created_at))
-                            .size(10.0)
-                            .weak(),
-                    );
-                }
-                ItemKind::Image => {
-                    ui.label(
-                        egui::RichText::new(format!("🖼️ Image • {}", item.created_at))
-                            .size(10.0)
-                            .weak(),
-                    );
-                }
-            }
+            Self::render_item_badge(ui, item);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -515,7 +554,7 @@ impl ClipboardApp {
                     .clicked()
                 {
                     match item.kind {
-                        ItemKind::Text | ItemKind::Url | ItemKind::Code => {
+                        ItemKind::Text | ItemKind::Url | ItemKind::Code | ItemKind::Color => {
                             action = ItemAction::CopyText(item.content.clone());
                         }
                         ItemKind::Image => {
@@ -584,6 +623,94 @@ impl ClipboardApp {
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
                 }
             });
+
+        action
+    }
+
+    fn render_color_content(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+        let Some(parsed) = item.parsed_color() else {
+            return Self::render_text_content(ui, &item.content);
+        };
+
+        let mut action = ItemAction::None;
+
+        ui.horizontal(|ui| {
+            // Visual color swatch pill (with checkerboard for transparency)
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(40.0, 32.0), egui::Sense::click());
+
+            if parsed.a < 255 {
+                let painter = ui.painter();
+                painter.rect_filled(rect, 4.0, egui::Color32::from_gray(50));
+                let half_w = rect.width() / 2.0;
+                let half_h = rect.height() / 2.0;
+                let q1 = egui::Rect::from_min_size(rect.min, egui::vec2(half_w, half_h));
+                let q4 = egui::Rect::from_min_size(
+                    rect.min + egui::vec2(half_w, half_h),
+                    egui::vec2(half_w, half_h),
+                );
+                painter.rect_filled(q1, 0.0, egui::Color32::from_gray(90));
+                painter.rect_filled(q4, 0.0, egui::Color32::from_gray(90));
+            }
+
+            ui.painter().rect_filled(rect, 4.0, parsed.to_color32());
+            ui.painter().rect_stroke(
+                rect,
+                4.0,
+                egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(40)),
+            );
+
+            if response.clicked() {
+                action = ItemAction::CopyText(item.content.clone());
+            } else if response.hovered() {
+                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+            }
+
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    let hex_label = ui.add(
+                        egui::Label::new(egui::RichText::new(parsed.to_hex()).monospace().strong())
+                            .sense(egui::Sense::click()),
+                    );
+                    if hex_label.clicked() {
+                        action = ItemAction::CopyColor(parsed.to_hex(), "HEX".to_string());
+                    } else if hex_label.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
+
+                    ui.label(
+                        egui::RichText::new(parsed.to_rgb_string())
+                            .monospace()
+                            .size(11.0)
+                            .weak(),
+                    );
+                });
+
+                ui.horizontal(|ui| {
+                    if ui
+                        .small_button("# HEX")
+                        .on_hover_text("Copy HEX code")
+                        .clicked()
+                    {
+                        action = ItemAction::CopyColor(parsed.to_hex(), "HEX".to_string());
+                    }
+                    if ui
+                        .small_button("RGB")
+                        .on_hover_text("Copy RGB values")
+                        .clicked()
+                    {
+                        action = ItemAction::CopyColor(parsed.to_rgb_string(), "RGB".to_string());
+                    }
+                    if ui
+                        .small_button("HSL")
+                        .on_hover_text("Copy HSL values")
+                        .clicked()
+                    {
+                        action = ItemAction::CopyColor(parsed.to_hsl_string(), "HSL".to_string());
+                    }
+                });
+            });
+        });
 
         action
     }
