@@ -141,8 +141,8 @@ pub(crate) fn detect_code_language(text: &str) -> Option<CodeLanguage> {
         return Some(CodeLanguage::Python);
     }
 
-    // 7. C++ detection
-    let is_cpp = trimmed.contains("#include <")
+    // 7. C++ & Objective-C++ detection
+    let is_cpp_headers_or_ns = trimmed.contains("#include <")
         || trimmed.contains("#include \"")
         || trimmed.contains("std::")
         || trimmed.contains("using namespace ")
@@ -155,7 +155,36 @@ pub(crate) fn detect_code_language(text: &str) -> Option<CodeLanguage> {
         || ((trimmed.contains("public:") || trimmed.contains("private:"))
             && trimmed.contains("class "));
 
-    if is_cpp && !trimmed.contains("fn ") && !trimmed.contains("pub fn ") {
+    let is_objc_cpp = trimmed.contains("NSString")
+        || trimmed.contains("NSData")
+        || trimmed.contains("NSDictionary")
+        || trimmed.contains("NSArray")
+        || trimmed.contains("NSError")
+        || trimmed.contains("NSObject")
+        || trimmed.contains("[[")
+        || trimmed.contains("alloc]")
+        || trimmed.contains("initWith")
+        || trimmed.contains("UTF8String")
+        || trimmed.contains("@interface")
+        || trimmed.contains("@implementation")
+        || trimmed.contains("@autoreleasepool");
+
+    let is_cpp_patterns = trimmed.contains("->")
+        || trimmed.contains("static_cast<")
+        || trimmed.contains("dynamic_cast<")
+        || trimmed.contains("reinterpret_cast<")
+        || trimmed.contains("const char*")
+        || trimmed.contains("for (int ")
+        || trimmed.contains("for (auto ")
+        || trimmed.contains("printf(")
+        || (trimmed.contains("void ") && trimmed.contains('(') && trimmed.contains(')'));
+
+    let is_cpp = (is_cpp_headers_or_ns || is_objc_cpp || is_cpp_patterns)
+        && !trimmed.contains("fn ")
+        && !trimmed.contains("pub fn ")
+        && !trimmed.contains("let mut ");
+
+    if is_cpp {
         return Some(CodeLanguage::Cpp);
     }
 
@@ -255,6 +284,10 @@ mod tests {
     fn test_detect_cpp() {
         let snippet = "#include <iostream>\n#include <vector>\n\nint main() {\n    std::vector<int> nums = {1, 2, 3};\n    std::cout << nums.size() << std::endl;\n    return 0;\n}";
         assert_eq!(detect_code_language(snippet), Some(CodeLanguage::Cpp));
+
+        // Objective-C++ / macOS C++ excerpt with Foundation types
+        let objc_cpp = "if (response_data) {\n        NSString* error_body = [[NSString alloc] initWithData:response_data encoding:NSUTF8StringEncoding];\n        if (error_body) {\n          error_msg += \": \";\n          error_msg += [error_body UTF8String];";
+        assert_eq!(detect_code_language(objc_cpp), Some(CodeLanguage::Cpp));
     }
 
     #[test]
@@ -301,5 +334,15 @@ mod tests {
         let sql_snippet = "SELECT * FROM users WHERE active = 1;";
         let sql_job = highlight_code(&ctx, &style, sql_snippet, CodeLanguage::Sql);
         assert_ne!(sql_job.sections.len(), 0);
+    }
+
+    #[test]
+    fn test_objc_cpp_snippet() {
+        let snippet = "if (response_data) {\n        NSString* error_body = [[NSString alloc] initWithData:response_data encoding:NSUTF8StringEncoding];\n        if (error_body) {\n          error_msg += \": \";\n          error_msg += [error_body UTF8String];\n        }\n}";
+        let ctx = egui::Context::default();
+        let style = egui::Style::default();
+        let job = highlight_code(&ctx, &style, snippet, CodeLanguage::Cpp);
+        assert_ne!(job.sections.len(), 0);
+        assert_eq!(job.text, snippet);
     }
 }
