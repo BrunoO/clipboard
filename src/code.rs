@@ -4,6 +4,7 @@ use eframe::egui::{self, Color32, FontId, TextFormat};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CodeLanguage {
     Rust,
+    Cpp,
     Python,
     JavaScript,
     TypeScript,
@@ -20,6 +21,7 @@ impl CodeLanguage {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Rust => "Rust",
+            Self::Cpp => "C++",
             Self::Python => "Python",
             Self::JavaScript => "JavaScript",
             Self::TypeScript => "TypeScript",
@@ -35,6 +37,7 @@ impl CodeLanguage {
     pub(crate) const fn badge(self) -> &'static str {
         match self {
             Self::Rust => "🦀 Rust",
+            Self::Cpp => "⚙️ C++",
             Self::Python => "🐍 Python",
             Self::JavaScript => "⚡ JS",
             Self::TypeScript => "🔷 TS",
@@ -49,6 +52,7 @@ impl CodeLanguage {
 }
 
 /// Detects if the given text represents a recognized code snippet or structured data format.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn detect_code_language(text: &str) -> Option<CodeLanguage> {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.len() < 4 {
@@ -120,7 +124,25 @@ pub(crate) fn detect_code_language(text: &str) -> Option<CodeLanguage> {
         return Some(CodeLanguage::Python);
     }
 
-    // 7. Rust detection
+    // 7. C++ detection
+    let is_cpp = trimmed.contains("#include <")
+        || trimmed.contains("#include \"")
+        || trimmed.contains("std::")
+        || trimmed.contains("using namespace ")
+        || trimmed.contains("cout <<")
+        || trimmed.contains("cin >>")
+        || trimmed.contains("nullptr")
+        || trimmed.contains("constexpr ")
+        || trimmed.contains("template<")
+        || trimmed.contains("template <")
+        || ((trimmed.contains("public:") || trimmed.contains("private:"))
+            && trimmed.contains("class "));
+
+    if is_cpp && !trimmed.contains("fn ") && !trimmed.contains("pub fn ") {
+        return Some(CodeLanguage::Cpp);
+    }
+
+    // 8. Rust detection
     let is_rust = trimmed.contains("fn ")
         || trimmed.contains("pub fn ")
         || trimmed.contains("let mut ")
@@ -236,7 +258,10 @@ pub(crate) fn highlight_code(text: &str, lang: CodeLanguage) -> egui::text::Layo
 
 fn is_line_comment(lang: CodeLanguage, trimmed_line: &str) -> bool {
     match lang {
-        CodeLanguage::Rust | CodeLanguage::JavaScript | CodeLanguage::TypeScript => {
+        CodeLanguage::Rust
+        | CodeLanguage::Cpp
+        | CodeLanguage::JavaScript
+        | CodeLanguage::TypeScript => {
             trimmed_line.starts_with("//")
                 || trimmed_line.starts_with("/*")
                 || trimmed_line.starts_with('*')
@@ -365,6 +390,101 @@ fn is_keyword(lang: CodeLanguage, word: &str) -> bool {
                 | "while"
                 | "async"
                 | "await"
+        ),
+        CodeLanguage::Cpp => matches!(
+            word,
+            "alignas"
+                | "alignof"
+                | "and"
+                | "and_eq"
+                | "asm"
+                | "auto"
+                | "bitand"
+                | "bitor"
+                | "bool"
+                | "break"
+                | "case"
+                | "catch"
+                | "char"
+                | "char8_t"
+                | "char16_t"
+                | "char32_t"
+                | "class"
+                | "compl"
+                | "concept"
+                | "const"
+                | "consteval"
+                | "constexpr"
+                | "constinit"
+                | "const_cast"
+                | "continue"
+                | "co_await"
+                | "co_return"
+                | "co_yield"
+                | "decltype"
+                | "default"
+                | "delete"
+                | "do"
+                | "double"
+                | "dynamic_cast"
+                | "else"
+                | "enum"
+                | "explicit"
+                | "export"
+                | "extern"
+                | "false"
+                | "float"
+                | "for"
+                | "friend"
+                | "goto"
+                | "if"
+                | "inline"
+                | "int"
+                | "long"
+                | "mutable"
+                | "namespace"
+                | "new"
+                | "noexcept"
+                | "not"
+                | "not_eq"
+                | "nullptr"
+                | "operator"
+                | "or"
+                | "or_eq"
+                | "private"
+                | "protected"
+                | "public"
+                | "register"
+                | "reinterpret_cast"
+                | "requires"
+                | "return"
+                | "short"
+                | "signed"
+                | "sizeof"
+                | "static"
+                | "static_assert"
+                | "static_cast"
+                | "struct"
+                | "switch"
+                | "template"
+                | "this"
+                | "thread_local"
+                | "throw"
+                | "true"
+                | "try"
+                | "typedef"
+                | "typeid"
+                | "typename"
+                | "union"
+                | "unsigned"
+                | "using"
+                | "virtual"
+                | "void"
+                | "volatile"
+                | "wchar_t"
+                | "while"
+                | "xor"
+                | "xor_eq"
         ),
         CodeLanguage::Python => matches!(
             word,
@@ -541,6 +661,11 @@ fn is_builtin_type(word: &str) -> bool {
             | "boolean"
             | "any"
             | "void"
+            | "size_t"
+            | "int32_t"
+            | "uint32_t"
+            | "int64_t"
+            | "uint64_t"
     )
 }
 
@@ -563,6 +688,12 @@ mod tests {
         let snippet =
             "pub fn calculate_sum(a: i32, b: i32) -> Result<i32, String> {\n    Ok(a + b)\n}";
         assert_eq!(detect_code_language(snippet), Some(CodeLanguage::Rust));
+    }
+
+    #[test]
+    fn test_detect_cpp() {
+        let snippet = "#include <iostream>\n#include <vector>\n\nint main() {\n    std::vector<int> nums = {1, 2, 3};\n    std::cout << nums.size() << std::endl;\n    return 0;\n}";
+        assert_eq!(detect_code_language(snippet), Some(CodeLanguage::Cpp));
     }
 
     #[test]
