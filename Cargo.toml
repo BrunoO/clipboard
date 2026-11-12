@@ -8,6 +8,11 @@ license = "MIT"
 repository = "https://github.com/BrunoO/clipboard"
 homepage = "https://github.com/BrunoO/clipboard"
 readme = "README.md"
+default-run = "CipherClipboard"
+
+[[bin]]
+name = "CipherClipboard"
+path = "src/main.rs"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
