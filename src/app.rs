@@ -831,25 +831,29 @@ impl ClipboardApp {
             });
     }
 
-    fn render_settings_panel(&mut self, ctx: &egui::Context) {
+    fn render_settings_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading(format!("{} Preferences", icons::GEAR));
+                ui.heading(
+                    egui::RichText::new(format!("{} Preferences", icons::GEAR))
+                        .color(crate::theme::text_primary(is_dark))
+                        .strong(),
+                );
                 ui.add_space(8.0);
 
-                self.render_appearance_settings_group(ui);
+                self.render_appearance_settings_group(ui, is_dark);
                 ui.add_space(10.0);
 
-                self.render_hotkey_settings_group(ui);
+                self.render_hotkey_settings_group(ui, is_dark);
                 ui.add_space(10.0);
 
-                self.render_behavior_settings_group(ui);
+                self.render_behavior_settings_group(ui, is_dark);
                 ui.add_space(10.0);
 
-                self.render_security_settings_group(ui);
+                self.render_security_settings_group(ui, is_dark);
                 ui.add_space(10.0);
 
-                Self::render_about_settings_group(ui);
+                Self::render_about_settings_group(ui, is_dark);
                 ui.add_space(12.0);
 
                 if ui
@@ -862,10 +866,12 @@ impl ClipboardApp {
         });
     }
 
-    fn render_appearance_settings_group(&mut self, ui: &mut egui::Ui) {
+    fn render_appearance_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         ui.group(|ui| {
             ui.label(
-                egui::RichText::new(format!("{} Appearance & Theme", icons::PALETTE)).strong(),
+                egui::RichText::new(format!("{} Appearance & Theme", icons::PALETTE))
+                    .color(crate::theme::text_primary(is_dark))
+                    .strong(),
             );
             ui.label(
                 egui::RichText::new(
@@ -913,9 +919,13 @@ impl ClipboardApp {
         });
     }
 
-    fn render_hotkey_settings_group(&mut self, ui: &mut egui::Ui) {
+    fn render_hotkey_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         ui.group(|ui| {
-            ui.label(egui::RichText::new(format!("{} Global Shortcut", icons::KEYBOARD)).strong());
+            ui.label(
+                egui::RichText::new(format!("{} Global Shortcut", icons::KEYBOARD))
+                    .color(crate::theme::text_primary(is_dark))
+                    .strong(),
+            );
             ui.label(
                 egui::RichText::new(
                     "Select the keyboard shortcut used to summon the clipboard manager from anywhere.",
@@ -949,9 +959,13 @@ impl ClipboardApp {
         });
     }
 
-    fn render_behavior_settings_group(&mut self, ui: &mut egui::Ui) {
+    fn render_behavior_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         ui.group(|ui| {
-            ui.label(egui::RichText::new(format!("{} General Behavior", icons::SLIDERS)).strong());
+            ui.label(
+                egui::RichText::new(format!("{} General Behavior", icons::SLIDERS))
+                    .color(crate::theme::text_primary(is_dark))
+                    .strong(),
+            );
             ui.add_space(4.0);
 
             let mut hide_on_copy = self.settings.hide_on_copy;
@@ -1048,10 +1062,11 @@ impl ClipboardApp {
         });
     }
 
-    fn render_security_settings_group(&mut self, ui: &mut egui::Ui) {
+    fn render_security_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         ui.group(|ui| {
             ui.label(
                 egui::RichText::new(format!("{} Security & Encryption", icons::SHIELD_CHECK))
+                    .color(crate::theme::text_primary(is_dark))
                     .strong(),
             );
             ui.add_space(4.0);
@@ -1075,10 +1090,11 @@ impl ClipboardApp {
         });
     }
 
-    fn render_about_settings_group(ui: &mut egui::Ui) {
+    fn render_about_settings_group(ui: &mut egui::Ui, is_dark: bool) {
         ui.group(|ui| {
             ui.label(
                 egui::RichText::new(format!("{} About CipherClipboard", icons::INFO))
+                    .color(crate::theme::text_primary(is_dark))
                     .strong(),
             );
             ui.add_space(4.0);
@@ -1847,6 +1863,7 @@ impl ClipboardApp {
                     ui.add_space(4.0_f32);
                     ui.label(
                         egui::RichText::new("Clear all clipboard history?")
+                            .color(crate::theme::text_primary(is_dark))
                             .strong()
                             .size(15.0_f32),
                     );
@@ -1926,7 +1943,7 @@ impl eframe::App for ClipboardApp {
         self.render_top_panel(ctx, is_dark);
         self.render_bottom_panel(ctx, is_dark);
         if self.active_view == ActiveView::Settings {
-            self.render_settings_panel(ctx);
+            self.render_settings_panel(ctx, is_dark);
         } else {
             self.render_central_panel(ctx, is_dark);
         }
