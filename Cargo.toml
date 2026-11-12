@@ -6,8 +6,8 @@ description = "A simple, encrypted cross-platform clipboard manager in Rust"
 authors = ["Your Name"]
 
 [dependencies]
-# Pure Rust immediate-mode GUI framework
 eframe = "0.29"
+egui_extras = { version = "0.29", features = ["syntect"] }
 
 # Cross-platform clipboard reading and writing
 arboard = "3.4"

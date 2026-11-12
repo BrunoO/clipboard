@@ -571,7 +571,7 @@ impl ClipboardApp {
                     preview
                 };
 
-                let job = crate::code::highlight_code(&display_text, lang);
+                let job = crate::code::highlight_code(ui.ctx(), ui.style(), &display_text, lang);
                 let label = ui.add(egui::Label::new(job).sense(egui::Sense::click()));
 
                 if label.clicked() {

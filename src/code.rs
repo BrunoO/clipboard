@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, FontId, TextFormat};
+use eframe::egui;
 
 /// Supported programming and data languages for detection and syntax highlighting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +47,23 @@ impl CodeLanguage {
             Self::Shell => "💻 Bash",
             Self::Toml => "⚙️ TOML",
             Self::Yaml => "📄 YAML",
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn syntect_name(self) -> &'static str {
+        match self {
+            Self::Rust => "rs",
+            Self::Cpp => "cpp",
+            Self::Python => "py",
+            Self::JavaScript => "js",
+            Self::TypeScript => "ts",
+            Self::Json => "json",
+            Self::Html => "html",
+            Self::Sql => "sql",
+            Self::Shell => "sh",
+            Self::Toml => "toml",
+            Self::Yaml => "yaml",
         }
     }
 }
@@ -202,471 +219,15 @@ pub(crate) fn minify_json(text: &str) -> Option<String> {
     let val: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
     serde_json::to_string(&val).ok()
 }
-
-struct CodeFormats {
-    kw: TextFormat,
-    type_fmt: TextFormat,
-    str_fmt: TextFormat,
-    num: TextFormat,
-    comment: TextFormat,
-    fn_fmt: TextFormat,
-    default: TextFormat,
-    punct: TextFormat,
-}
-
-impl CodeFormats {
-    fn new() -> Self {
-        let font_code = FontId::monospace(11.5);
-        let format_of = |color: Color32| -> TextFormat {
-            TextFormat {
-                font_id: font_code.clone(),
-                color,
-                ..Default::default()
-            }
-        };
-
-        Self {
-            kw: format_of(Color32::from_rgb(224, 108, 117)),
-            type_fmt: format_of(Color32::from_rgb(229, 192, 123)),
-            str_fmt: format_of(Color32::from_rgb(152, 195, 121)),
-            num: format_of(Color32::from_rgb(209, 154, 102)),
-            comment: format_of(Color32::from_rgb(127, 132, 142)),
-            fn_fmt: format_of(Color32::from_rgb(97, 175, 239)),
-            default: format_of(Color32::from_rgb(220, 224, 230)),
-            punct: format_of(Color32::from_rgb(171, 178, 191)),
-        }
-    }
-}
-
-/// Builds an `egui::text::LayoutJob` with syntax highlighting for the given code snippet.
-pub(crate) fn highlight_code(text: &str, lang: CodeLanguage) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
-    let fmts = CodeFormats::new();
-
-    for line in text.lines() {
-        let trimmed_line = line.trim_start();
-        if is_line_comment(lang, trimmed_line) {
-            job.append(line, 0.0, fmts.comment.clone());
-        } else {
-            tokenize_line(line, lang, &mut job, &fmts);
-        }
-        job.append("\n", 0.0, fmts.default.clone());
-    }
-
-    job
-}
-
-fn is_line_comment(lang: CodeLanguage, trimmed_line: &str) -> bool {
-    match lang {
-        CodeLanguage::Rust
-        | CodeLanguage::Cpp
-        | CodeLanguage::JavaScript
-        | CodeLanguage::TypeScript => {
-            trimmed_line.starts_with("//")
-                || trimmed_line.starts_with("/*")
-                || trimmed_line.starts_with('*')
-        }
-        CodeLanguage::Python | CodeLanguage::Shell | CodeLanguage::Yaml | CodeLanguage::Toml => {
-            trimmed_line.starts_with('#')
-        }
-        CodeLanguage::Sql => trimmed_line.starts_with("--"),
-        CodeLanguage::Html => trimmed_line.starts_with("<!--"),
-        CodeLanguage::Json => false,
-    }
-}
-
-fn tokenize_line(
-    line: &str,
+/// Builds an `egui::text::LayoutJob` with syntax highlighting for the given code snippet using `egui_extras` and `syntect`.
+pub(crate) fn highlight_code(
+    ctx: &egui::Context,
+    style: &egui::Style,
+    text: &str,
     lang: CodeLanguage,
-    job: &mut egui::text::LayoutJob,
-    fmts: &CodeFormats,
-) {
-    let mut chars = line.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '"' || ch == '\'' || ch == '`' {
-            let quote = ch;
-            let mut s = String::new();
-            s.push(quote);
-            while let Some(&c) = chars.peek() {
-                chars.next();
-                s.push(c);
-                if c == quote {
-                    break;
-                }
-                if c == '\\' {
-                    if let Some(escaped) = chars.next() {
-                        s.push(escaped);
-                    }
-                }
-            }
-            job.append(&s, 0.0, fmts.str_fmt.clone());
-        } else if ch.is_alphabetic() || ch == '_' {
-            let mut word = String::new();
-            word.push(ch);
-            while let Some(&c) = chars.peek() {
-                if c.is_alphanumeric() || c == '_' {
-                    word.push(c);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-
-            if is_keyword(lang, &word) {
-                job.append(&word, 0.0, fmts.kw.clone());
-            } else if is_builtin_type(&word) {
-                job.append(&word, 0.0, fmts.type_fmt.clone());
-            } else if chars.peek() == Some(&'(') {
-                job.append(&word, 0.0, fmts.fn_fmt.clone());
-            } else {
-                job.append(&word, 0.0, fmts.default.clone());
-            }
-        } else if ch.is_ascii_digit() {
-            let mut num = String::new();
-            num.push(ch);
-            while let Some(&c) = chars.peek() {
-                if c.is_ascii_digit() || c == '.' || c == 'x' || c == '_' {
-                    num.push(c);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            job.append(&num, 0.0, fmts.num.clone());
-        } else if ch == '{'
-            || ch == '}'
-            || ch == '('
-            || ch == ')'
-            || ch == '['
-            || ch == ']'
-            || ch == ';'
-            || ch == ':'
-        {
-            job.append(&ch.to_string(), 0.0, fmts.punct.clone());
-        } else {
-            job.append(&ch.to_string(), 0.0, fmts.default.clone());
-        }
-    }
-}
-
-#[allow(clippy::too_many_lines)]
-fn is_keyword(lang: CodeLanguage, word: &str) -> bool {
-    match lang {
-        CodeLanguage::Rust => matches!(
-            word,
-            "as" | "break"
-                | "const"
-                | "continue"
-                | "crate"
-                | "else"
-                | "enum"
-                | "extern"
-                | "false"
-                | "fn"
-                | "for"
-                | "if"
-                | "impl"
-                | "in"
-                | "let"
-                | "loop"
-                | "match"
-                | "mod"
-                | "move"
-                | "mut"
-                | "pub"
-                | "ref"
-                | "return"
-                | "self"
-                | "Self"
-                | "static"
-                | "struct"
-                | "super"
-                | "trait"
-                | "true"
-                | "type"
-                | "unsafe"
-                | "use"
-                | "where"
-                | "while"
-                | "async"
-                | "await"
-        ),
-        CodeLanguage::Cpp => matches!(
-            word,
-            "alignas"
-                | "alignof"
-                | "and"
-                | "and_eq"
-                | "asm"
-                | "auto"
-                | "bitand"
-                | "bitor"
-                | "bool"
-                | "break"
-                | "case"
-                | "catch"
-                | "char"
-                | "char8_t"
-                | "char16_t"
-                | "char32_t"
-                | "class"
-                | "compl"
-                | "concept"
-                | "const"
-                | "consteval"
-                | "constexpr"
-                | "constinit"
-                | "const_cast"
-                | "continue"
-                | "co_await"
-                | "co_return"
-                | "co_yield"
-                | "decltype"
-                | "default"
-                | "delete"
-                | "do"
-                | "double"
-                | "dynamic_cast"
-                | "else"
-                | "enum"
-                | "explicit"
-                | "export"
-                | "extern"
-                | "false"
-                | "float"
-                | "for"
-                | "friend"
-                | "goto"
-                | "if"
-                | "inline"
-                | "int"
-                | "long"
-                | "mutable"
-                | "namespace"
-                | "new"
-                | "noexcept"
-                | "not"
-                | "not_eq"
-                | "nullptr"
-                | "operator"
-                | "or"
-                | "or_eq"
-                | "private"
-                | "protected"
-                | "public"
-                | "register"
-                | "reinterpret_cast"
-                | "requires"
-                | "return"
-                | "short"
-                | "signed"
-                | "sizeof"
-                | "static"
-                | "static_assert"
-                | "static_cast"
-                | "struct"
-                | "switch"
-                | "template"
-                | "this"
-                | "thread_local"
-                | "throw"
-                | "true"
-                | "try"
-                | "typedef"
-                | "typeid"
-                | "typename"
-                | "union"
-                | "unsigned"
-                | "using"
-                | "virtual"
-                | "void"
-                | "volatile"
-                | "wchar_t"
-                | "while"
-                | "xor"
-                | "xor_eq"
-        ),
-        CodeLanguage::Python => matches!(
-            word,
-            "False"
-                | "None"
-                | "True"
-                | "and"
-                | "as"
-                | "assert"
-                | "async"
-                | "await"
-                | "break"
-                | "class"
-                | "continue"
-                | "def"
-                | "del"
-                | "elif"
-                | "else"
-                | "except"
-                | "finally"
-                | "for"
-                | "from"
-                | "global"
-                | "if"
-                | "import"
-                | "in"
-                | "is"
-                | "lambda"
-                | "nonlocal"
-                | "not"
-                | "or"
-                | "pass"
-                | "raise"
-                | "return"
-                | "try"
-                | "while"
-                | "with"
-                | "yield"
-        ),
-        CodeLanguage::JavaScript | CodeLanguage::TypeScript => matches!(
-            word,
-            "break"
-                | "case"
-                | "catch"
-                | "class"
-                | "const"
-                | "continue"
-                | "debugger"
-                | "default"
-                | "delete"
-                | "do"
-                | "else"
-                | "export"
-                | "extends"
-                | "finally"
-                | "for"
-                | "function"
-                | "if"
-                | "import"
-                | "in"
-                | "instanceof"
-                | "new"
-                | "return"
-                | "super"
-                | "switch"
-                | "this"
-                | "throw"
-                | "try"
-                | "typeof"
-                | "var"
-                | "void"
-                | "while"
-                | "with"
-                | "yield"
-                | "let"
-                | "static"
-                | "interface"
-                | "type"
-                | "async"
-                | "await"
-                | "null"
-                | "true"
-                | "false"
-        ),
-        CodeLanguage::Sql => matches!(
-            word.to_uppercase().as_str(),
-            "SELECT"
-                | "FROM"
-                | "WHERE"
-                | "INSERT"
-                | "INTO"
-                | "UPDATE"
-                | "SET"
-                | "DELETE"
-                | "CREATE"
-                | "TABLE"
-                | "DROP"
-                | "ALTER"
-                | "INDEX"
-                | "ORDER"
-                | "BY"
-                | "GROUP"
-                | "HAVING"
-                | "LIMIT"
-                | "JOIN"
-                | "INNER"
-                | "LEFT"
-                | "RIGHT"
-                | "ON"
-                | "AND"
-                | "OR"
-                | "NOT"
-                | "NULL"
-                | "AS"
-                | "DISTINCT"
-                | "UNION"
-        ),
-        CodeLanguage::Shell => matches!(
-            word,
-            "if" | "then"
-                | "else"
-                | "elif"
-                | "fi"
-                | "case"
-                | "esac"
-                | "for"
-                | "while"
-                | "until"
-                | "do"
-                | "done"
-                | "in"
-                | "function"
-                | "select"
-                | "export"
-                | "echo"
-        ),
-        CodeLanguage::Json => matches!(word, "true" | "false" | "null"),
-        CodeLanguage::Html | CodeLanguage::Toml | CodeLanguage::Yaml => false,
-    }
-}
-
-fn is_builtin_type(word: &str) -> bool {
-    matches!(
-        word,
-        "bool"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-            | "u128"
-            | "usize"
-            | "i8"
-            | "i16"
-            | "i32"
-            | "i64"
-            | "i128"
-            | "isize"
-            | "f32"
-            | "f64"
-            | "char"
-            | "str"
-            | "String"
-            | "Option"
-            | "Result"
-            | "Vec"
-            | "int"
-            | "float"
-            | "dict"
-            | "list"
-            | "set"
-            | "tuple"
-            | "number"
-            | "string"
-            | "boolean"
-            | "any"
-            | "void"
-            | "size_t"
-            | "int32_t"
-            | "uint32_t"
-            | "int64_t"
-            | "uint64_t"
-    )
+) -> egui::text::LayoutJob {
+    let theme = egui_extras::syntax_highlighting::CodeTheme::from_memory(ctx, style);
+    egui_extras::syntax_highlighting::highlight(ctx, style, &theme, text, lang.syntect_name())
 }
 
 #[cfg(test)]
@@ -717,8 +278,28 @@ mod tests {
     #[test]
     fn test_highlight_code_produces_sections() {
         let snippet = "let mut count: i32 = 42;\n// compute\nprintln!(\"Count: {}\", count);";
-        let job = highlight_code(snippet, CodeLanguage::Rust);
+        let ctx = egui::Context::default();
+        let style = egui::Style::default();
+        let job = highlight_code(&ctx, &style, snippet, CodeLanguage::Rust);
         assert_ne!(job.sections.len(), 0);
-        assert_eq!(job.text, format!("{snippet}\n"));
+        assert_eq!(job.text, snippet);
+    }
+
+    #[test]
+    fn test_highlight_code_multilingual() {
+        let ctx = egui::Context::default();
+        let style = egui::Style::default();
+
+        let cpp_snippet = "#include <vector>\nint x = 42;";
+        let cpp_job = highlight_code(&ctx, &style, cpp_snippet, CodeLanguage::Cpp);
+        assert_ne!(cpp_job.sections.len(), 0);
+
+        let py_snippet = "def hello():\n    return 'world'";
+        let py_job = highlight_code(&ctx, &style, py_snippet, CodeLanguage::Python);
+        assert_ne!(py_job.sections.len(), 0);
+
+        let sql_snippet = "SELECT * FROM users WHERE active = 1;";
+        let sql_job = highlight_code(&ctx, &style, sql_snippet, CodeLanguage::Sql);
+        assert_ne!(sql_job.sections.len(), 0);
     }
 }
