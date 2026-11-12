@@ -23,11 +23,11 @@ impl HotkeyPreset {
     pub(crate) const fn display_name(self) -> &'static str {
         #[cfg(target_os = "macos")]
         match self {
-            Self::Universal => "⌘ + ⇧ + V (Universal recommended)",
-            Self::AzertyQuote => "⌘ + ù (French AZERTY)",
-            Self::CtrlShiftC => "⌘ + ⇧ + C",
-            Self::AltSpace => "⌥ Option + Space",
-            Self::CtrlSpace => "⌘ + Space",
+            Self::Universal => "Cmd + Shift + V (Universal recommended)",
+            Self::AzertyQuote => "Cmd + ù (French AZERTY)",
+            Self::CtrlShiftC => "Cmd + Shift + C",
+            Self::AltSpace => "Option + Space",
+            Self::CtrlSpace => "Cmd + Space",
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -45,11 +45,11 @@ impl HotkeyPreset {
     pub(crate) const fn badge(self) -> &'static str {
         #[cfg(target_os = "macos")]
         match self {
-            Self::Universal => "⌘⇧V",
-            Self::AzertyQuote => "⌘ ù",
-            Self::CtrlShiftC => "⌘⇧C",
-            Self::AltSpace => "⌥Space",
-            Self::CtrlSpace => "⌘Space",
+            Self::Universal => "Cmd+Shift+V",
+            Self::AzertyQuote => "Cmd+ù",
+            Self::CtrlShiftC => "Cmd+Shift+C",
+            Self::AltSpace => "Option+Space",
+            Self::CtrlSpace => "Cmd+Space",
         }
 
         #[cfg(not(target_os = "macos"))]
