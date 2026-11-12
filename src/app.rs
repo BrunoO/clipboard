@@ -4,6 +4,7 @@ use crate::media;
 use crate::settings::{AppSettings, HotkeyPreset};
 use arboard::Clipboard;
 use eframe::egui;
+use egui_phosphor::regular as icons;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -112,7 +113,7 @@ impl ClipboardApp {
             if let Err(e) = cb.set_text(content.to_string()) {
                 eprintln!("Failed to write text to clipboard: {e}");
             } else {
-                self.show_toast("✓ Copied text to clipboard!");
+                self.show_toast(&format!("{} Copied text to clipboard!", icons::CHECK));
                 if self.settings.hide_on_copy {
                     self.is_visible = false;
                     self.has_been_focused = false;
@@ -138,7 +139,7 @@ impl ClipboardApp {
                     if let Err(e) = cb.set_image(img_data) {
                         eprintln!("Failed to write image to clipboard: {e}");
                     } else {
-                        self.show_toast("✓ Copied image to clipboard!");
+                        self.show_toast(&format!("{} Copied image to clipboard!", icons::CHECK));
                         if self.settings.hide_on_copy {
                             self.is_visible = false;
                             self.has_been_focused = false;
@@ -326,45 +327,48 @@ impl ClipboardApp {
             ui.selectable_value(
                 &mut self.content_filter,
                 ContentFilter::All,
-                format!("All ({all_count})"),
+                format!("{} All ({all_count})", icons::STACK),
             );
             ui.selectable_value(
                 &mut self.content_filter,
                 ContentFilter::Text,
-                format!("📝 Text ({text_count})"),
+                format!("{} Text ({text_count})", icons::FILE_TEXT),
             );
             ui.selectable_value(
                 &mut self.content_filter,
                 ContentFilter::Links,
-                format!("🌐 Links ({link_count})"),
+                format!("{} Links ({link_count})", icons::LINK),
             );
             ui.selectable_value(
                 &mut self.content_filter,
                 ContentFilter::Code,
-                format!("💻 Code ({code_count})"),
+                format!("{} Code ({code_count})", icons::CODE),
             );
             ui.selectable_value(
                 &mut self.content_filter,
                 ContentFilter::Colors,
-                format!("🎨 Colors ({color_count})"),
+                format!("{} Colors ({color_count})", icons::PALETTE),
             );
             ui.selectable_value(
                 &mut self.content_filter,
                 ContentFilter::Image,
-                format!("📷 Images ({img_count})"),
+                format!("{} Images ({img_count})", icons::IMAGE),
             );
         });
     }
 
     fn render_header_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
-            ui.heading("🔒 Clipboard");
+            ui.heading(format!("{} Clipboard", icons::LOCK_KEY));
 
             let badge = self.settings.hotkey.badge();
             ui.label(egui::RichText::new(format!("({badge})")).weak().size(11.0));
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Hide (Esc)").clicked() {
+                if ui
+                    .small_button(format!("{} Hide (Esc)", icons::X))
+                    .clicked()
+                {
                     self.is_visible = false;
                     self.has_been_focused = false;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -374,8 +378,10 @@ impl ClipboardApp {
                 }
 
                 let settings_btn = match self.active_view {
-                    ActiveView::Settings => ui.small_button("📋 History"),
-                    ActiveView::History => ui.small_button("⚙ Settings"),
+                    ActiveView::Settings => {
+                        ui.small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
+                    }
+                    ActiveView::History => ui.small_button(format!("{} Settings", icons::GEAR)),
                 };
                 if settings_btn.clicked() {
                     self.active_view = match self.active_view {
@@ -386,14 +392,14 @@ impl ClipboardApp {
 
                 if self.active_view == ActiveView::History
                     && ui
-                        .small_button("🗑 Clear")
+                        .small_button(format!("{} Clear", icons::TRASH))
                         .on_hover_text("Permanently deletes all history")
                         .clicked()
                 {
                     let _ = self.db.clear();
                     self.texture_cache.clear();
                     self.refresh_items();
-                    self.show_toast("History cleared.");
+                    self.show_toast(&format!("{} History cleared.", icons::CHECK));
                 }
             });
         });
@@ -401,7 +407,7 @@ impl ClipboardApp {
 
     fn render_search_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label("🔍");
+            ui.label(icons::MAGNIFYING_GLASS);
             let search_box = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
                     .hint_text("Search clipboard history... (Esc to hide)")
@@ -431,7 +437,8 @@ impl ClipboardApp {
                 } else {
                     ui.label(
                         egui::RichText::new(format!(
-                            "{} entries • SQLCipher encrypted",
+                            "{} {} entries • SQLCipher encrypted",
+                            icons::SHIELD_CHECK,
                             self.items.len()
                         ))
                         .weak()
@@ -474,15 +481,23 @@ impl ClipboardApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             if filtered_indices.is_empty() {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(40.0);
-                    let empty_hint = match filter {
-                        ContentFilter::All => "No clipboard history found.",
-                        ContentFilter::Text => "No text entries found.",
-                        ContentFilter::Links => "No links found in clipboard history.",
-                        ContentFilter::Code => "No code snippets found in clipboard history.",
-                        ContentFilter::Colors => "No colors found in clipboard history.",
-                        ContentFilter::Image => "No image entries found.",
+                    ui.add_space(35.0);
+                    let (empty_icon, empty_hint) = match filter {
+                        ContentFilter::All => (icons::CLIPBOARD, "No clipboard history found."),
+                        ContentFilter::Text => (icons::FILE_TEXT, "No text entries found."),
+                        ContentFilter::Links => {
+                            (icons::LINK, "No links found in clipboard history.")
+                        }
+                        ContentFilter::Code => {
+                            (icons::CODE, "No code snippets found in clipboard history.")
+                        }
+                        ContentFilter::Colors => {
+                            (icons::PALETTE, "No colors found in clipboard history.")
+                        }
+                        ContentFilter::Image => (icons::IMAGE, "No image entries found."),
                     };
+                    ui.label(egui::RichText::new(empty_icon).size(28.0).weak());
+                    ui.add_space(4.0);
                     ui.label(egui::RichText::new(empty_hint).weak());
                     ui.label(
                         egui::RichText::new(
@@ -525,11 +540,14 @@ impl ClipboardApp {
                     ItemAction::CopyText(content) => self.copy_text_to_clipboard(&content, ctx),
                     ItemAction::CopyFormattedJson(formatted) => {
                         self.copy_text_to_clipboard(&formatted, ctx);
-                        self.show_toast("✓ Copied formatted JSON to clipboard!");
+                        self.show_toast(&format!(
+                            "{} Copied formatted JSON to clipboard!",
+                            icons::CHECK
+                        ));
                     }
                     ItemAction::CopyColor(val, name) => {
                         self.copy_text_to_clipboard(&val, ctx);
-                        self.show_toast(&format!("Copied {name}: {val}"));
+                        self.show_toast(&format!("{} Copied {name}: {val}", icons::CHECK));
                     }
                     ItemAction::CopyImage(png_bytes) => {
                         self.copy_image_to_clipboard(&png_bytes, ctx);
@@ -537,16 +555,19 @@ impl ClipboardApp {
                     ItemAction::OpenBrowser(url) => {
                         if let Err(e) = webbrowser::open(&url) {
                             eprintln!("Failed to open link in browser: {e}");
-                            self.show_toast("Failed to open browser.");
+                            self.show_toast(&format!("{} Failed to open browser.", icons::WARNING));
                         } else {
-                            self.show_toast("Opened in default browser!");
+                            self.show_toast(&format!(
+                                "{} Opened in default browser!",
+                                icons::ARROW_SQUARE_OUT
+                            ));
                         }
                     }
                     ItemAction::Delete(id) => {
                         let _ = self.db.delete(id);
                         self.texture_cache.remove(&id);
                         self.refresh_items();
-                        self.show_toast("Entry deleted.");
+                        self.show_toast(&format!("{} Entry deleted.", icons::TRASH));
                     }
                     ItemAction::None => {}
                 }
@@ -556,7 +577,7 @@ impl ClipboardApp {
     fn render_settings_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading("⚙ Preferences");
+                ui.heading(format!("{} Preferences", icons::GEAR));
                 ui.add_space(8.0);
 
                 self.render_hotkey_settings_group(ui);
@@ -568,7 +589,10 @@ impl ClipboardApp {
                 self.render_security_settings_group(ui);
                 ui.add_space(12.0);
 
-                if ui.button("← Back to History").clicked() {
+                if ui
+                    .button(format!("{} Back to History", icons::ARROW_LEFT))
+                    .clicked()
+                {
                     self.active_view = ActiveView::History;
                 }
             });
@@ -577,7 +601,7 @@ impl ClipboardApp {
 
     fn render_hotkey_settings_group(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.label(egui::RichText::new("⌨ Global Shortcut").strong());
+            ui.label(egui::RichText::new(format!("{} Global Shortcut", icons::KEYBOARD)).strong());
             ui.label(
                 egui::RichText::new(
                     "Select the keyboard shortcut used to summon the clipboard manager from anywhere.",
@@ -601,7 +625,11 @@ impl ClipboardApp {
                     if let Some(service) = &mut self.hotkey_service {
                         service.update_hotkeys(&preset.to_hotkeys());
                     }
-                    self.show_toast(&format!("✓ Shortcut set to {}", preset.badge()));
+                    self.show_toast(&format!(
+                        "{} Shortcut set to {}",
+                        icons::CHECK,
+                        preset.badge()
+                    ));
                 }
             }
         });
@@ -609,7 +637,7 @@ impl ClipboardApp {
 
     fn render_behavior_settings_group(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.label(egui::RichText::new("📋 General Behavior").strong());
+            ui.label(egui::RichText::new(format!("{} General Behavior", icons::SLIDERS)).strong());
             ui.add_space(4.0);
 
             let mut hide_on_copy = self.settings.hide_on_copy;
@@ -658,9 +686,10 @@ impl ClipboardApp {
             if auto_paste && !crate::platform::is_accessibility_trusted() {
                 ui.add_space(2.0);
                 ui.label(
-                    egui::RichText::new(
-                        "⚠ macOS note: Direct auto-paste requires Accessibility permissions in System Settings > Privacy & Security > Accessibility.",
-                    )
+                    egui::RichText::new(format!(
+                        "{} macOS note: Direct auto-paste requires Accessibility permissions in System Settings > Privacy & Security > Accessibility.",
+                        icons::WARNING
+                    ))
                     .size(11.0)
                     .color(egui::Color32::from_rgb(230, 126, 34)),
                 );
@@ -690,7 +719,10 @@ impl ClipboardApp {
 
     fn render_security_settings_group(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.label(egui::RichText::new("🔒 Security & Encryption").strong());
+            ui.label(
+                egui::RichText::new(format!("{} Security & Encryption", icons::SHIELD_CHECK))
+                    .strong(),
+            );
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(
@@ -702,11 +734,17 @@ impl ClipboardApp {
 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("🗑 Clear All History").clicked() {
+                if ui
+                    .button(format!("{} Clear All History", icons::TRASH))
+                    .clicked()
+                {
                     let _ = self.db.clear();
                     self.texture_cache.clear();
                     self.refresh_items();
-                    self.show_toast("✓ All clipboard history wiped.");
+                    self.show_toast(&format!(
+                        "{} All clipboard history wiped.",
+                        icons::CHECK
+                    ));
                 }
             });
         });
@@ -764,19 +802,23 @@ impl ClipboardApp {
                 let embedded = item.embedded_colors();
                 let color_hint = match embedded.len() {
                     0 => String::new(),
-                    1 => " • 🎨 1 color".to_string(),
-                    n => format!(" • 🎨 {n} colors"),
+                    1 => format!(" • {} 1 color", icons::PALETTE),
+                    n => format!(" • {} {n} colors", icons::PALETTE),
                 };
                 ui.label(
-                    egui::RichText::new(format!("📝 Text{color_hint} • {}", item.created_at))
-                        .size(10.0)
-                        .weak(),
+                    egui::RichText::new(format!(
+                        "{} Text{color_hint} • {}",
+                        icons::FILE_TEXT,
+                        item.created_at
+                    ))
+                    .size(10.0)
+                    .weak(),
                 );
             }
             ItemKind::Url => {
                 let host = item.url_host().unwrap_or_else(|| "link".to_string());
                 ui.label(
-                    egui::RichText::new("🌐 Link")
+                    egui::RichText::new(format!("{} Link", icons::LINK))
                         .size(10.0)
                         .color(egui::Color32::from_rgb(52, 152, 219))
                         .strong(),
@@ -788,15 +830,16 @@ impl ClipboardApp {
                 );
             }
             ItemKind::Code => {
-                let lang_badge = item
-                    .code_language()
-                    .map_or("💻 Code", crate::code::CodeLanguage::badge);
+                let lang_badge = item.code_language().map_or_else(
+                    || format!("{} Code", icons::CODE),
+                    crate::code::CodeLanguage::badge,
+                );
                 let line_count = item.content.lines().count();
                 let embedded = item.embedded_colors();
                 let color_hint = match embedded.len() {
                     0 => String::new(),
-                    1 => " • 🎨 1 color".to_string(),
-                    n => format!(" • 🎨 {n} colors"),
+                    1 => format!(" • {} 1 color", icons::PALETTE),
+                    n => format!(" • {} {n} colors", icons::PALETTE),
                 };
                 ui.label(
                     egui::RichText::new(lang_badge)
@@ -818,7 +861,7 @@ impl ClipboardApp {
                     .parsed_color()
                     .map_or_else(|| item.content.clone(), crate::color::ParsedColor::to_hex);
                 ui.label(
-                    egui::RichText::new("🎨 Color")
+                    egui::RichText::new(format!("{} Color", icons::PALETTE))
                         .size(10.0)
                         .color(egui::Color32::from_rgb(230, 126, 34))
                         .strong(),
@@ -831,7 +874,7 @@ impl ClipboardApp {
             }
             ItemKind::Image => {
                 ui.label(
-                    egui::RichText::new(format!("📷 Image • {}", item.created_at))
+                    egui::RichText::new(format!("{} Image • {}", icons::IMAGE, item.created_at))
                         .size(10.0)
                         .weak(),
                 );
@@ -847,14 +890,14 @@ impl ClipboardApp {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .small_button(egui::RichText::new("×").size(12.0))
+                    .small_button(icons::TRASH)
                     .on_hover_text("Delete entry")
                     .clicked()
                 {
                     action = ItemAction::Delete(item.id);
                 }
                 if ui
-                    .small_button("📋 Copy")
+                    .small_button(format!("{} Copy", icons::COPY))
                     .on_hover_text("Copy back to clipboard")
                     .clicked()
                 {
@@ -871,7 +914,7 @@ impl ClipboardApp {
                 }
                 if item.kind == ItemKind::Url
                     && ui
-                        .small_button("↗ Open")
+                        .small_button(format!("{} Open", icons::ARROW_SQUARE_OUT))
                         .on_hover_text("Open link in default browser")
                         .clicked()
                 {
@@ -880,7 +923,7 @@ impl ClipboardApp {
                 if item.code_language() == Some(crate::code::CodeLanguage::Json) {
                     if let Some(pretty) = crate::code::format_json(&item.content) {
                         if ui
-                            .small_button("{ } Prettify")
+                            .small_button(format!("{} Prettify", icons::BRACKETS_CURLY))
                             .on_hover_text("Copy formatted JSON with indentation")
                             .clicked()
                         {
@@ -1143,7 +1186,7 @@ impl ClipboardApp {
 
         ui.horizontal_wrapped(|ui| {
             ui.label(
-                egui::RichText::new("🎨 Colors:")
+                egui::RichText::new(format!("{} Colors:", icons::PALETTE))
                     .size(11.0)
                     .color(egui::Color32::from_rgb(230, 126, 34))
                     .strong(),

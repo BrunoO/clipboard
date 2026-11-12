@@ -67,6 +67,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "CipherClipboard",
         native_options,
         Box::new(move |cc| {
+            // Register Phosphor icons with egui font definitions
+            let mut fonts = egui::FontDefinitions::default();
+            egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+            cc.egui_ctx.set_fonts(fonts);
+
             // Apply modern dark visuals
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
 

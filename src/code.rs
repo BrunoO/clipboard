@@ -34,20 +34,23 @@ impl CodeLanguage {
         }
     }
 
-    pub(crate) const fn badge(self) -> &'static str {
+    pub(crate) const fn icon(self) -> &'static str {
         match self {
-            Self::Rust => "🦀 Rust",
-            Self::Cpp => "💻 C++",
-            Self::Python => "🐍 Python",
-            Self::JavaScript => "⚡ JS",
-            Self::TypeScript => "🔷 TS",
-            Self::Json => "{ } JSON",
-            Self::Html => "🌐 HTML",
-            Self::Sql => "💾 SQL",
-            Self::Shell => "💻 Bash",
-            Self::Toml => "📄 TOML",
-            Self::Yaml => "📄 YAML",
+            Self::Rust
+            | Self::Cpp
+            | Self::Python
+            | Self::JavaScript
+            | Self::TypeScript
+            | Self::Html => egui_phosphor::regular::CODE,
+            Self::Json => egui_phosphor::regular::BRACKETS_CURLY,
+            Self::Sql => egui_phosphor::regular::DATABASE,
+            Self::Shell => egui_phosphor::regular::TERMINAL,
+            Self::Toml | Self::Yaml => egui_phosphor::regular::FILE_TEXT,
         }
+    }
+
+    pub(crate) fn badge(self) -> String {
+        format!("{} {}", self.icon(), self.name())
     }
 
     #[must_use]
