@@ -14,6 +14,15 @@ default-run = "CipherClipboard"
 name = "CipherClipboard"
 path = "src/main.rs"
 
+[package.metadata.bundle]
+name = "CipherClipboard"
+identifier = "com.cipherclipboard.app"
+icon = ["assets/icon.icns"]
+version = "0.1.0"
+copyright = "Copyright (c) 2026 BrunoO"
+category = "Utility"
+short_description = "Encrypted Clipboard Manager"
+
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
 
