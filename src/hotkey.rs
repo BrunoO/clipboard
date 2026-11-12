@@ -29,21 +29,19 @@ impl HotkeyService {
         let hotkey_base = HotKey::new(Some(base_mod), Code::Quote);
         let hotkey_shift = HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Quote);
 
-        let id_base = hotkey_base.id();
-        let id_shift = hotkey_shift.id();
+        // Also register the universal clipboard shortcut: Cmd+Shift+V (macOS) / Ctrl+Shift+V (Win/Linux)
+        let hotkey_v = HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyV);
+
+        let target_ids = [hotkey_base.id(), hotkey_shift.id(), hotkey_v.id()];
 
         let mut registered_hotkeys = Vec::new();
 
-        if let Err(e) = manager.register(hotkey_base) {
-            eprintln!("⚠️ Could not register base hotkey: {e}");
-        } else {
-            registered_hotkeys.push(hotkey_base);
-        }
-
-        if let Err(e) = manager.register(hotkey_shift) {
-            eprintln!("⚠️ Could not register shift hotkey: {e}");
-        } else {
-            registered_hotkeys.push(hotkey_shift);
+        for hk in [hotkey_base, hotkey_shift, hotkey_v] {
+            if let Err(e) = manager.register(hk) {
+                eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
+            } else {
+                registered_hotkeys.push(hk);
+            }
         }
 
         let receiver = GlobalHotKeyEvent::receiver();
@@ -51,9 +49,7 @@ impl HotkeyService {
         // Background thread listens for OS hotkey events and wakes up egui
         thread::spawn(move || {
             while let Ok(event) = receiver.recv() {
-                if (event.id == id_base || event.id == id_shift)
-                    && event.state == HotKeyState::Pressed
-                {
+                if target_ids.contains(&event.id) && event.state == HotKeyState::Pressed {
                     let _ = hotkey_tx.send(());
                     ctx.request_repaint();
                 }
@@ -61,10 +57,10 @@ impl HotkeyService {
         });
 
         #[cfg(target_os = "macos")]
-        println!("⌨️ Registered global shortcut: Cmd + ù (or Cmd + Shift + ù)");
+        println!("⌨️ Registered global shortcuts: Cmd + ù and Cmd + Shift + V");
 
         #[cfg(not(target_os = "macos"))]
-        println!("⌨️ Registered global shortcut: Ctrl + ù (or Ctrl + Shift + ù)");
+        println!("⌨️ Registered global shortcuts: Ctrl + ù and Ctrl + Shift + V");
 
         Ok(Self {
             _manager: manager,

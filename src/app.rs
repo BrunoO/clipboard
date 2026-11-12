@@ -43,6 +43,7 @@ pub(crate) struct ClipboardApp {
     is_visible: bool,
     hide_on_copy: bool,
     focus_search_input: bool,
+    last_toggle_instant: Option<Instant>,
 }
 
 impl ClipboardApp {
@@ -71,6 +72,7 @@ impl ClipboardApp {
             is_visible: true,
             hide_on_copy: true,
             focus_search_input: true,
+            last_toggle_instant: None,
         }
     }
 
@@ -136,6 +138,15 @@ impl ClipboardApp {
         if !toggle_requested {
             return;
         }
+
+        // Debounce hotkey presses to ignore rapid OS key repeats (200ms threshold)
+        if self
+            .last_toggle_instant
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(200))
+        {
+            return;
+        }
+        self.last_toggle_instant = Some(Instant::now());
 
         self.is_visible = !self.is_visible;
         if self.is_visible {
@@ -251,9 +262,9 @@ impl ClipboardApp {
             ui.heading("🔒 Clipboard");
 
             #[cfg(target_os = "macos")]
-            let shortcut_hint = "⌘ ù";
+            let shortcut_hint = "⌘ ù / ⌘⇧V";
             #[cfg(not(target_os = "macos"))]
-            let shortcut_hint = "Ctrl+ù";
+            let shortcut_hint = "Ctrl+ù / Ctrl+Shift+V";
 
             ui.label(
                 egui::RichText::new(format!("({shortcut_hint})"))
@@ -1057,6 +1068,15 @@ impl eframe::App for ClipboardApp {
         self.handle_hotkey_toggle(ctx);
         self.handle_escape_key(ctx);
         self.handle_monitor_updates();
+
+        if !self.is_visible {
+            // Keep the event loop alive with a gentle 50ms tick while hidden.
+            // When a window is set to Visible(false), OS compositors (Windows DWM,
+            // macOS WindowServer, X11) suppress redraw events, which can cause
+            // request_repaint() from the background hotkey thread to stall.
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            return;
+        }
 
         self.render_top_panel(ctx);
         self.render_bottom_panel(ctx);
