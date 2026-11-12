@@ -13,6 +13,8 @@ jobs:
   sonarcloud:
     name: SonarCloud Scan & Coverage
     runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
