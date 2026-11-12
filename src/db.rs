@@ -132,7 +132,11 @@ impl Database {
                 height INTEGER,
                 created_at TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_clipboard_history_id ON clipboard_history(id DESC);",
+            CREATE INDEX IF NOT EXISTS idx_clipboard_history_id ON clipboard_history(id DESC);
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );",
         )?;
 
         // Graceful migration: ensure all columns exist if created with an older schema
@@ -314,6 +318,29 @@ impl Database {
     pub(crate) fn clear(&self) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM clipboard_history", [])?;
+        Ok(())
+    }
+
+    /// Fetches a setting value by key from the database.
+    pub(crate) fn get_setting(&self, key: &str) -> Result<Option<String>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key = ?1")?;
+        let mut rows = stmt.query([key])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Stores or updates a setting value by key.
+    pub(crate) fn set_setting(&self, key: &str, value: &str) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
         Ok(())
     }
 }
@@ -519,5 +546,27 @@ mod tests {
         // Deduplication for colors
         let dup = db.insert(hex_color).unwrap();
         assert_eq!(dup, None);
+    }
+
+    #[test]
+    fn test_settings_persistence() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("settings_test.db");
+        let db = Database::open(&db_path, TEST_KEY).unwrap();
+
+        assert_eq!(db.get_setting("hotkey").unwrap(), None);
+
+        db.set_setting("hotkey", "CtrlShiftV").unwrap();
+        assert_eq!(
+            db.get_setting("hotkey").unwrap(),
+            Some("CtrlShiftV".to_string())
+        );
+
+        // Test overwrite / upsert
+        db.set_setting("hotkey", "AltSpace").unwrap();
+        assert_eq!(
+            db.get_setting("hotkey").unwrap(),
+            Some("AltSpace".to_string())
+        );
     }
 }

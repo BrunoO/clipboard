@@ -1,6 +1,7 @@
 use crate::db::{ClipboardItem, Database, ItemKind};
 use crate::hotkey::HotkeyService;
 use crate::media;
+use crate::settings::{AppSettings, HotkeyPreset};
 use arboard::Clipboard;
 use eframe::egui;
 use std::collections::HashMap;
@@ -38,12 +39,13 @@ pub(crate) struct ClipboardApp {
     last_query_cached: String,
     notify_rx: Receiver<()>,
     hotkey_rx: Receiver<()>,
-    _hotkey_service: Option<HotkeyService>,
+    hotkey_service: Option<HotkeyService>,
     texture_cache: HashMap<i64, egui::TextureHandle>,
     is_visible: bool,
-    hide_on_copy: bool,
     focus_search_input: bool,
     last_toggle_instant: Option<Instant>,
+    settings: AppSettings,
+    show_settings: bool,
 }
 
 impl ClipboardApp {
@@ -53,8 +55,11 @@ impl ClipboardApp {
         notify_rx: Receiver<()>,
         hotkey_rx: Receiver<()>,
         hotkey_service: Option<HotkeyService>,
+        settings: AppSettings,
     ) -> Self {
-        let initial_items = db.get_recent(100, None).unwrap_or_default();
+        let initial_items = db
+            .get_recent(settings.max_history, None)
+            .unwrap_or_default();
         let clipboard_writer = Clipboard::new().ok();
 
         Self {
@@ -67,12 +72,13 @@ impl ClipboardApp {
             last_query_cached: String::new(),
             notify_rx,
             hotkey_rx,
-            _hotkey_service: hotkey_service,
+            hotkey_service,
             texture_cache: HashMap::new(),
             is_visible: true,
-            hide_on_copy: true,
             focus_search_input: true,
             last_toggle_instant: None,
+            settings,
+            show_settings: false,
         }
     }
 
@@ -82,7 +88,10 @@ impl ClipboardApp {
         } else {
             Some(self.search_query.as_str())
         };
-        self.items = self.db.get_recent(100, filter).unwrap_or_default();
+        self.items = self
+            .db
+            .get_recent(self.settings.max_history, filter)
+            .unwrap_or_default();
     }
 
     fn show_toast(&mut self, message: &str) {
@@ -95,7 +104,7 @@ impl ClipboardApp {
                 eprintln!("Failed to write text to clipboard: {e}");
             } else {
                 self.show_toast("✓ Copied text to clipboard!");
-                if self.hide_on_copy {
+                if self.settings.hide_on_copy {
                     self.is_visible = false;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 }
@@ -116,7 +125,7 @@ impl ClipboardApp {
                         eprintln!("Failed to write image to clipboard: {e}");
                     } else {
                         self.show_toast("✓ Copied image to clipboard!");
-                        if self.hide_on_copy {
+                        if self.settings.hide_on_copy {
                             self.is_visible = false;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                         }
@@ -162,8 +171,12 @@ impl ClipboardApp {
 
     fn handle_escape_key(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.is_visible = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if self.show_settings {
+                self.show_settings = false;
+            } else {
+                self.is_visible = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
         }
     }
 
@@ -184,14 +197,12 @@ impl ClipboardApp {
             ui.add_space(6.0);
             self.render_header_row(ui, ctx);
             ui.add_space(4.0);
-            self.render_search_bar(ui);
-            ui.add_space(4.0);
-            self.render_filter_tabs(ui);
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.hide_on_copy, "Close window after copy");
-            });
-            ui.add_space(4.0);
+            if !self.show_settings {
+                self.render_search_bar(ui);
+                ui.add_space(4.0);
+                self.render_filter_tabs(ui);
+                ui.add_space(4.0);
+            }
         });
     }
 
@@ -261,16 +272,8 @@ impl ClipboardApp {
         ui.horizontal(|ui| {
             ui.heading("🔒 Clipboard");
 
-            #[cfg(target_os = "macos")]
-            let shortcut_hint = "⌘ ù / ⌘⇧V";
-            #[cfg(not(target_os = "macos"))]
-            let shortcut_hint = "Ctrl+ù / Ctrl+Shift+V";
-
-            ui.label(
-                egui::RichText::new(format!("({shortcut_hint})"))
-                    .weak()
-                    .size(11.0),
-            );
+            let badge = self.settings.hotkey.badge();
+            ui.label(egui::RichText::new(format!("({badge})")).weak().size(11.0));
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Hide (Esc)").clicked() {
@@ -278,10 +281,20 @@ impl ClipboardApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 }
 
-                if ui
-                    .small_button("🗑 Clear")
-                    .on_hover_text("Permanently deletes all history")
-                    .clicked()
+                let settings_btn = if self.show_settings {
+                    ui.small_button("📋 History")
+                } else {
+                    ui.small_button("⚙ Settings")
+                };
+                if settings_btn.clicked() {
+                    self.show_settings = !self.show_settings;
+                }
+
+                if !self.show_settings
+                    && ui
+                        .small_button("🗑 Clear")
+                        .on_hover_text("Permanently deletes all history")
+                        .clicked()
                 {
                     let _ = self.db.clear();
                     self.texture_cache.clear();
@@ -444,6 +457,117 @@ impl ClipboardApp {
                     ItemAction::None => {}
                 }
             });
+    }
+
+    fn render_settings_panel(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.heading("⚙ Preferences");
+                ui.add_space(8.0);
+
+                // --- Section: Hotkey ---
+                ui.group(|ui| {
+                    ui.label(egui::RichText::new("⌨ Global Shortcut").strong());
+                    ui.label(
+                        egui::RichText::new(
+                            "Select the keyboard shortcut used to summon the clipboard manager from anywhere.",
+                        )
+                        .weak()
+                        .size(11.0),
+                    );
+                    ui.add_space(6.0);
+
+                    let current_preset = self.settings.hotkey;
+                    for &preset in HotkeyPreset::all_presets() {
+                        let is_selected = current_preset == preset;
+                        let mut selected = is_selected;
+                        if ui.radio_value(&mut selected, true, preset.display_name()).clicked()
+                            && !is_selected
+                        {
+                            self.settings.hotkey = preset;
+                            if let Err(e) = self.settings.save(&self.db) {
+                                eprintln!("Failed to save settings: {e}");
+                            }
+                            if let Some(service) = &mut self.hotkey_service {
+                                service.update_hotkeys(&preset.to_hotkeys());
+                            }
+                            self.show_toast(&format!("✓ Shortcut set to {}", preset.badge()));
+                        }
+                    }
+                });
+
+                ui.add_space(10.0);
+
+                // --- Section: Behavior ---
+                ui.group(|ui| {
+                    ui.label(egui::RichText::new("📋 General Behavior").strong());
+                    ui.add_space(4.0);
+
+                    let mut hide_on_copy = self.settings.hide_on_copy;
+                    if ui
+                        .checkbox(&mut hide_on_copy, "Close window immediately after copying")
+                        .changed()
+                    {
+                        self.settings.hide_on_copy = hide_on_copy;
+                        let _ = self.settings.save(&self.db);
+                    }
+
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label("History size limit:");
+                        let mut max_hist = self.settings.max_history;
+                        egui::ComboBox::from_id_salt("max_history_combo")
+                            .selected_text(format!("{max_hist} items"))
+                            .show_ui(ui, |ui| {
+                                for limit in [50, 100, 200, 500, 1000] {
+                                    if ui
+                                        .selectable_value(
+                                            &mut max_hist,
+                                            limit,
+                                            format!("{limit} items"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.settings.max_history = limit;
+                                        let _ = self.settings.save(&self.db);
+                                        self.refresh_items();
+                                    }
+                                }
+                            });
+                    });
+                });
+
+                ui.add_space(10.0);
+
+                // --- Section: Security & Storage ---
+                ui.group(|ui| {
+                    ui.label(egui::RichText::new("🛡️ Security & Encryption").strong());
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Your clipboard history is encrypted at rest using SQLCipher (256-bit AES-GCM).\nSettings and history are strictly stored on your local machine.",
+                        )
+                        .weak()
+                        .size(11.0),
+                    );
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("🗑 Clear All History").clicked() {
+                            let _ = self.db.clear();
+                            self.texture_cache.clear();
+                            self.refresh_items();
+                            self.show_toast("✓ All clipboard history wiped.");
+                        }
+                    });
+                });
+
+                ui.add_space(12.0);
+                if ui.button("← Back to History").clicked() {
+                    self.show_settings = false;
+                }
+            });
+        });
     }
 
     fn render_clipboard_item(
@@ -1080,6 +1204,10 @@ impl eframe::App for ClipboardApp {
 
         self.render_top_panel(ctx);
         self.render_bottom_panel(ctx);
-        self.render_central_panel(ctx);
+        if self.show_settings {
+            self.render_settings_panel(ctx);
+        } else {
+            self.render_central_panel(ctx);
+        }
     }
 }

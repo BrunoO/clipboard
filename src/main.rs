@@ -6,11 +6,13 @@ mod db;
 mod hotkey;
 mod media;
 mod monitor;
+mod settings;
 
 use app::ClipboardApp;
 use db::Database;
 use eframe::egui;
 use hotkey::HotkeyService;
+use settings::AppSettings;
 use std::fs;
 use std::path::PathBuf;
 
@@ -33,7 +35,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::open(&db_path, &encryption_key)?;
     println!("🛡️  Database opened & verified with SQLCipher.");
 
-    // 4. Configure window options for eframe
+    // 5. Load persistent application settings
+    let settings = AppSettings::load(&db);
+    println!("⚙️  Loaded settings: hotkey preset {:?}", settings.hotkey);
+
+    // 6. Configure window options for eframe
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([440.0, 580.0])
@@ -42,11 +48,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
-    // 5. Setup inter-thread channels
+    // 7. Setup inter-thread channels
     let (notify_tx, notify_rx) = std::sync::mpsc::channel();
     let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
 
-    // 6. Start GUI, global hotkeys, and background monitor
+    // 8. Start GUI, global hotkeys, and background monitor
     eframe::run_native(
         "Encrypted Clipboard",
         native_options,
@@ -54,14 +60,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Apply modern dark visuals
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
-            // Initialize OS global hotkey service
-            let hotkey_service = match HotkeyService::new(hotkey_tx, cc.egui_ctx.clone()) {
-                Ok(service) => Some(service),
-                Err(e) => {
-                    eprintln!("⚠️ Failed to register global hotkey: {e}");
-                    None
-                }
-            };
+            // Initialize OS global hotkey service with user's configured hotkey
+            let initial_hotkeys = settings.hotkey.to_hotkeys();
+            let hotkey_service =
+                match HotkeyService::new(initial_hotkeys, hotkey_tx, cc.egui_ctx.clone()) {
+                    Ok(service) => Some(service),
+                    Err(e) => {
+                        eprintln!("⚠️ Failed to register global hotkey: {e}");
+                        None
+                    }
+                };
 
             // Start background clipboard polling thread
             let monitor_db = db.clone();
@@ -74,6 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 notify_rx,
                 hotkey_rx,
                 hotkey_service,
+                settings,
             )))
         }),
     )?;

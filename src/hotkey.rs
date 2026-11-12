@@ -1,70 +1,82 @@
 use eframe::egui;
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, RwLock};
 use std::thread;
 
 /// Manages system-wide global hotkey registration and event delivery.
 pub(crate) struct HotkeyService {
-    // Keep manager alive so the OS keyboard hook is not dropped
-    _manager: GlobalHotKeyManager,
-    _hotkeys: Vec<HotKey>,
+    manager: GlobalHotKeyManager,
+    hotkeys: Vec<HotKey>,
+    target_ids: Arc<RwLock<Vec<u32>>>,
 }
 
 impl HotkeyService {
     pub(crate) fn new(
+        initial_hotkeys: Vec<HotKey>,
         hotkey_tx: Sender<()>,
         ctx: egui::Context,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let manager = GlobalHotKeyManager::new()?;
+        let mut registered = Vec::new();
+        let mut ids = Vec::new();
 
-        #[cfg(target_os = "macos")]
-        let base_mod = Modifiers::META; // Command (⌘) on macOS
-
-        #[cfg(not(target_os = "macos"))]
-        let base_mod = Modifiers::CONTROL; // Control on Windows / Linux
-
-        // On French AZERTY keyboards, the 'ù' key corresponds physically to Code::Quote.
-        // We register both `Cmd + ù` and `Cmd + Shift + ù` (or Ctrl counterparts) for convenience.
-        let hotkey_base = HotKey::new(Some(base_mod), Code::Quote);
-        let hotkey_shift = HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Quote);
-
-        // Also register the universal clipboard shortcut: Cmd+Shift+V (macOS) / Ctrl+Shift+V (Win/Linux)
-        let hotkey_v = HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyV);
-
-        let target_ids = [hotkey_base.id(), hotkey_shift.id(), hotkey_v.id()];
-
-        let mut registered_hotkeys = Vec::new();
-
-        for hk in [hotkey_base, hotkey_shift, hotkey_v] {
+        for hk in initial_hotkeys {
             if let Err(e) = manager.register(hk) {
                 eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
             } else {
-                registered_hotkeys.push(hk);
+                ids.push(hk.id());
+                registered.push(hk);
             }
         }
 
+        let target_ids = Arc::new(RwLock::new(ids));
+        let thread_ids = Arc::clone(&target_ids);
         let receiver = GlobalHotKeyEvent::receiver();
 
         // Background thread listens for OS hotkey events and wakes up egui
         thread::spawn(move || {
             while let Ok(event) = receiver.recv() {
-                if target_ids.contains(&event.id) && event.state == HotKeyState::Pressed {
+                let matches = {
+                    let Ok(lock) = thread_ids.read() else { break };
+                    lock.contains(&event.id)
+                };
+                if matches && event.state == HotKeyState::Pressed {
                     let _ = hotkey_tx.send(());
                     ctx.request_repaint();
                 }
             }
         });
 
-        #[cfg(target_os = "macos")]
-        println!("⌨️ Registered global shortcuts: Cmd + ù and Cmd + Shift + V");
-
-        #[cfg(not(target_os = "macos"))]
-        println!("⌨️ Registered global shortcuts: Ctrl + ù and Ctrl + Shift + V");
-
         Ok(Self {
-            _manager: manager,
-            _hotkeys: registered_hotkeys,
+            manager,
+            hotkeys: registered,
+            target_ids,
         })
+    }
+
+    /// Dynamically re-registers global hotkeys at runtime.
+    pub(crate) fn update_hotkeys(&mut self, new_hotkeys: &[HotKey]) {
+        for hk in &self.hotkeys {
+            if let Err(e) = self.manager.unregister(*hk) {
+                eprintln!("⚠️ Could not unregister hotkey {hk:?}: {e}");
+            }
+        }
+        self.hotkeys.clear();
+
+        let mut new_ids = Vec::new();
+        for &hk in new_hotkeys {
+            if let Err(e) = self.manager.register(hk) {
+                eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
+            } else {
+                new_ids.push(hk.id());
+                self.hotkeys.push(hk);
+            }
+        }
+
+        if let Ok(mut lock) = self.target_ids.write() {
+            *lock = new_ids;
+        }
     }
 }
