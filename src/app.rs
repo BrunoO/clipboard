@@ -351,7 +351,7 @@ impl ClipboardApp {
             ui.selectable_value(
                 &mut self.content_filter,
                 ContentFilter::Image,
-                format!("🖼️ Images ({img_count})"),
+                format!("📷 Images ({img_count})"),
             );
         });
     }
@@ -659,7 +659,7 @@ impl ClipboardApp {
                 ui.add_space(2.0);
                 ui.label(
                     egui::RichText::new(
-                        "⚠️ macOS note: Direct auto-paste requires Accessibility permissions in System Settings > Privacy & Security > Accessibility.",
+                        "⚠ macOS note: Direct auto-paste requires Accessibility permissions in System Settings > Privacy & Security > Accessibility.",
                     )
                     .size(11.0)
                     .color(egui::Color32::from_rgb(230, 126, 34)),
@@ -690,7 +690,7 @@ impl ClipboardApp {
 
     fn render_security_settings_group(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.label(egui::RichText::new("🛡️ Security & Encryption").strong());
+            ui.label(egui::RichText::new("🔒 Security & Encryption").strong());
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(
@@ -831,7 +831,7 @@ impl ClipboardApp {
             }
             ItemKind::Image => {
                 ui.label(
-                    egui::RichText::new(format!("🖼️ Image • {}", item.created_at))
+                    egui::RichText::new(format!("📷 Image • {}", item.created_at))
                         .size(10.0)
                         .weak(),
                 );

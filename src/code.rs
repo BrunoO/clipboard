@@ -37,15 +37,15 @@ impl CodeLanguage {
     pub(crate) const fn badge(self) -> &'static str {
         match self {
             Self::Rust => "🦀 Rust",
-            Self::Cpp => "⚙️ C++",
+            Self::Cpp => "💻 C++",
             Self::Python => "🐍 Python",
             Self::JavaScript => "⚡ JS",
             Self::TypeScript => "🔷 TS",
             Self::Json => "{ } JSON",
             Self::Html => "🌐 HTML",
-            Self::Sql => "🗄️ SQL",
+            Self::Sql => "💾 SQL",
             Self::Shell => "💻 Bash",
-            Self::Toml => "⚙️ TOML",
+            Self::Toml => "📄 TOML",
             Self::Yaml => "📄 YAML",
         }
     }
