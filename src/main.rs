@@ -75,6 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Apply modern dark visuals
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
+            // Initialize OS activation & reopen observers (macOS Dock click / Cmd+Tab)
+            platform::set_repaint_context(&cc.egui_ctx);
+            platform::setup_reopen_observer();
+
             // Initialize OS global hotkey service with user's configured hotkey
             let initial_hotkeys = settings.hotkey.to_hotkeys();
             let hotkey_service =

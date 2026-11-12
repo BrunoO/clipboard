@@ -37,6 +37,7 @@ enum ItemAction {
     Delete(i64),
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct ClipboardApp {
     db: Database,
     search_query: String,
@@ -51,6 +52,7 @@ pub(crate) struct ClipboardApp {
     texture_cache: HashMap<i64, egui::TextureHandle>,
     is_visible: bool,
     has_been_focused: bool,
+    was_inactive_since_hidden: bool,
     focus_search_input: bool,
     last_toggle_instant: Option<Instant>,
     settings: AppSettings,
@@ -85,6 +87,7 @@ impl ClipboardApp {
             texture_cache: HashMap::new(),
             is_visible: true,
             has_been_focused: false,
+            was_inactive_since_hidden: false,
             focus_search_input: true,
             last_toggle_instant: None,
             settings,
@@ -108,6 +111,30 @@ impl ClipboardApp {
         self.toast = Some((message.to_string(), Instant::now()));
     }
 
+    fn show_window(&mut self, ctx: &egui::Context) {
+        self.is_visible = true;
+        self.has_been_focused = false;
+        self.was_inactive_since_hidden = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        crate::platform::order_front_main_window();
+        self.refresh_items();
+        self.focus_search_input = true;
+        ctx.request_repaint();
+    }
+
+    fn hide_window(&mut self, ctx: &egui::Context, restore_focus: bool, auto_paste: bool) {
+        self.is_visible = false;
+        self.has_been_focused = false;
+        self.was_inactive_since_hidden = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        crate::platform::hide_application();
+        if restore_focus || auto_paste {
+            crate::platform::restore_focus_and_paste(restore_focus, auto_paste);
+        }
+    }
+
     fn copy_text_to_clipboard(&mut self, content: &str, ctx: &egui::Context) {
         if let Some(cb) = &mut self.clipboard_writer {
             if let Err(e) = cb.set_text(content.to_string()) {
@@ -115,13 +142,7 @@ impl ClipboardApp {
             } else {
                 self.show_toast(&format!("{} Copied text to clipboard!", icons::CHECK));
                 if self.settings.hide_on_copy {
-                    self.is_visible = false;
-                    self.has_been_focused = false;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                    crate::platform::restore_focus_and_paste(
-                        self.settings.restore_focus,
-                        self.settings.auto_paste,
-                    );
+                    self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
                 }
             }
         }
@@ -141,10 +162,8 @@ impl ClipboardApp {
                     } else {
                         self.show_toast(&format!("{} Copied image to clipboard!", icons::CHECK));
                         if self.settings.hide_on_copy {
-                            self.is_visible = false;
-                            self.has_been_focused = false;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                            crate::platform::restore_focus_and_paste(
+                            self.hide_window(
+                                ctx,
                                 self.settings.restore_focus,
                                 self.settings.auto_paste,
                             );
@@ -181,23 +200,11 @@ impl ClipboardApp {
 
         if self.is_visible && is_focused {
             // Window is already active and focused right in front of user: dismiss it.
-            self.is_visible = false;
-            self.has_been_focused = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            if self.settings.restore_focus {
-                crate::platform::restore_focus_and_paste(true, false);
-            }
+            self.hide_window(ctx, self.settings.restore_focus, false);
         } else {
             // Window is hidden, minimized, or in the background behind other apps:
             // ALWAYS summon and focus it immediately on the first press!
-            self.is_visible = true;
-            self.has_been_focused = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            self.refresh_items();
-            self.focus_search_input = true;
-            ctx.request_repaint();
+            self.show_window(ctx);
         }
     }
 
@@ -206,12 +213,7 @@ impl ClipboardApp {
             if self.active_view == ActiveView::Settings {
                 self.active_view = ActiveView::History;
             } else {
-                self.is_visible = false;
-                self.has_been_focused = false;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                if self.settings.restore_focus {
-                    crate::platform::restore_focus_and_paste(true, false);
-                }
+                self.hide_window(ctx, self.settings.restore_focus, false);
             }
         }
     }
@@ -249,23 +251,35 @@ impl ClipboardApp {
         }
     }
 
-    fn handle_focus_loss(&mut self, ctx: &egui::Context) {
+    fn handle_app_activation(&mut self, ctx: &egui::Context) {
         let is_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
-        if is_focused {
-            self.has_been_focused = true;
-        } else if self.has_been_focused && self.settings.hide_on_blur && self.is_visible {
-            self.is_visible = false;
-            self.has_been_focused = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        let is_active = crate::platform::is_app_active();
+        let reopen_requested = crate::platform::take_reopen_requested();
+
+        if self.is_visible {
+            if is_focused {
+                self.has_been_focused = true;
+            } else if self.has_been_focused && self.settings.hide_on_blur {
+                self.hide_window(ctx, false, false);
+            }
+        } else {
+            if !is_active && !is_focused {
+                self.was_inactive_since_hidden = true;
+            }
+
+            // Reveal window if OS reopen was requested (Dock icon click),
+            // or if the app was activated after being hidden (Cmd+Tab),
+            // or if viewport focus was gained.
+            if reopen_requested || (is_active && self.was_inactive_since_hidden) || is_focused {
+                self.show_window(ctx);
+            }
         }
     }
 
     fn handle_window_close_request(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.is_visible = false;
-            self.has_been_focused = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.hide_window(ctx, false, false);
         }
     }
 
@@ -369,12 +383,7 @@ impl ClipboardApp {
                     .small_button(format!("{} Hide (Esc)", icons::X))
                     .clicked()
                 {
-                    self.is_visible = false;
-                    self.has_been_focused = false;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                    if self.settings.restore_focus {
-                        crate::platform::restore_focus_and_paste(true, false);
-                    }
+                    self.hide_window(ctx, self.settings.restore_focus, false);
                 }
 
                 let settings_btn = match self.active_view {
@@ -1395,7 +1404,7 @@ impl eframe::App for ClipboardApp {
         self.handle_hotkey_toggle(ctx);
         self.handle_escape_key(ctx);
         self.handle_enter_key(ctx);
-        self.handle_focus_loss(ctx);
+        self.handle_app_activation(ctx);
         self.handle_monitor_updates();
 
         if !self.is_visible {

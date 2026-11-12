@@ -10,10 +10,86 @@
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 #[cfg(target_os = "macos")]
 static PREVIOUS_APP_PID: AtomicI32 = AtomicI32::new(0);
+
+#[cfg(target_os = "macos")]
+static REPAINT_CTX: std::sync::Mutex<Option<eframe::egui::Context>> = std::sync::Mutex::new(None);
+
+/// Stores a clone of the `egui::Context` to immediately trigger repaints on OS activation.
+#[allow(dead_code, clippy::missing_const_for_fn)]
+pub(crate) fn set_repaint_context(ctx: &eframe::egui::Context) {
+    #[cfg(target_os = "macos")]
+    if let Ok(mut lock) = REPAINT_CTX.lock() {
+        *lock = Some(ctx.clone());
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = ctx;
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn request_repaint() {
+    if let Ok(lock) = REPAINT_CTX.lock() {
+        if let Some(ctx) = lock.as_ref() {
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// Returns true if the application currently has OS focus/activation.
+#[allow(clippy::missing_const_for_fn)]
+#[must_use]
+pub(crate) fn is_app_active() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::is_active()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::is_active()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
+
+/// Hides the entire application at the OS level (macOS `[NSApp hide:]`).
+#[allow(clippy::missing_const_for_fn)]
+pub(crate) fn hide_application() {
+    #[cfg(target_os = "macos")]
+    macos::hide_app();
+}
+
+/// Unhides and orders the main window front at the OS level.
+#[allow(clippy::missing_const_for_fn)]
+pub(crate) fn order_front_main_window() {
+    #[cfg(target_os = "macos")]
+    macos::order_front_main_window();
+}
+
+/// Checks and clears any pending reopen requests triggered by OS events (e.g. Dock icon click).
+#[allow(clippy::missing_const_for_fn)]
+#[must_use]
+pub(crate) fn take_reopen_requested() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::take_reopen_requested()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Registers OS-level activation and reopen observers (e.g. macOS Dock click / Cmd+Tab notifications).
+#[allow(clippy::missing_const_for_fn)]
+pub(crate) fn setup_reopen_observer() {
+    #[cfg(target_os = "macos")]
+    macos::setup_reopen_observer();
+}
 
 /// Captures the current frontmost application/window before `CipherClipboard` gains focus.
 #[allow(clippy::missing_const_for_fn)]
@@ -93,9 +169,129 @@ pub(crate) fn open_accessibility_settings() {
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::{AtomicI32, Ordering, PREVIOUS_APP_PID};
-    use objc::runtime::Object;
+    use super::{AtomicBool, AtomicI32, Ordering, PREVIOUS_APP_PID};
+    use objc::declare::ClassDecl;
+    use objc::runtime::{Object, Sel};
     use objc::{class, msg_send, sel, sel_impl};
+
+    static REOPEN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn take_reopen_requested() -> bool {
+        REOPEN_REQUESTED.swap(false, Ordering::SeqCst)
+    }
+
+    pub(super) fn is_active() -> bool {
+        unsafe {
+            let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+            if ns_app.is_null() {
+                return false;
+            }
+            let active: bool = msg_send![ns_app, isActive];
+            let hidden: bool = msg_send![ns_app, isHidden];
+            active && !hidden
+        }
+    }
+
+    pub(super) fn hide_app() {
+        unsafe {
+            let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+            if !ns_app.is_null() {
+                let nil_obj: *mut Object = std::ptr::null_mut();
+                let _: () = msg_send![ns_app, hide: nil_obj];
+            }
+        }
+    }
+
+    pub(super) fn order_front_main_window() {
+        unsafe {
+            let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+            if ns_app.is_null() {
+                return;
+            }
+            let nil_obj: *mut Object = std::ptr::null_mut();
+            let _: () = msg_send![ns_app, unhide: nil_obj];
+            let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+
+            let windows: *mut Object = msg_send![ns_app, windows];
+            if !windows.is_null() {
+                let count: usize = msg_send![windows, count];
+                for i in 0..count {
+                    let window: *mut Object = msg_send![windows, objectAtIndex: i];
+                    if !window.is_null() {
+                        let _: () = msg_send![window, setIsVisible: true];
+                        let _: () = msg_send![window, makeKeyAndOrderFront: nil_obj];
+                        let _: () = msg_send![window, orderFrontRegardless];
+                    }
+                }
+            }
+        }
+    }
+
+    extern "C" fn on_app_reopen(_this: &Object, _cmd: Sel, _notification: *mut Object) {
+        REOPEN_REQUESTED.store(true, Ordering::SeqCst);
+        order_front_main_window();
+        super::request_repaint();
+    }
+
+    pub(super) fn setup_reopen_observer() {
+        unsafe {
+            let superclass = class!(NSObject);
+            if superclass.is_null() {
+                return;
+            }
+
+            if let Some(mut decl) = ClassDecl::new("CipherReopenObserver", superclass) {
+                decl.add_method(
+                    sel!(onNotification:),
+                    on_app_reopen as extern "C" fn(&Object, Sel, *mut Object),
+                );
+                decl.register();
+            }
+
+            let observer_cls = class!(CipherReopenObserver);
+            if observer_cls.is_null() {
+                return;
+            }
+
+            let observer: *mut Object = msg_send![observer_cls, new];
+            let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
+            if center.is_null() || observer.is_null() {
+                return;
+            }
+
+            let nil_obj: *mut Object = std::ptr::null_mut();
+
+            // Observe NSApplicationDidBecomeActiveNotification (fires on Dock click, Cmd+Tab, app activate)
+            let active_name: *mut Object = msg_send![
+                class!(NSString),
+                stringWithUTF8String: b"NSApplicationDidBecomeActiveNotification\0".as_ptr()
+            ];
+            if !active_name.is_null() {
+                let _: () = msg_send![
+                    center,
+                    addObserver: observer
+                    selector: sel!(onNotification:)
+                    name: active_name
+                    object: nil_obj
+                ];
+            }
+
+            // Observe NSApplicationDidUnhideNotification (fires when macOS unhides on Dock click / Cmd+Tab)
+            let unhide_name: *mut Object = msg_send![
+                class!(NSString),
+                stringWithUTF8String: b"NSApplicationDidUnhideNotification\0".as_ptr()
+            ];
+            if !unhide_name.is_null() {
+                let _: () = msg_send![
+                    center,
+                    addObserver: observer
+                    selector: sel!(onNotification:)
+                    name: unhide_name
+                    object: nil_obj
+                ];
+            }
+        }
+    }
 
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
@@ -249,6 +445,18 @@ mod windows {
         fn GetWindowThreadProcessId(hwnd: HWND, lpdwProcessId: *mut u32) -> u32;
     }
 
+    pub(super) fn is_active() -> bool {
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.is_null() {
+                return false;
+            }
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            pid == GetCurrentProcessId()
+        }
+    }
+
     pub(super) fn capture_frontmost() {
         unsafe {
             let hwnd = GetForegroundWindow();
@@ -364,5 +572,10 @@ mod tests {
         capture_active_window();
         restore_focus_and_paste(false, false);
         assert!(is_accessibility_trusted() || !is_accessibility_trusted());
+        let _ = is_app_active();
+        let _ = take_reopen_requested();
+        hide_application();
+        order_front_main_window();
+        setup_reopen_observer();
     }
 }
