@@ -659,7 +659,7 @@ impl ClipboardApp {
                 ui.add_space(2.0);
                 ui.label(
                     egui::RichText::new(
-                        "⚠️ macOS note: Direct auto-paste requires Accessibility permissions in System Settings → Privacy & Security → Accessibility.",
+                        "⚠️ macOS note: Direct auto-paste requires Accessibility permissions in System Settings > Privacy & Security > Accessibility.",
                     )
                     .size(11.0)
                     .color(egui::Color32::from_rgb(230, 126, 34)),
