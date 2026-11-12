@@ -9,13 +9,16 @@ targets = [
 ]
 
 [advisories]
-version = 2
-vulnerability = "deny"
-unmaintained = "warn"
-notice = "warn"
+unmaintained = "workspace"
+ignore = [
+    # quick-xml < 0.41.0 transitive dependency via eframe -> accesskit_winit -> atspi -> zbus_xml
+    { id = "RUSTSEC-2026-0194", reason = "Transitive dependency through eframe/accesskit" },
+    { id = "RUSTSEC-2026-0195", reason = "Transitive dependency through eframe/accesskit" },
+    # sqlcipher-src pinned by libsqlite3-sys =0.39.1 via rusqlite bundled-sqlcipher
+    { id = "RUSTSEC-2026-0502", reason = "Transitive dependency through rusqlite bundled-sqlcipher" },
+]
 
 [licenses]
-version = 2
 confidence-threshold = 0.8
 allow = [
     "MIT",
@@ -25,10 +28,7 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
-    "OpenSSL",
     "Zlib",
-    "CC0-1.0",
     "MPL-2.0",
     "Unlicense",
     "BSL-1.0",
@@ -36,19 +36,18 @@ allow = [
     "OFL-1.1",
     "blessing",
     "WTFPL",
+    "LicenseRef-UFL-1.0",
 ]
 
 [licenses.private]
 ignore = true
 
 [bans]
-version = 2
 multiple-versions = "warn"
 wildcards = "allow"
 highlight = "all"
 
 [sources]
-version = 2
-unknown-registries = "deny"
+unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]

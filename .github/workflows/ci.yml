@@ -59,6 +59,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           choco install openssl -y --no-progress
+          Get-ChildItem -Path "C:\Program Files\OpenSSL\lib" -Filter "*.lib" -Recurse | Copy-Item -Destination "C:\Program Files\OpenSSL\lib" -Force
           echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
 
       - name: Set up Rust toolchain

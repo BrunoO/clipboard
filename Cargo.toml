@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "A simple, encrypted cross-platform clipboard manager in Rust"
 authors = ["Your Name"]
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 eframe = "0.29"
