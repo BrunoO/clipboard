@@ -41,9 +41,9 @@ pub(crate) fn restore_focus_and_paste(restore_focus: bool, auto_paste: bool) {
         }
 
         if auto_paste {
-            // Give the OS window server a brief moment (45ms) to switch key focus
+            // Give the OS window server 100ms to switch key focus
             // to the target application before dispatching keystrokes.
-            std::thread::sleep(Duration::from_millis(45));
+            std::thread::sleep(Duration::from_millis(100));
 
             #[cfg(target_os = "macos")]
             macos::simulate_paste();
@@ -68,6 +68,26 @@ pub(crate) fn is_accessibility_trusted() -> bool {
     }
 }
 
+/// Prompts the user for macOS Accessibility permissions using the native system dialog.
+#[allow(dead_code, clippy::missing_const_for_fn)]
+pub(crate) fn prompt_accessibility_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::prompt_permission()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+/// Opens macOS System Settings directly to Privacy & Security > Accessibility.
+#[allow(dead_code, clippy::missing_const_for_fn)]
+pub(crate) fn open_accessibility_settings() {
+    #[cfg(target_os = "macos")]
+    macos::open_accessibility_settings();
+}
+
 // ---------------------------------------------------------------------------
 // macOS Implementation
 // ---------------------------------------------------------------------------
@@ -80,10 +100,12 @@ mod macos {
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXIsProcessTrusted() -> bool;
+        fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
     }
 
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
+        fn CGEventSourceCreate(state_id: i32) -> *mut std::ffi::c_void;
         fn CGEventCreateKeyboardEvent(
             source: *mut std::ffi::c_void,
             virtual_key: u16,
@@ -100,6 +122,24 @@ mod macos {
 
     pub(super) fn is_trusted() -> bool {
         unsafe { AXIsProcessTrusted() }
+    }
+
+    pub(super) fn prompt_permission() -> bool {
+        unsafe {
+            let key = b"AXTrustedCheckOptionPrompt\0";
+            let str_obj: *mut Object =
+                msg_send![class!(NSString), stringWithUTF8String: key.as_ptr()];
+            let num_obj: *mut Object = msg_send![class!(NSNumber), numberWithBool: true];
+            let dict: *mut Object =
+                msg_send![class!(NSDictionary), dictionaryWithObject: num_obj forKey: str_obj];
+            AXIsProcessTrustedWithOptions(dict as *const std::ffi::c_void)
+        }
+    }
+
+    pub(super) fn open_accessibility_settings() {
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
     }
 
     pub(super) fn capture_frontmost() {
@@ -154,33 +194,39 @@ mod macos {
         const KEY_V: u16 = 9;
         // kCGEventFlagMaskCommand = 0x0010_0000
         const MASK_COMMAND: u64 = 0x0010_0000;
-        // kCGHIDEventTap = 0
+        // kCGHIDEventTap = 0, kCGSessionEventTap = 1
         const TAP_LOCATION_HID: u32 = 0;
+        const TAP_LOCATION_SESSION: u32 = 1;
+        // kCGEventSourceStateCombinedSessionState = 0
+        const SOURCE_STATE_COMBINED_SESSION: i32 = 0;
 
-        let trusted = is_trusted();
+        unsafe {
+            let source = CGEventSourceCreate(SOURCE_STATE_COMBINED_SESSION);
 
-        if trusted {
-            unsafe {
-                let event_down = CGEventCreateKeyboardEvent(std::ptr::null_mut(), KEY_V, true);
-                if !event_down.is_null() {
-                    CGEventSetFlags(event_down, MASK_COMMAND);
-                    CGEventPost(TAP_LOCATION_HID, event_down);
-                    CFRelease(event_down);
-                }
-
-                let event_up = CGEventCreateKeyboardEvent(std::ptr::null_mut(), KEY_V, false);
-                if !event_up.is_null() {
-                    CGEventSetFlags(event_up, MASK_COMMAND);
-                    CGEventPost(TAP_LOCATION_HID, event_up);
-                    CFRelease(event_up);
-                }
+            // Press Command+V
+            let event_down = CGEventCreateKeyboardEvent(source, KEY_V, true);
+            if !event_down.is_null() {
+                CGEventSetFlags(event_down, MASK_COMMAND);
+                CGEventPost(TAP_LOCATION_HID, event_down);
+                CGEventPost(TAP_LOCATION_SESSION, event_down);
+                CFRelease(event_down);
             }
-        } else {
-            // Fallback via AppleScript if Accessibility is not yet granted
-            let _ = std::process::Command::new("osascript")
-                .arg("-e")
-                .arg("tell application \"System Events\" to keystroke \"v\" using command down")
-                .spawn();
+
+            // Brief delay between key down and key up to ensure runloop registration
+            std::thread::sleep(std::time::Duration::from_millis(15));
+
+            // Release Command+V
+            let event_up = CGEventCreateKeyboardEvent(source, KEY_V, false);
+            if !event_up.is_null() {
+                CGEventSetFlags(event_up, MASK_COMMAND);
+                CGEventPost(TAP_LOCATION_HID, event_up);
+                CGEventPost(TAP_LOCATION_SESSION, event_up);
+                CFRelease(event_up);
+            }
+
+            if !source.is_null() {
+                CFRelease(source);
+            }
         }
     }
 }

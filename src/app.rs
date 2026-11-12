@@ -683,16 +683,33 @@ impl ClipboardApp {
             }
 
             #[cfg(target_os = "macos")]
-            if auto_paste && !crate::platform::is_accessibility_trusted() {
+            if auto_paste {
                 ui.add_space(2.0);
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} macOS note: Direct auto-paste requires Accessibility permissions in System Settings > Privacy & Security > Accessibility.",
-                        icons::WARNING
-                    ))
-                    .size(11.0)
-                    .color(egui::Color32::from_rgb(230, 126, 34)),
-                );
+                if !crate::platform::is_accessibility_trusted() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} macOS note: Direct auto-paste requires Accessibility permissions in System Settings > Privacy & Security > Accessibility.\nNote: When running via terminal, grant permission to your terminal app as well.",
+                            icons::WARNING
+                        ))
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(230, 126, 34)),
+                    );
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button(format!("{} Prompt Permission", icons::SHIELD_CHECK))
+                            .clicked()
+                        {
+                            crate::platform::prompt_accessibility_permission();
+                        }
+                        if ui
+                            .small_button(format!("{} Open System Settings", icons::ARROW_SQUARE_OUT))
+                            .clicked()
+                        {
+                            crate::platform::open_accessibility_settings();
+                        }
+                    });
+                }
             }
 
             ui.add_space(6.0);
