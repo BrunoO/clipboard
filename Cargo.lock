@@ -3103,6 +3103,8 @@ dependencies = [
  "rand 0.10.3",
  "rusqlite",
  "tempfile",
+ "url",
+ "webbrowser",
 ]
 
 [[package]]

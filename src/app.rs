@@ -7,16 +7,27 @@ use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ContentFilter {
+    #[default]
+    All,
+    Text,
+    Links,
+    Image,
+}
+
 enum ItemAction {
     None,
     CopyText(String),
     CopyImage(Vec<u8>),
+    OpenBrowser(String),
     Delete(i64),
 }
 
 pub(crate) struct ClipboardApp {
     db: Database,
     search_query: String,
+    content_filter: ContentFilter,
     items: Vec<ClipboardItem>,
     clipboard_writer: Option<Clipboard>,
     toast: Option<(String, Instant)>,
@@ -44,6 +55,7 @@ impl ClipboardApp {
         Self {
             db,
             search_query: String::new(),
+            content_filter: ContentFilter::All,
             items: initial_items,
             clipboard_writer,
             toast: None,
@@ -158,10 +170,55 @@ impl ClipboardApp {
             self.render_header_row(ui, ctx);
             ui.add_space(4.0);
             self.render_search_bar(ui);
+            ui.add_space(4.0);
+            self.render_filter_tabs(ui);
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.hide_on_copy, "Close window after copy");
             });
             ui.add_space(4.0);
+        });
+    }
+
+    fn render_filter_tabs(&mut self, ui: &mut egui::Ui) {
+        let all_count = self.items.len();
+        let text_count = self
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Text)
+            .count();
+        let link_count = self
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Url)
+            .count();
+        let img_count = self
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Image)
+            .count();
+
+        ui.horizontal(|ui| {
+            ui.selectable_value(
+                &mut self.content_filter,
+                ContentFilter::All,
+                format!("All ({all_count})"),
+            );
+            ui.selectable_value(
+                &mut self.content_filter,
+                ContentFilter::Text,
+                format!("📝 Text ({text_count})"),
+            );
+            ui.selectable_value(
+                &mut self.content_filter,
+                ContentFilter::Links,
+                format!("🌐 Links ({link_count})"),
+            );
+            ui.selectable_value(
+                &mut self.content_filter,
+                ContentFilter::Image,
+                format!("🖼️ Images ({img_count})"),
+            );
         });
     }
 
@@ -248,35 +305,70 @@ impl ClipboardApp {
     }
 
     fn render_central_panel(&mut self, ctx: &egui::Context) {
+        let filter = self.content_filter;
+        let filtered_indices: Vec<usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                let matches = match filter {
+                    ContentFilter::All => true,
+                    ContentFilter::Text => item.kind == ItemKind::Text,
+                    ContentFilter::Links => item.kind == ItemKind::Url,
+                    ContentFilter::Image => item.kind == ItemKind::Image,
+                };
+                if matches {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.items.is_empty() {
+            if filtered_indices.is_empty() {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
-                    ui.label(egui::RichText::new("No clipboard history found.").weak());
+                    let empty_hint = match filter {
+                        ContentFilter::All => "No clipboard history found.",
+                        ContentFilter::Text => "No text entries found.",
+                        ContentFilter::Links => "No links found in clipboard history.",
+                        ContentFilter::Image => "No image entries found.",
+                    };
+                    ui.label(egui::RichText::new(empty_hint).weak());
                     ui.label(
-                        egui::RichText::new("Copy text or screenshots in any app to save here!")
-                            .size(12.0)
-                            .weak(),
+                        egui::RichText::new(
+                            "Copy text, links, or screenshots in any app to save here!",
+                        )
+                        .size(12.0)
+                        .weak(),
                     );
                 });
                 return;
             }
 
-            self.render_items_scroll_area(ui, ctx);
+            self.render_items_scroll_area(ui, &filtered_indices, ctx);
         });
     }
 
-    fn render_items_scroll_area(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn render_items_scroll_area(
+        &mut self,
+        ui: &mut egui::Ui,
+        filtered_indices: &[usize],
+        ctx: &egui::Context,
+    ) {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let mut action = ItemAction::None;
 
-                for item in &self.items {
-                    let item_action =
-                        Self::render_clipboard_item(ui, item, &mut self.texture_cache, ctx);
-                    if !matches!(item_action, ItemAction::None) {
-                        action = item_action;
+                for &idx in filtered_indices {
+                    if let Some(item) = self.items.get(idx) {
+                        let item_action =
+                            Self::render_clipboard_item(ui, item, &mut self.texture_cache, ctx);
+                        if !matches!(item_action, ItemAction::None) {
+                            action = item_action;
+                        }
                     }
                     ui.add_space(4.0);
                 }
@@ -285,6 +377,14 @@ impl ClipboardApp {
                     ItemAction::CopyText(content) => self.copy_text_to_clipboard(&content, ctx),
                     ItemAction::CopyImage(png_bytes) => {
                         self.copy_image_to_clipboard(&png_bytes, ctx);
+                    }
+                    ItemAction::OpenBrowser(url) => {
+                        if let Err(e) = webbrowser::open(&url) {
+                            eprintln!("Failed to open link in browser: {e}");
+                            self.show_toast("Failed to open browser.");
+                        } else {
+                            self.show_toast("✓ Opened in default browser!");
+                        }
                     }
                     ItemAction::Delete(id) => {
                         let _ = self.db.delete(id);
@@ -310,15 +410,36 @@ impl ClipboardApp {
             .inner_margin(8.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let type_badge = match item.kind {
-                        ItemKind::Text => "📝 Text",
-                        ItemKind::Image => "🖼️ Image",
-                    };
-                    ui.label(
-                        egui::RichText::new(format!("{} • {}", type_badge, item.created_at))
-                            .size(10.0)
-                            .weak(),
-                    );
+                    match item.kind {
+                        ItemKind::Text => {
+                            ui.label(
+                                egui::RichText::new(format!("📝 Text • {}", item.created_at))
+                                    .size(10.0)
+                                    .weak(),
+                            );
+                        }
+                        ItemKind::Url => {
+                            let host = item.url_host().unwrap_or_else(|| "link".to_string());
+                            ui.label(
+                                egui::RichText::new("🌐 Link")
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(52, 152, 219))
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("• {host} • {}", item.created_at))
+                                    .size(10.0)
+                                    .weak(),
+                            );
+                        }
+                        ItemKind::Image => {
+                            ui.label(
+                                egui::RichText::new(format!("🖼️ Image • {}", item.created_at))
+                                    .size(10.0)
+                                    .weak(),
+                            );
+                        }
+                    }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("✕").on_hover_text("Delete entry").clicked() {
@@ -330,7 +451,7 @@ impl ClipboardApp {
                             .clicked()
                         {
                             match item.kind {
-                                ItemKind::Text => {
+                                ItemKind::Text | ItemKind::Url => {
                                     action = ItemAction::CopyText(item.content.clone());
                                 }
                                 ItemKind::Image => {
@@ -340,6 +461,14 @@ impl ClipboardApp {
                                 }
                             }
                         }
+                        if item.kind == ItemKind::Url
+                            && ui
+                                .small_button("↗ Open")
+                                .on_hover_text("Open link in default browser")
+                                .clicked()
+                        {
+                            action = ItemAction::OpenBrowser(item.content.trim().to_string());
+                        }
                     });
                 });
 
@@ -347,6 +476,7 @@ impl ClipboardApp {
 
                 let content_action = match item.kind {
                     ItemKind::Text => Self::render_text_content(ui, &item.content),
+                    ItemKind::Url => Self::render_url_content(ui, &item.content),
                     ItemKind::Image => Self::render_image_content(ui, item, texture_cache, ctx),
                 };
 
@@ -356,6 +486,32 @@ impl ClipboardApp {
             });
 
         action
+    }
+
+    fn render_url_content(ui: &mut egui::Ui, content: &str) -> ItemAction {
+        let preview = if content.len() > 180 {
+            format!("{}...", &content[..180])
+        } else {
+            content.to_string()
+        };
+
+        let label = ui.add(
+            egui::Label::new(
+                egui::RichText::new(preview)
+                    .color(egui::Color32::from_rgb(100, 181, 246))
+                    .underline(),
+            )
+            .sense(egui::Sense::click()),
+        );
+
+        if label.clicked() {
+            ItemAction::CopyText(content.to_string())
+        } else {
+            if label.hovered() {
+                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+            }
+            ItemAction::None
+        }
     }
 
     fn render_text_content(ui: &mut egui::Ui, content: &str) -> ItemAction {

@@ -4,10 +4,22 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 /// Represents the type of clipboard content.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ItemKind {
     Text,
     Image,
+    Url,
+}
+
+/// Returns true if the string is a valid HTTP or HTTPS URL with a host.
+pub(crate) fn is_valid_url(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        if let Ok(parsed) = url::Url::parse(trimmed) {
+            return parsed.has_host();
+        }
+    }
+    false
 }
 
 /// Represents a single clipboard record in history.
@@ -20,6 +32,30 @@ pub(crate) struct ClipboardItem {
     pub(crate) width: Option<u32>,
     pub(crate) height: Option<u32>,
     pub(crate) created_at: String,
+}
+
+impl ClipboardItem {
+    /// Attempts to parse the item content as an HTTP/HTTPS URL.
+    pub(crate) fn parsed_url(&self) -> Option<url::Url> {
+        if self.kind == ItemKind::Image {
+            return None;
+        }
+        let trimmed = self.content.trim();
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            if let Ok(u) = url::Url::parse(trimmed) {
+                if u.has_host() {
+                    return Some(u);
+                }
+            }
+        }
+        None
+    }
+
+    /// Extracts the host domain name (e.g. "github.com") if this item is a valid URL.
+    pub(crate) fn url_host(&self) -> Option<String> {
+        self.parsed_url()
+            .and_then(|u| u.host_str().map(str::to_lowercase))
+    }
 }
 
 /// Thread-safe handle to the encrypted `SQLCipher` database.
@@ -98,15 +134,18 @@ impl Database {
         if let Some(row) = rows.next()? {
             let last_kind: String = row.get(0)?;
             let last_content: String = row.get(1)?;
-            if last_kind == "text" && last_content == content {
+            if (last_kind == "text" || last_kind == "url") && last_content == content {
                 return Ok(None); // Duplicate, ignore
             }
         }
 
+        let is_url = is_valid_url(content);
+        let kind_str = if is_url { "url" } else { "text" };
+
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         conn.execute(
-            "INSERT INTO clipboard_history (kind, content, created_at) VALUES ('text', ?1, ?2)",
-            params![content, now],
+            "INSERT INTO clipboard_history (kind, content, created_at) VALUES (?1, ?2, ?3)",
+            params![kind_str, content, now],
         )?;
 
         Ok(Some(conn.last_insert_rowid()))
@@ -160,15 +199,22 @@ impl Database {
 
         let row_to_item = |row: &rusqlite::Row| -> Result<ClipboardItem, rusqlite::Error> {
             let kind_str: String = row.get(1).unwrap_or_else(|_| "text".to_string());
-            let kind = if kind_str == "image" {
-                ItemKind::Image
-            } else {
-                ItemKind::Text
+            let content: String = row.get(2)?;
+            let kind = match kind_str.as_str() {
+                "image" => ItemKind::Image,
+                "url" => ItemKind::Url,
+                _ => {
+                    if is_valid_url(&content) {
+                        ItemKind::Url
+                    } else {
+                        ItemKind::Text
+                    }
+                }
             };
             Ok(ClipboardItem {
                 id: row.get(0)?,
                 kind,
-                content: row.get(2)?,
+                content,
                 image_data: row.get(3)?,
                 width: row.get(4)?,
                 height: row.get(5)?,
@@ -339,5 +385,38 @@ mod tests {
         let wrong_key = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
         let result = Database::open(&db_path, wrong_key);
         assert!(result.is_err(), "Opening with wrong key must fail");
+    }
+
+    #[test]
+    fn test_is_valid_url() {
+        assert!(is_valid_url("https://github.com/rust-lang/rust"));
+        assert!(is_valid_url("http://localhost:8080/dashboard"));
+        assert!(is_valid_url("  https://docs.rs/eframe/latest  \n"));
+        assert!(!is_valid_url("not a url"));
+        assert!(!is_valid_url("ftp://files.example.com"));
+        assert!(!is_valid_url("https://"));
+        assert!(!is_valid_url("Hello https://github.com world"));
+    }
+
+    #[test]
+    fn test_insert_url_and_domain_extraction() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("url_test.db");
+        let db = Database::open(&db_path, TEST_KEY).unwrap();
+
+        let id = db
+            .insert("https://github.com/BrunoO/clipboard")
+            .unwrap()
+            .unwrap();
+        assert_eq!(id, 1);
+
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, ItemKind::Url);
+        assert_eq!(items[0].url_host().as_deref(), Some("github.com"));
+
+        // Deduplication for URLs
+        let dup = db.insert("https://github.com/BrunoO/clipboard").unwrap();
+        assert_eq!(dup, None);
     }
 }
