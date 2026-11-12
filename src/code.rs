@@ -95,15 +95,7 @@ pub(crate) fn detect_code_language(text: &str) -> Option<CodeLanguage> {
     }
 
     // 3. Shell scripts / command lines
-    if trimmed.starts_with("#!/bin/")
-        || trimmed.starts_with("#!/usr/bin/env")
-        || trimmed.starts_with("curl ")
-        || trimmed.starts_with("cargo ")
-        || trimmed.starts_with("git ")
-        || trimmed.starts_with("docker ")
-        || trimmed.starts_with("npm ")
-        || trimmed.starts_with("sudo ")
-    {
+    if is_shell_command(trimmed) {
         return Some(CodeLanguage::Shell);
     }
 
@@ -240,6 +232,147 @@ pub(crate) fn detect_code_language(text: &str) -> Option<CodeLanguage> {
     None
 }
 
+const KNOWN_SHELL_COMMANDS: &[&str] = &[
+    // Version control & GitHub CLI
+    "git",
+    "gh",
+    "glab",
+    "svn",
+    "hg",
+    // Package managers & language toolchains
+    "cargo",
+    "rustc",
+    "rustup",
+    "npm",
+    "npx",
+    "yarn",
+    "pnpm",
+    "bun",
+    "deno",
+    "node",
+    "pip",
+    "pip3",
+    "python",
+    "python3",
+    "ruby",
+    "gem",
+    "bundle",
+    "go",
+    "composer",
+    "php",
+    "mvn",
+    "gradle",
+    // Containers, orchestration & cloud
+    "docker",
+    "docker-compose",
+    "podman",
+    "kubectl",
+    "helm",
+    "aws",
+    "az",
+    "gcloud",
+    "terraform",
+    // System & package management
+    "sudo",
+    "brew",
+    "apt",
+    "apt-get",
+    "dnf",
+    "yum",
+    "pacman",
+    "apk",
+    "systemctl",
+    "journalctl",
+    // Network & transfer
+    "curl",
+    "wget",
+    "http",
+    "ssh",
+    "scp",
+    "rsync",
+    // Scripting & common utilities
+    "export",
+    "source",
+    "chmod",
+    "chown",
+    "grep",
+    "awk",
+    "sed",
+    "cat",
+    "find",
+    "make",
+    "cmake",
+    "echo",
+    "kill",
+    "pkill",
+];
+
+/// Returns true if the text matches common shell commands, shebangs, pipelines, or CLI invocations.
+fn is_shell_command(text: &str) -> bool {
+    let mut s = text.trim();
+
+    // 1. Shebang
+    if s.starts_with("#!/bin/") || s.starts_with("#!/usr/bin/env") {
+        return true;
+    }
+
+    // 2. Strip terminal prompt prefixes: '$ ', '% ', '> '
+    if let Some(stripped) = s
+        .strip_prefix("$ ")
+        .or_else(|| s.strip_prefix("% "))
+        .or_else(|| s.strip_prefix("> "))
+    {
+        s = stripped.trim();
+    }
+
+    // 3. Strip outer enclosing quotes or backticks (e.g. "cmd" or 'cmd' or `cmd`)
+    if (s.starts_with('"') && s.ends_with('"') && s.len() >= 2)
+        || (s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2)
+        || (s.starts_with('`') && s.ends_with('`') && s.len() >= 2)
+    {
+        s = s[1..s.len() - 1].trim();
+    }
+
+    // Strip sudo prefix if present
+    let base_cmd = s.strip_prefix("sudo ").unwrap_or(s).trim();
+
+    let first_word = base_cmd.split_whitespace().next().unwrap_or("");
+    if KNOWN_SHELL_COMMANDS.contains(&first_word)
+        && (base_cmd.contains(' ') || base_cmd.contains('-') || base_cmd.contains('/'))
+    {
+        return true;
+    }
+
+    // Shell pipelines and compound chains (e.g. "cmd1 | cmd2", "cmd1 && cmd2")
+    if (s.contains(" | ")
+        || s.contains(" && ")
+        || s.contains(" || ")
+        || s.contains(" 2>&1")
+        || s.contains(" > "))
+        && !s.contains("class ")
+        && !s.contains("fn ")
+        && !s.contains(';')
+    {
+        return true;
+    }
+
+    // Shell variable assignment or expansion with CLI flags (e.g. $VAR with --flag or /path)
+    if (s.contains('$') || s.contains("${"))
+        && (s.contains(" --") || s.contains(" -") || s.contains('/'))
+    {
+        let word = s.split_whitespace().next().unwrap_or("");
+        if !word.is_empty()
+            && word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Formats a valid JSON string with 2-space indentation.
 pub(crate) fn format_json(text: &str) -> Option<String> {
     let val: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
@@ -310,6 +443,29 @@ mod tests {
     fn test_detect_shell() {
         let snippet = "#!/bin/bash\ncargo test --all-targets --verbose";
         assert_eq!(detect_code_language(snippet), Some(CodeLanguage::Shell));
+
+        // GitHub CLI commands with arguments, environment variables and quotes
+        let gh_cmd = r#"gh api "/users/$USER/settings/billing/usage?year=2026&month=11""#;
+        assert_eq!(detect_code_language(gh_cmd), Some(CodeLanguage::Shell));
+
+        let quoted_gh_cmd =
+            r#""gh api \"/users/$USER/settings/billing/usage?year=2026&month=11\"""#;
+        assert_eq!(
+            detect_code_language(quoted_gh_cmd),
+            Some(CodeLanguage::Shell)
+        );
+
+        let prompt_cmd = "$ gh auth status";
+        assert_eq!(detect_code_language(prompt_cmd), Some(CodeLanguage::Shell));
+
+        let brew_cmd = "brew install gh";
+        assert_eq!(detect_code_language(brew_cmd), Some(CodeLanguage::Shell));
+
+        let pipeline_cmd = "cat /var/log/syslog | grep error";
+        assert_eq!(
+            detect_code_language(pipeline_cmd),
+            Some(CodeLanguage::Shell)
+        );
     }
 
     #[test]
