@@ -401,7 +401,7 @@ impl ClipboardApp {
                             eprintln!("Failed to open link in browser: {e}");
                             self.show_toast("Failed to open browser.");
                         } else {
-                            self.show_toast("✓ Opened in default browser!");
+                            self.show_toast("Opened in default browser!");
                         }
                     }
                     ItemAction::Delete(id) => {
@@ -502,7 +502,11 @@ impl ClipboardApp {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("✕").on_hover_text("Delete entry").clicked() {
+                if ui
+                    .small_button(egui::RichText::new("×").size(12.0))
+                    .on_hover_text("Delete entry")
+                    .clicked()
+                {
                     action = ItemAction::Delete(item.id);
                 }
                 if ui
@@ -532,7 +536,7 @@ impl ClipboardApp {
                 if item.code_language() == Some(crate::code::CodeLanguage::Json) {
                     if let Some(pretty) = crate::code::format_json(&item.content) {
                         if ui
-                            .small_button("🪄 Prettify")
+                            .small_button("{ } Prettify")
                             .on_hover_text("Copy formatted JSON with indentation")
                             .clicked()
                         {
