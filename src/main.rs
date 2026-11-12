@@ -83,8 +83,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             theme::setup_fonts(&mut fonts);
             cc.egui_ctx.set_fonts(fonts);
 
-            // Apply platform-adaptive HIG visuals
-            theme::setup_theme(&cc.egui_ctx);
+            // Apply platform-adaptive HIG visuals (Dark or Light)
+            let is_dark = settings.theme.resolve(&cc.egui_ctx);
+            theme::setup_theme(&cc.egui_ctx, is_dark);
 
             // Initialize OS activation & reopen observers (macOS Dock click / Cmd+Tab)
             platform::set_repaint_context(&cc.egui_ctx);

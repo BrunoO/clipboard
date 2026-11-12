@@ -95,11 +95,46 @@ impl HotkeyPreset {
     }
 }
 
+/// User's preferred color theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub(crate) enum AppThemeMode {
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+
+impl AppThemeMode {
+    /// Human-readable label for settings UI.
+    #[must_use]
+    pub(crate) const fn display_name(self) -> &'static str {
+        match self {
+            Self::System => "System (Auto)",
+            Self::Dark => "Dark Mode",
+            Self::Light => "Light Mode",
+        }
+    }
+
+    /// Resolves this preference to a concrete boolean (true = dark, false = light).
+    #[must_use]
+    pub(crate) fn resolve(self, ctx: &eframe::egui::Context) -> bool {
+        match self {
+            Self::Dark => true,
+            Self::Light => false,
+            Self::System => ctx
+                .system_theme()
+                .is_none_or(|t| t == eframe::egui::Theme::Dark),
+        }
+    }
+}
+
 /// Persistent user configuration for the clipboard manager.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AppSettings {
     pub(crate) hotkey: HotkeyPreset,
+    #[serde(default)]
+    pub(crate) theme: AppThemeMode,
     pub(crate) hide_on_copy: bool,
     pub(crate) max_history: usize,
     #[serde(default = "default_hide_on_blur")]
@@ -126,6 +161,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             hotkey: HotkeyPreset::Universal,
+            theme: AppThemeMode::System,
             hide_on_copy: true,
             max_history: 100,
             hide_on_blur: true,
@@ -205,5 +241,37 @@ mod tests {
             assert_ne!(preset.display_name(), "");
             assert_ne!(preset.badge(), "");
         }
+    }
+
+    #[test]
+    fn test_theme_mode_serialization_and_legacy_compatibility() {
+        assert_eq!(AppThemeMode::default(), AppThemeMode::System);
+        assert_eq!(AppThemeMode::System.display_name(), "System (Auto)");
+        assert_eq!(AppThemeMode::Dark.display_name(), "Dark Mode");
+        assert_eq!(AppThemeMode::Light.display_name(), "Light Mode");
+
+        // Legacy JSON without "theme" field should deserialize with AppThemeMode::System
+        let legacy_json = r#"{
+            "hotkey": "Universal",
+            "hide_on_copy": true,
+            "max_history": 100,
+            "hide_on_blur": true,
+            "restore_focus": true,
+            "auto_paste": true
+        }"#;
+        let parsed: AppSettings =
+            serde_json::from_str(legacy_json).expect("Legacy JSON should parse");
+        assert_eq!(parsed.theme, AppThemeMode::System);
+
+        // Explicit theme mode JSON
+        let light_json = r#"{
+            "hotkey": "Universal",
+            "theme": "Light",
+            "hide_on_copy": true,
+            "max_history": 100
+        }"#;
+        let parsed_light: AppSettings =
+            serde_json::from_str(light_json).expect("Light theme JSON should parse");
+        assert_eq!(parsed_light.theme, AppThemeMode::Light);
     }
 }

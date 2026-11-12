@@ -60,6 +60,7 @@ pub(crate) struct ClipboardApp {
     active_view: ActiveView,
     show_clear_confirm_dialog: bool,
     scroll_to_selected: bool,
+    current_is_dark: Option<bool>,
 }
 
 impl ClipboardApp {
@@ -98,7 +99,12 @@ impl ClipboardApp {
             active_view: ActiveView::History,
             show_clear_confirm_dialog: false,
             scroll_to_selected: false,
+            current_is_dark: None,
         }
+    }
+
+    fn is_dark(&self, ctx: &egui::Context) -> bool {
+        self.settings.theme.resolve(ctx)
     }
 
     fn refresh_items(&mut self) {
@@ -232,7 +238,10 @@ impl ClipboardApp {
 
     #[allow(clippy::too_many_lines)]
     fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
-        if self.show_clear_confirm_dialog || self.active_view != ActiveView::History || !self.is_visible {
+        if self.show_clear_confirm_dialog
+            || self.active_view != ActiveView::History
+            || !self.is_visible
+        {
             return;
         }
 
@@ -434,27 +443,27 @@ impl ClipboardApp {
         }
     }
 
-    fn render_top_panel(&mut self, ctx: &egui::Context) {
+    fn render_top_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
         egui::TopBottomPanel::top("top_panel")
             .frame(
                 egui::Frame::none()
-                    .fill(crate::theme::panel_background())
+                    .fill(crate::theme::panel_background(is_dark))
                     .inner_margin(egui::Margin::symmetric(10.0_f32, 6.0_f32)),
             )
             .show(ctx, |ui| {
                 ui.add_space(crate::theme::top_padding());
-                self.render_header_row(ui, ctx);
+                self.render_header_row(ui, ctx, is_dark);
                 ui.add_space(6.0_f32);
                 if self.active_view == ActiveView::History {
-                    self.render_search_bar(ui);
+                    self.render_search_bar(ui, is_dark);
                     ui.add_space(6.0_f32);
-                    self.render_filter_tabs(ui);
+                    self.render_filter_tabs(ui, is_dark);
                     ui.add_space(4.0_f32);
                 }
             });
     }
 
-    fn render_filter_tabs(&mut self, ui: &mut egui::Ui) {
+    fn render_filter_tabs(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         let old_filter = self.content_filter;
         let all_count = self.items.len();
         let text_count = self
@@ -496,6 +505,7 @@ impl ClipboardApp {
             for (target, icon, label, count) in tabs {
                 if crate::theme::render_segmented_tab(
                     ui,
+                    is_dark,
                     self.content_filter == target,
                     icon,
                     label,
@@ -515,13 +525,13 @@ impl ClipboardApp {
         }
     }
 
-    fn render_header_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn render_header_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, is_dark: bool) {
         ui.horizontal(|ui| {
             ui.add_space(crate::theme::header_left_padding());
 
             let title_resp = ui.heading(
                 egui::RichText::new(format!("{} Clipboard", icons::LOCK_KEY))
-                    .color(egui::Color32::from_rgb(245, 245, 248))
+                    .color(crate::theme::text_primary(is_dark))
                     .strong(),
             );
             if title_resp.interact(egui::Sense::drag()).dragged() {
@@ -531,7 +541,7 @@ impl ClipboardApp {
             let badge = self.settings.hotkey.badge();
             ui.label(
                 egui::RichText::new(format!("({badge})"))
-                    .color(egui::Color32::from_rgb(180, 180, 186))
+                    .color(crate::theme::text_secondary(is_dark))
                     .size(11.0_f32),
             );
 
@@ -568,11 +578,11 @@ impl ClipboardApp {
         });
     }
 
-    fn render_search_bar(&mut self, ui: &mut egui::Ui) {
+    fn render_search_bar(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         let is_focused = self.focus_search_input;
         egui::Frame::none()
-            .fill(crate::theme::search_bg())
-            .stroke(crate::theme::search_stroke(is_focused))
+            .fill(crate::theme::search_bg(is_dark))
+            .stroke(crate::theme::search_stroke(is_dark, is_focused))
             .rounding(crate::theme::search_rounding())
             .inner_margin(egui::Margin::symmetric(8.0_f32, 6.0_f32))
             .show(ui, |ui| {
@@ -608,14 +618,14 @@ impl ClipboardApp {
             });
     }
 
-    fn render_bottom_panel(&mut self, ctx: &egui::Context) {
+    fn render_bottom_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
         egui::TopBottomPanel::bottom("bottom_panel")
             .frame(
                 egui::Frame::none()
-                    .fill(crate::theme::panel_background())
+                    .fill(crate::theme::panel_background(is_dark))
                     .stroke(egui::Stroke::new(
                         1.0_f32,
-                        egui::Color32::from_rgb(58, 58, 62),
+                        crate::theme::bottom_panel_stroke(is_dark),
                     ))
                     .inner_margin(egui::Margin::symmetric(10.0_f32, 6.0_f32)),
             )
@@ -638,7 +648,7 @@ impl ClipboardApp {
                                 icons::SHIELD_CHECK,
                                 self.items.len()
                             ))
-                            .color(egui::Color32::from_rgb(180, 180, 186))
+                            .color(crate::theme::text_secondary(is_dark))
                             .size(11.0_f32),
                         );
                     }
@@ -650,7 +660,7 @@ impl ClipboardApp {
                         let nav_hint = "↑/↓ or Tab • Enter • Ctrl+1..9 • Esc";
                         ui.label(
                             egui::RichText::new(nav_hint)
-                                .color(egui::Color32::from_rgb(165, 165, 172))
+                                .color(crate::theme::text_secondary(is_dark))
                                 .size(10.5_f32),
                         );
                     });
@@ -683,7 +693,7 @@ impl ClipboardApp {
             .collect()
     }
 
-    fn render_central_panel(&mut self, ctx: &egui::Context) {
+    fn render_central_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
         let filter = self.content_filter;
         let filtered_indices = self.get_filtered_indices();
 
@@ -719,7 +729,7 @@ impl ClipboardApp {
                 return;
             }
 
-            self.render_items_scroll_area(ui, &filtered_indices, ctx);
+            self.render_items_scroll_area(ui, &filtered_indices, ctx, is_dark);
         });
     }
 
@@ -728,6 +738,7 @@ impl ClipboardApp {
         ui: &mut egui::Ui,
         filtered_indices: &[usize],
         ctx: &egui::Context,
+        is_dark: bool,
     ) {
         let should_scroll_selected = self.scroll_to_selected;
         self.scroll_to_selected = false;
@@ -752,6 +763,7 @@ impl ClipboardApp {
                             is_selected,
                             shortcut_num,
                             should_scroll,
+                            is_dark,
                         );
 
                         if clicked {
@@ -813,6 +825,9 @@ impl ClipboardApp {
                 ui.heading(format!("{} Preferences", icons::GEAR));
                 ui.add_space(8.0);
 
+                self.render_appearance_settings_group(ui);
+                ui.add_space(10.0);
+
                 self.render_hotkey_settings_group(ui);
                 ui.add_space(10.0);
 
@@ -828,6 +843,57 @@ impl ClipboardApp {
                 {
                     self.active_view = ActiveView::History;
                 }
+            });
+        });
+    }
+
+    fn render_appearance_settings_group(&mut self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{} Appearance & Theme", icons::PALETTE)).strong(),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Choose between Light Mode, Dark Mode, or follow your operating system appearance.",
+                )
+                .weak()
+                .size(11.0),
+            );
+            ui.add_space(6.0);
+
+            let current_theme = self.settings.theme;
+            let mut selected_theme = current_theme;
+            ui.horizontal(|ui| {
+                ui.label("Theme:");
+                egui::ComboBox::from_id_salt("appearance_theme_combo")
+                    .selected_text(selected_theme.display_name())
+                    .show_ui(ui, |ui| {
+                        for mode in [
+                            crate::settings::AppThemeMode::System,
+                            crate::settings::AppThemeMode::Dark,
+                            crate::settings::AppThemeMode::Light,
+                        ] {
+                            if ui
+                                .selectable_value(&mut selected_theme, mode, mode.display_name())
+                                .clicked()
+                                && selected_theme != current_theme
+                            {
+                                self.settings.theme = selected_theme;
+                                if let Err(e) = self.settings.save(&self.db) {
+                                    eprintln!("Failed to save settings: {e}");
+                                }
+                                let new_is_dark = selected_theme.resolve(ui.ctx());
+                                crate::theme::setup_theme(ui.ctx(), new_is_dark);
+                                self.current_is_dark = Some(new_is_dark);
+                                ui.ctx().request_repaint();
+                                self.show_toast(&format!(
+                                    "{} Theme changed to {}",
+                                    icons::CHECK,
+                                    selected_theme.display_name()
+                                ));
+                            }
+                        }
+                    });
             });
         });
     }
@@ -994,6 +1060,7 @@ impl ClipboardApp {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_clipboard_item(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
@@ -1002,11 +1069,12 @@ impl ClipboardApp {
         is_selected: bool,
         shortcut_num: Option<usize>,
         should_scroll: bool,
+        is_dark: bool,
     ) -> (ItemAction, bool) {
         let mut action = ItemAction::None;
 
-        let stroke = crate::theme::card_stroke(is_selected);
-        let fill = crate::theme::card_fill(is_selected);
+        let stroke = crate::theme::card_stroke(is_dark, is_selected);
+        let fill = crate::theme::card_fill(is_dark, is_selected);
         let rounding = crate::theme::card_rounding();
 
         let frame_resp = egui::Frame::group(ui.style())
@@ -1015,7 +1083,8 @@ impl ClipboardApp {
             .fill(fill)
             .inner_margin(8.0_f32)
             .show(ui, |ui| {
-                let header_action = Self::render_item_header(ui, item, shortcut_num, is_selected);
+                let header_action =
+                    Self::render_item_header(ui, item, shortcut_num, is_selected, is_dark);
                 if !matches!(header_action, ItemAction::None) {
                     action = header_action;
                 }
@@ -1023,10 +1092,10 @@ impl ClipboardApp {
                 ui.add_space(2.0);
 
                 let content_action = match item.kind {
-                    ItemKind::Text => Self::render_text_content(ui, &item.content),
-                    ItemKind::Url => Self::render_url_content(ui, &item.content),
-                    ItemKind::Code => Self::render_code_content(ui, item),
-                    ItemKind::Color => Self::render_color_content(ui, item),
+                    ItemKind::Text => Self::render_text_content(ui, &item.content, is_dark),
+                    ItemKind::Url => Self::render_url_content(ui, &item.content, is_dark),
+                    ItemKind::Code => Self::render_code_content(ui, item, is_dark),
+                    ItemKind::Color => Self::render_color_content(ui, item, is_dark),
                     ItemKind::Image => Self::render_image_content(ui, item, texture_cache, ctx),
                 };
 
@@ -1038,7 +1107,7 @@ impl ClipboardApp {
                     let embedded = item.embedded_colors();
                     if !embedded.is_empty() {
                         ui.add_space(4.0);
-                        let color_action = Self::render_embedded_colors(ui, &embedded);
+                        let color_action = Self::render_embedded_colors(ui, &embedded, is_dark);
                         if !matches!(color_action, ItemAction::None) {
                             action = color_action;
                         }
@@ -1054,46 +1123,34 @@ impl ClipboardApp {
         (action, clicked)
     }
 
-    fn render_text_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+    fn render_text_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
         let embedded = item.embedded_colors();
         let color_hint = match embedded.len() {
             0 => String::new(),
             1 => format!(" • {} 1 color", icons::PALETTE),
             n => format!(" • {} {n} colors", icons::PALETTE),
         };
-        crate::theme::render_pill_tag(
-            ui,
-            icons::FILE_TEXT,
-            "Text",
-            egui::Color32::from_rgb(220, 220, 225),
-            egui::Color32::from_rgb(45, 45, 48),
-            egui::Color32::from_rgb(70, 70, 74),
-        );
+        let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Text);
+        crate::theme::render_pill_tag(ui, icons::FILE_TEXT, "Text", text_c, bg_c, stroke_c);
         ui.label(
             egui::RichText::new(format!("{color_hint} • {}", item.created_at))
                 .size(10.0_f32)
-                .color(egui::Color32::from_rgb(175, 175, 182)),
+                .color(crate::theme::text_secondary(is_dark)),
         );
     }
 
-    fn render_url_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+    fn render_url_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
         let host = item.url_host().unwrap_or_else(|| "link".to_string());
-        crate::theme::render_pill_tag(
-            ui,
-            icons::LINK,
-            "Link",
-            egui::Color32::from_rgb(100, 190, 255),
-            egui::Color32::from_rgb(18, 44, 75),
-            egui::Color32::from_rgb(30, 90, 160),
-        );
+        let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Url);
+        crate::theme::render_pill_tag(ui, icons::LINK, "Link", text_c, bg_c, stroke_c);
         ui.label(
             egui::RichText::new(format!("• {host} • {}", item.created_at))
                 .size(10.0_f32)
-                .color(egui::Color32::from_rgb(175, 175, 182)),
+                .color(crate::theme::text_secondary(is_dark)),
         );
     }
 
-    fn render_code_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+    fn render_code_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
         let (icon, lang_name) = item
             .code_language()
             .map_or((icons::CODE, "Code"), |l| (l.icon(), l.name()));
@@ -1104,70 +1161,52 @@ impl ClipboardApp {
             1 => format!(" • {} 1 color", icons::PALETTE),
             n => format!(" • {} {n} colors", icons::PALETTE),
         };
-        crate::theme::render_pill_tag(
-            ui,
-            icon,
-            lang_name,
-            egui::Color32::from_rgb(255, 130, 120),
-            egui::Color32::from_rgb(58, 26, 26),
-            egui::Color32::from_rgb(130, 48, 48),
-        );
+        let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Code);
+        crate::theme::render_pill_tag(ui, icon, lang_name, text_c, bg_c, stroke_c);
         ui.label(
             egui::RichText::new(format!(
                 "• {line_count} lines{color_hint} • {}",
                 item.created_at
             ))
             .size(10.0_f32)
-            .color(egui::Color32::from_rgb(175, 175, 182)),
+            .color(crate::theme::text_secondary(is_dark)),
         );
     }
 
-    fn render_color_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+    fn render_color_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
         let hex = item
             .parsed_color()
             .map_or_else(|| item.content.clone(), crate::color::ParsedColor::to_hex);
-        crate::theme::render_pill_tag(
-            ui,
-            icons::PALETTE,
-            "Color",
-            egui::Color32::from_rgb(220, 150, 255),
-            egui::Color32::from_rgb(46, 24, 58),
-            egui::Color32::from_rgb(110, 50, 140),
-        );
+        let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Color);
+        crate::theme::render_pill_tag(ui, icons::PALETTE, "Color", text_c, bg_c, stroke_c);
         ui.label(
             egui::RichText::new(format!("• {hex} • {}", item.created_at))
                 .size(10.0_f32)
-                .color(egui::Color32::from_rgb(175, 175, 182)),
+                .color(crate::theme::text_secondary(is_dark)),
         );
     }
 
-    fn render_image_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+    fn render_image_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
         let dims = match (item.width, item.height) {
             (Some(w), Some(h)) => format!("Image ({w}x{h})"),
             _ => "Image".to_string(),
         };
-        crate::theme::render_pill_tag(
-            ui,
-            icons::IMAGE,
-            &dims,
-            egui::Color32::from_rgb(110, 230, 145),
-            egui::Color32::from_rgb(20, 48, 30),
-            egui::Color32::from_rgb(40, 110, 65),
-        );
+        let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Image);
+        crate::theme::render_pill_tag(ui, icons::IMAGE, &dims, text_c, bg_c, stroke_c);
         ui.label(
             egui::RichText::new(format!("• {}", item.created_at))
                 .size(10.0_f32)
-                .color(egui::Color32::from_rgb(175, 175, 182)),
+                .color(crate::theme::text_secondary(is_dark)),
         );
     }
 
-    fn render_item_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+    fn render_item_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
         match item.kind {
-            ItemKind::Text => Self::render_text_badge(ui, item),
-            ItemKind::Url => Self::render_url_badge(ui, item),
-            ItemKind::Code => Self::render_code_badge(ui, item),
-            ItemKind::Color => Self::render_color_badge(ui, item),
-            ItemKind::Image => Self::render_image_badge(ui, item),
+            ItemKind::Text => Self::render_text_badge(ui, item, is_dark),
+            ItemKind::Url => Self::render_url_badge(ui, item, is_dark),
+            ItemKind::Code => Self::render_code_badge(ui, item, is_dark),
+            ItemKind::Color => Self::render_color_badge(ui, item, is_dark),
+            ItemKind::Image => Self::render_image_badge(ui, item, is_dark),
         }
     }
 
@@ -1176,11 +1215,12 @@ impl ClipboardApp {
         item: &ClipboardItem,
         shortcut_num: Option<usize>,
         is_selected: bool,
+        is_dark: bool,
     ) -> ItemAction {
         let mut action = ItemAction::None;
 
         ui.horizontal(|ui| {
-            Self::render_item_badge(ui, item);
+            Self::render_item_badge(ui, item, is_dark);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(num) = shortcut_num {
@@ -1189,19 +1229,8 @@ impl ClipboardApp {
                     #[cfg(not(target_os = "macos"))]
                     let shortcut_str = format!("Ctrl+{num}");
 
-                    let (text_c, bg_c, stroke_c) = if is_selected {
-                        (
-                            egui::Color32::WHITE,
-                            crate::theme::accent_color(),
-                            crate::theme::accent_color(),
-                        )
-                    } else {
-                        (
-                            egui::Color32::from_rgb(210, 210, 215),
-                            egui::Color32::from_rgb(46, 46, 50),
-                            egui::Color32::from_rgb(70, 70, 75),
-                        )
-                    };
+                    let (text_c, bg_c, stroke_c) =
+                        crate::theme::shortcut_badge_colors(is_dark, is_selected);
 
                     egui::Frame::none()
                         .rounding(crate::theme::pill_rounding())
@@ -1266,16 +1295,28 @@ impl ClipboardApp {
         action
     }
 
-    fn render_code_content(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+    fn render_code_content(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) -> ItemAction {
         let lang = item
             .code_language()
             .unwrap_or(crate::code::CodeLanguage::Rust);
 
         let mut action = ItemAction::None;
 
+        let canvas_fill = if is_dark {
+            egui::Color32::from_rgb(26, 27, 34)
+        } else {
+            egui::Color32::from_rgb(244, 244, 247)
+        };
+        let canvas_stroke = if is_dark {
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 50, 56))
+        } else {
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(220, 220, 226))
+        };
+
         egui::Frame::canvas(ui.style())
             .rounding(4.0)
-            .fill(egui::Color32::from_rgb(26, 27, 34))
+            .fill(canvas_fill)
+            .stroke(canvas_stroke)
             .inner_margin(6.0)
             .show(ui, |ui| {
                 let preview: String = item
@@ -1304,9 +1345,9 @@ impl ClipboardApp {
         action
     }
 
-    fn render_color_content(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+    fn render_color_content(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) -> ItemAction {
         let Some(parsed) = item.parsed_color() else {
-            return Self::render_text_content(ui, &item.content);
+            return Self::render_text_content(ui, &item.content, is_dark);
         };
 
         let mut action = ItemAction::None;
@@ -1322,8 +1363,13 @@ impl ClipboardApp {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     let hex_label = ui.add(
-                        egui::Label::new(egui::RichText::new(parsed.to_hex()).monospace().strong())
-                            .sense(egui::Sense::click()),
+                        egui::Label::new(
+                            egui::RichText::new(parsed.to_hex())
+                                .monospace()
+                                .strong()
+                                .color(crate::theme::text_primary(is_dark)),
+                        )
+                        .sense(egui::Sense::click()),
                     );
                     if hex_label.clicked() {
                         action = ItemAction::CopyColor(parsed.to_hex(), "HEX".to_string());
@@ -1342,7 +1388,7 @@ impl ClipboardApp {
                         egui::RichText::new(format!("{}{}", parsed.to_rgb_string(), opacity_note))
                             .monospace()
                             .size(11.0)
-                            .weak(),
+                            .color(crate::theme::text_secondary(is_dark)),
                     );
                 });
 
@@ -1510,6 +1556,7 @@ impl ClipboardApp {
     fn render_embedded_colors(
         ui: &mut egui::Ui,
         colors: &[crate::color::ParsedColor],
+        is_dark: bool,
     ) -> ItemAction {
         let mut action = ItemAction::None;
 
@@ -1521,13 +1568,22 @@ impl ClipboardApp {
                     .strong(),
             );
 
+            let (bg, stroke) = if is_dark {
+                (
+                    egui::Color32::from_white_alpha(8),
+                    egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(24)),
+                )
+            } else {
+                (
+                    egui::Color32::from_black_alpha(10),
+                    egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(25)),
+                )
+            };
+
             for &color in colors {
                 egui::Frame::none()
-                    .fill(egui::Color32::from_white_alpha(8))
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        egui::Color32::from_white_alpha(24),
-                    ))
+                    .fill(bg)
+                    .stroke(stroke)
                     .rounding(4.0)
                     .inner_margin(egui::vec2(5.0, 2.0))
                     .show(ui, |ui| {
@@ -1544,7 +1600,8 @@ impl ClipboardApp {
                                     egui::RichText::new(color.to_hex())
                                         .monospace()
                                         .size(11.0)
-                                        .strong(),
+                                        .strong()
+                                        .color(crate::theme::text_primary(is_dark)),
                                 )
                                 .sense(egui::Sense::click()),
                             );
@@ -1597,20 +1654,22 @@ impl ClipboardApp {
         action
     }
 
-    fn render_url_content(ui: &mut egui::Ui, content: &str) -> ItemAction {
+    fn render_url_content(ui: &mut egui::Ui, content: &str, is_dark: bool) -> ItemAction {
         let preview = if content.len() > 180 {
             format!("{}...", &content[..180])
         } else {
             content.to_string()
         };
 
+        let link_color = if is_dark {
+            egui::Color32::from_rgb(100, 181, 246)
+        } else {
+            egui::Color32::from_rgb(0, 102, 204)
+        };
+
         let label = ui.add(
-            egui::Label::new(
-                egui::RichText::new(preview)
-                    .color(egui::Color32::from_rgb(100, 181, 246))
-                    .underline(),
-            )
-            .sense(egui::Sense::click()),
+            egui::Label::new(egui::RichText::new(preview).color(link_color).underline())
+                .sense(egui::Sense::click()),
         );
 
         if label.clicked() {
@@ -1623,7 +1682,7 @@ impl ClipboardApp {
         }
     }
 
-    fn render_text_content(ui: &mut egui::Ui, content: &str) -> ItemAction {
+    fn render_text_content(ui: &mut egui::Ui, content: &str, is_dark: bool) -> ItemAction {
         let preview = if content.len() > 180 {
             format!("{}...", &content[..180])
         } else {
@@ -1634,7 +1693,7 @@ impl ClipboardApp {
             egui::Label::new(
                 egui::RichText::new(preview)
                     .monospace()
-                    .color(egui::Color32::from_rgb(235, 235, 240)),
+                    .color(crate::theme::text_preview(is_dark)),
             )
             .sense(egui::Sense::click()),
         );
@@ -1705,7 +1764,7 @@ impl ClipboardApp {
         ItemAction::None
     }
 
-    fn render_clear_confirm_modal(&mut self, ctx: &egui::Context) {
+    fn render_clear_confirm_modal(&mut self, ctx: &egui::Context, is_dark: bool) {
         if !self.show_clear_confirm_dialog {
             return;
         }
@@ -1740,10 +1799,7 @@ impl ClipboardApp {
                 egui::Frame::window(&ctx.style())
                     .inner_margin(egui::Margin::symmetric(16.0_f32, 14.0_f32))
                     .rounding(crate::theme::card_rounding())
-                    .stroke(egui::Stroke::new(
-                        1.0_f32,
-                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 30),
-                    )),
+                    .stroke(crate::theme::card_stroke(is_dark, false)),
             )
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
@@ -1804,6 +1860,12 @@ impl ClipboardApp {
 
 impl eframe::App for ClipboardApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let is_dark = self.is_dark(ctx);
+        if self.current_is_dark != Some(is_dark) {
+            crate::theme::setup_theme(ctx, is_dark);
+            self.current_is_dark = Some(is_dark);
+        }
+
         self.handle_window_close_request(ctx);
         self.handle_hotkey_toggle(ctx);
         self.handle_escape_key(ctx);
@@ -1820,14 +1882,14 @@ impl eframe::App for ClipboardApp {
             return;
         }
 
-        self.render_top_panel(ctx);
-        self.render_bottom_panel(ctx);
+        self.render_top_panel(ctx, is_dark);
+        self.render_bottom_panel(ctx, is_dark);
         if self.active_view == ActiveView::Settings {
             self.render_settings_panel(ctx);
         } else {
-            self.render_central_panel(ctx);
+            self.render_central_panel(ctx, is_dark);
         }
 
-        self.render_clear_confirm_modal(ctx);
+        self.render_clear_confirm_modal(ctx, is_dark);
     }
 }
