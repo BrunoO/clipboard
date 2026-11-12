@@ -58,6 +58,8 @@ pub(crate) struct ClipboardApp {
     last_toggle_instant: Option<Instant>,
     settings: AppSettings,
     active_view: ActiveView,
+    show_clear_confirm_dialog: bool,
+    scroll_to_selected: bool,
 }
 
 impl ClipboardApp {
@@ -94,6 +96,8 @@ impl ClipboardApp {
             last_toggle_instant: None,
             settings,
             active_view: ActiveView::History,
+            show_clear_confirm_dialog: false,
+            scroll_to_selected: false,
         }
     }
 
@@ -118,6 +122,8 @@ impl ClipboardApp {
         self.has_been_focused = false;
         self.was_inactive_since_hidden = false;
         self.selected_index = 0;
+        self.show_clear_confirm_dialog = false;
+        self.scroll_to_selected = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -131,6 +137,7 @@ impl ClipboardApp {
         self.is_visible = false;
         self.has_been_focused = false;
         self.was_inactive_since_hidden = false;
+        self.show_clear_confirm_dialog = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         crate::platform::hide_application();
         if restore_focus || auto_paste {
@@ -213,7 +220,9 @@ impl ClipboardApp {
 
     fn handle_escape_key(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if self.active_view == ActiveView::Settings {
+            if self.show_clear_confirm_dialog {
+                self.show_clear_confirm_dialog = false;
+            } else if self.active_view == ActiveView::Settings {
                 self.active_view = ActiveView::History;
             } else {
                 self.hide_window(ctx, self.settings.restore_focus, false);
@@ -221,8 +230,9 @@ impl ClipboardApp {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
-        if self.active_view != ActiveView::History || !self.is_visible {
+        if self.show_clear_confirm_dialog || self.active_view != ActiveView::History || !self.is_visible {
             return;
         }
 
@@ -308,6 +318,7 @@ impl ClipboardApp {
         if move_down {
             if self.selected_index + 1 < filtered_indices.len() {
                 self.selected_index += 1;
+                self.scroll_to_selected = true;
                 ctx.request_repaint();
             }
         } else if wrap_down {
@@ -316,12 +327,14 @@ impl ClipboardApp {
             } else {
                 0
             };
+            self.scroll_to_selected = true;
             ctx.request_repaint();
         }
 
         if move_up {
             if self.selected_index > 0 {
                 self.selected_index -= 1;
+                self.scroll_to_selected = true;
                 ctx.request_repaint();
             }
         } else if wrap_up {
@@ -330,6 +343,7 @@ impl ClipboardApp {
             } else {
                 filtered_indices.len().saturating_sub(1)
             };
+            self.scroll_to_selected = true;
             ctx.request_repaint();
         }
 
@@ -367,6 +381,7 @@ impl ClipboardApp {
                 if self.selected_index >= new_count && new_count > 0 {
                     self.selected_index = new_count - 1;
                 }
+                self.scroll_to_selected = true;
                 self.show_toast(&format!("{} Entry deleted.", icons::TRASH));
                 ctx.request_repaint();
             }
@@ -415,6 +430,7 @@ impl ClipboardApp {
             self.refresh_items();
             self.last_query_cached = self.search_query.clone();
             self.selected_index = 0;
+            self.scroll_to_selected = true;
         }
     }
 
@@ -495,6 +511,7 @@ impl ClipboardApp {
         if self.content_filter != old_filter {
             self.selected_index = 0;
             self.focus_search_input = true;
+            self.scroll_to_selected = true;
         }
     }
 
@@ -542,13 +559,10 @@ impl ClipboardApp {
                 if self.active_view == ActiveView::History
                     && ui
                         .small_button(format!("{} Clear", icons::TRASH))
-                        .on_hover_text("Permanently deletes all history")
+                        .on_hover_text("Clear clipboard history")
                         .clicked()
                 {
-                    let _ = self.db.clear();
-                    self.texture_cache.clear();
-                    self.refresh_items();
-                    self.show_toast(&format!("{} History cleared.", icons::CHECK));
+                    self.show_clear_confirm_dialog = true;
                 }
             });
         });
@@ -715,6 +729,9 @@ impl ClipboardApp {
         filtered_indices: &[usize],
         ctx: &egui::Context,
     ) {
+        let should_scroll_selected = self.scroll_to_selected;
+        self.scroll_to_selected = false;
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -725,6 +742,7 @@ impl ClipboardApp {
                     if let Some(item) = self.items.get(idx) {
                         let is_selected = slot == self.selected_index;
                         let shortcut_num = if slot < 9 { Some(slot + 1) } else { None };
+                        let should_scroll = is_selected && should_scroll_selected;
 
                         let (item_action, clicked) = Self::render_clipboard_item(
                             ui,
@@ -733,6 +751,7 @@ impl ClipboardApp {
                             ctx,
                             is_selected,
                             shortcut_num,
+                            should_scroll,
                         );
 
                         if clicked {
@@ -969,13 +988,7 @@ impl ClipboardApp {
                     .button(format!("{} Clear All History", icons::TRASH))
                     .clicked()
                 {
-                    let _ = self.db.clear();
-                    self.texture_cache.clear();
-                    self.refresh_items();
-                    self.show_toast(&format!(
-                        "{} All clipboard history wiped.",
-                        icons::CHECK
-                    ));
+                    self.show_clear_confirm_dialog = true;
                 }
             });
         });
@@ -988,6 +1001,7 @@ impl ClipboardApp {
         ctx: &egui::Context,
         is_selected: bool,
         shortcut_num: Option<usize>,
+        should_scroll: bool,
     ) -> (ItemAction, bool) {
         let mut action = ItemAction::None;
 
@@ -1032,7 +1046,7 @@ impl ClipboardApp {
                 }
             });
 
-        if is_selected {
+        if should_scroll {
             frame_resp.response.scroll_to_me(Some(egui::Align::Center));
         }
 
@@ -1690,6 +1704,102 @@ impl ClipboardApp {
 
         ItemAction::None
     }
+
+    fn render_clear_confirm_modal(&mut self, ctx: &egui::Context) {
+        if !self.show_clear_confirm_dialog {
+            return;
+        }
+
+        let screen_rect = ctx.screen_rect();
+        egui::Area::new(egui::Id::new("clear_confirm_backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen_rect.min)
+            .show(ctx, |ui| {
+                let response = ui.allocate_response(screen_rect.size(), egui::Sense::click());
+                ui.painter().rect_filled(
+                    screen_rect,
+                    0.0_f32,
+                    egui::Color32::from_black_alpha(150),
+                );
+                if response.clicked() {
+                    self.show_clear_confirm_dialog = false;
+                }
+            });
+
+        let mut open = self.show_clear_confirm_dialog;
+        egui::Window::new(format!("{} Clear History?", icons::WARNING))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .movable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0_f32, 0.0_f32))
+            .order(egui::Order::Foreground)
+            .default_width(300.0_f32)
+            .max_width(320.0_f32)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .inner_margin(egui::Margin::symmetric(16.0_f32, 14.0_f32))
+                    .rounding(crate::theme::card_rounding())
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 30),
+                    )),
+            )
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(4.0_f32);
+                    ui.label(
+                        egui::RichText::new("Clear all clipboard history?")
+                            .strong()
+                            .size(15.0_f32),
+                    );
+                    ui.add_space(8.0_f32);
+                    ui.label(
+                        egui::RichText::new(
+                            "This action cannot be undone. All saved clips, URLs, code snippets, and images will be permanently erased.",
+                        )
+                        .size(12.0_f32)
+                        .weak(),
+                    );
+                    ui.add_space(16.0_f32);
+
+                    ui.horizontal(|ui| {
+                        let btn_width = 110.0_f32;
+                        let btn_height = 28.0_f32;
+                        let available_width = ui.available_width();
+                        let spacing =
+                            btn_width.mul_add(-2.0_f32, available_width).max(0.0_f32) / 2.0_f32;
+                        ui.add_space(spacing);
+
+                        if ui
+                            .add_sized([btn_width, btn_height], egui::Button::new("Cancel"))
+                            .clicked()
+                        {
+                            self.show_clear_confirm_dialog = false;
+                        }
+
+                        let clear_btn = egui::Button::new(
+                            egui::RichText::new(format!("{} Clear All", icons::TRASH))
+                                .color(egui::Color32::WHITE),
+                        )
+                        .fill(egui::Color32::from_rgb(220, 53, 69));
+
+                        if ui.add_sized([btn_width, btn_height], clear_btn).clicked() {
+                            let _ = self.db.clear();
+                            self.texture_cache.clear();
+                            self.refresh_items();
+                            self.show_clear_confirm_dialog = false;
+                            self.show_toast(&format!("{} History cleared.", icons::CHECK));
+                        }
+                    });
+                    ui.add_space(4.0_f32);
+                });
+            });
+
+        if !open {
+            self.show_clear_confirm_dialog = false;
+        }
+    }
 }
 
 impl eframe::App for ClipboardApp {
@@ -1717,5 +1827,7 @@ impl eframe::App for ClipboardApp {
         } else {
             self.render_central_panel(ctx);
         }
+
+        self.render_clear_confirm_modal(ctx);
     }
 }
