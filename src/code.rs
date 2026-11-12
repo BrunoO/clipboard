@@ -385,7 +385,8 @@ pub(crate) fn minify_json(text: &str) -> Option<String> {
     let val: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
     serde_json::to_string(&val).ok()
 }
-/// Builds an `egui::text::LayoutJob` with syntax highlighting for the given code snippet using `egui_extras` and `syntect`.
+/// Builds an `egui::text::LayoutJob` with syntax highlighting for the given code snippet using `egui_extras` and `syntect`,
+/// post-processing all token colors to guarantee minimum WCAG contrast ratio (>= 4.5:1) against the canvas background.
 pub(crate) fn highlight_code(
     ctx: &egui::Context,
     style: &egui::Style,
@@ -393,7 +394,17 @@ pub(crate) fn highlight_code(
     lang: CodeLanguage,
 ) -> egui::text::LayoutJob {
     let theme = egui_extras::syntax_highlighting::CodeTheme::from_memory(ctx, style);
-    egui_extras::syntax_highlighting::highlight(ctx, style, &theme, text, lang.syntect_name())
+    let mut job =
+        egui_extras::syntax_highlighting::highlight(ctx, style, &theme, text, lang.syntect_name());
+    let canvas_bg = if style.visuals.dark_mode {
+        egui::Color32::from_rgb(26, 27, 34)
+    } else {
+        egui::Color32::from_rgb(244, 244, 247)
+    };
+    for sec in &mut job.sections {
+        sec.format.color = crate::theme::ensure_contrast(sec.format.color, canvas_bg, 4.5_f32);
+    }
+    job
 }
 
 #[cfg(test)]

@@ -57,6 +57,16 @@ pub(crate) fn setup_theme(ctx: &egui::Context, is_dark: bool) {
     visuals.selection.bg_fill = selection_fill(is_dark);
     visuals.selection.stroke = selection_stroke(is_dark);
 
+    // High-contrast semantic indicators
+    visuals.hyperlink_color = link_color(is_dark);
+    visuals.warn_fg_color = warning_color(is_dark);
+    visuals.error_fg_color = Color32::from_rgb(220, 53, 69);
+    visuals.code_bg_color = if is_dark {
+        Color32::from_rgb(26, 27, 34)
+    } else {
+        Color32::from_rgb(244, 244, 247)
+    };
+
     ctx.set_visuals(visuals);
 }
 
@@ -202,28 +212,28 @@ pub(crate) fn card_stroke(is_dark: bool, is_selected: bool) -> Stroke {
     } else if is_dark {
         #[cfg(target_os = "macos")]
         {
-            Stroke::new(1.0_f32, Color32::from_rgb(68, 68, 72))
+            Stroke::new(1.0_f32, Color32::from_rgb(72, 72, 78))
         }
         #[cfg(target_os = "windows")]
         {
-            Stroke::new(1.0_f32, Color32::from_rgb(60, 60, 60))
+            Stroke::new(1.0_f32, Color32::from_rgb(64, 64, 68))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Stroke::new(1.0_f32, Color32::from_rgb(68, 68, 72))
+            Stroke::new(1.0_f32, Color32::from_rgb(72, 72, 78))
         }
     } else {
         #[cfg(target_os = "macos")]
         {
-            Stroke::new(1.0_f32, Color32::from_rgb(218, 218, 224))
+            Stroke::new(1.0_f32, Color32::from_rgb(210, 210, 218))
         }
         #[cfg(target_os = "windows")]
         {
-            Stroke::new(1.0_f32, Color32::from_rgb(225, 225, 225))
+            Stroke::new(1.0_f32, Color32::from_rgb(218, 218, 222))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Stroke::new(1.0_f32, Color32::from_rgb(218, 218, 224))
+            Stroke::new(1.0_f32, Color32::from_rgb(210, 210, 218))
         }
     }
 }
@@ -337,9 +347,9 @@ pub(crate) fn search_stroke(is_dark: bool, is_focused: bool) -> Stroke {
     if is_focused {
         Stroke::new(1.5_f32, accent_color(is_dark))
     } else if is_dark {
-        Stroke::new(1.0_f32, Color32::from_rgb(68, 68, 72))
+        Stroke::new(1.0_f32, Color32::from_rgb(72, 72, 78))
     } else {
-        Stroke::new(1.0_f32, Color32::from_rgb(205, 205, 212))
+        Stroke::new(1.0_f32, Color32::from_rgb(195, 195, 205))
     }
 }
 
@@ -385,7 +395,7 @@ pub(crate) const fn button_hover_fill(is_dark: bool) -> Color32 {
     }
 }
 
-/// Primary high-contrast text color.
+/// Primary high-contrast text color (WCAG AAA compliant: >= 12.0:1 contrast).
 #[must_use]
 pub(crate) const fn text_primary(is_dark: bool) -> Color32 {
     if is_dark {
@@ -395,23 +405,53 @@ pub(crate) const fn text_primary(is_dark: bool) -> Color32 {
     }
 }
 
-/// Secondary metadata and timestamp text color.
+/// Secondary metadata, hints, and timestamp text color (WCAG AAA compliant: >= 7.0:1 contrast).
 #[must_use]
 pub(crate) const fn text_secondary(is_dark: bool) -> Color32 {
     if is_dark {
-        Color32::from_rgb(175, 175, 182)
+        Color32::from_rgb(182, 182, 190)
     } else {
-        Color32::from_rgb(105, 105, 112)
+        Color32::from_rgb(82, 82, 88)
     }
 }
 
-/// Monospace content preview text color.
+/// Monospace content preview text color (WCAG AAA compliant: >= 11.0:1 contrast).
 #[must_use]
 pub(crate) const fn text_preview(is_dark: bool) -> Color32 {
     if is_dark {
         Color32::from_rgb(235, 235, 240)
     } else {
         Color32::from_rgb(32, 32, 34)
+    }
+}
+
+/// High-contrast success message color (WCAG AA compliant: >= 5.0:1 contrast).
+#[must_use]
+pub(crate) const fn success_color(is_dark: bool) -> Color32 {
+    if is_dark {
+        Color32::from_rgb(52, 199, 89)
+    } else {
+        Color32::from_rgb(20, 125, 55)
+    }
+}
+
+/// High-contrast warning message color (WCAG AA compliant: >= 5.0:1 contrast).
+#[must_use]
+pub(crate) const fn warning_color(is_dark: bool) -> Color32 {
+    if is_dark {
+        Color32::from_rgb(255, 159, 10)
+    } else {
+        Color32::from_rgb(160, 65, 0)
+    }
+}
+
+/// High-contrast interactive URL link color (WCAG AA compliant: >= 5.5:1 contrast).
+#[must_use]
+pub(crate) const fn link_color(is_dark: bool) -> Color32 {
+    if is_dark {
+        Color32::from_rgb(100, 181, 246)
+    } else {
+        Color32::from_rgb(0, 102, 204)
     }
 }
 
@@ -423,6 +463,70 @@ pub(crate) const fn bottom_panel_stroke(is_dark: bool) -> Color32 {
     } else {
         Color32::from_rgb(218, 218, 224)
     }
+}
+
+/// Computes the sRGB relative luminance of a color according to WCAG 2.1 specifications.
+#[must_use]
+pub(crate) fn relative_luminance(c: Color32) -> f32 {
+    let channel = |v: u8| -> f32 {
+        let s = f32::from(v) / 255.0_f32;
+        if s <= 0.04045_f32 {
+            s / 12.92_f32
+        } else {
+            ((s + 0.055_f32) / 1.055_f32).powf(2.4_f32)
+        }
+    };
+    0.2126_f32.mul_add(
+        channel(c.r()),
+        0.7152_f32.mul_add(channel(c.g()), 0.0722_f32 * channel(c.b())),
+    )
+}
+
+/// Computes the WCAG 2.1 contrast ratio between two colors (ranging from 1.0 to 21.0).
+#[must_use]
+pub(crate) fn contrast_ratio(c1: Color32, c2: Color32) -> f32 {
+    let l1 = relative_luminance(c1);
+    let l2 = relative_luminance(c2);
+    let (lighter, darker) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+    (lighter + 0.05_f32) / (darker + 0.05_f32)
+}
+
+/// Clamps token colors to guarantee minimum WCAG contrast ratio (>= `min_contrast`) against background.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::suboptimal_flops
+)]
+pub(crate) fn ensure_contrast(mut fg: Color32, bg: Color32, min_contrast: f32) -> Color32 {
+    let mut ratio = contrast_ratio(fg, bg);
+    if ratio >= min_contrast {
+        return fg;
+    }
+
+    let bg_lum = relative_luminance(bg);
+    let is_bg_light = bg_lum > 0.5_f32;
+
+    for _ in 0..20 {
+        if ratio >= min_contrast {
+            break;
+        }
+        if is_bg_light {
+            fg = Color32::from_rgb(
+                (f32::from(fg.r()) * 0.88_f32) as u8,
+                (f32::from(fg.g()) * 0.88_f32) as u8,
+                (f32::from(fg.b()) * 0.88_f32) as u8,
+            );
+        } else {
+            fg = Color32::from_rgb(
+                ((f32::from(fg.r()) * 1.12_f32 + 10.0_f32).min(255.0_f32)) as u8,
+                ((f32::from(fg.g()) * 1.12_f32 + 10.0_f32).min(255.0_f32)) as u8,
+                ((f32::from(fg.b()) * 1.12_f32 + 10.0_f32).min(255.0_f32)) as u8,
+            );
+        }
+        ratio = contrast_ratio(fg, bg);
+    }
+    fg
 }
 
 // ---------------------------------------------------------------------------
@@ -564,29 +668,29 @@ pub(crate) const fn category_pill_colors(
     } else {
         match kind {
             crate::db::ItemKind::Text => (
-                Color32::from_rgb(60, 60, 64),
+                Color32::from_rgb(50, 50, 54),
                 Color32::from_rgb(235, 235, 238),
-                Color32::from_rgb(210, 210, 215),
+                Color32::from_rgb(205, 205, 212),
             ),
             crate::db::ItemKind::Url => (
-                Color32::from_rgb(0, 102, 204),
+                Color32::from_rgb(0, 85, 180),
                 Color32::from_rgb(225, 240, 255),
-                Color32::from_rgb(180, 215, 255),
+                Color32::from_rgb(170, 210, 255),
             ),
             crate::db::ItemKind::Code => (
-                Color32::from_rgb(190, 30, 30),
+                Color32::from_rgb(180, 25, 25),
                 Color32::from_rgb(255, 235, 235),
-                Color32::from_rgb(255, 195, 190),
+                Color32::from_rgb(250, 185, 180),
             ),
             crate::db::ItemKind::Color => (
-                Color32::from_rgb(130, 40, 160),
+                Color32::from_rgb(125, 35, 155),
                 Color32::from_rgb(245, 235, 250),
-                Color32::from_rgb(225, 195, 245),
+                Color32::from_rgb(220, 185, 240),
             ),
             crate::db::ItemKind::Image => (
-                Color32::from_rgb(25, 125, 50),
+                Color32::from_rgb(18, 115, 45),
                 Color32::from_rgb(230, 248, 235),
-                Color32::from_rgb(180, 235, 195),
+                Color32::from_rgb(170, 230, 190),
             ),
         }
     }
@@ -599,18 +703,30 @@ pub(crate) const fn shortcut_badge_colors(
     is_selected: bool,
 ) -> (Color32, Color32, Color32) {
     if is_selected {
-        (Color32::WHITE, accent_color(is_dark), accent_color(is_dark))
+        (
+            Color32::WHITE,
+            if is_dark {
+                Color32::from_rgb(0, 100, 220)
+            } else {
+                Color32::from_rgb(0, 95, 200)
+            },
+            if is_dark {
+                Color32::from_rgb(10, 132, 255)
+            } else {
+                Color32::from_rgb(0, 102, 204)
+            },
+        )
     } else if is_dark {
         (
-            Color32::from_rgb(210, 210, 215),
+            Color32::from_rgb(215, 215, 220),
             Color32::from_rgb(46, 46, 50),
-            Color32::from_rgb(70, 70, 75),
+            Color32::from_rgb(72, 72, 78),
         )
     } else {
         (
-            Color32::from_rgb(72, 72, 76),
+            Color32::from_rgb(60, 60, 64),
             Color32::from_rgb(235, 235, 240),
-            Color32::from_rgb(210, 210, 216),
+            Color32::from_rgb(205, 205, 212),
         )
     }
 }
@@ -650,21 +766,32 @@ pub(crate) fn render_segmented_tab(
 ) -> egui::Response {
     let (fill, stroke, text_color) = if selected {
         (
-            accent_color(is_dark),
-            Stroke::new(1.0_f32, accent_color(is_dark)),
+            if is_dark {
+                Color32::from_rgb(0, 100, 220)
+            } else {
+                Color32::from_rgb(0, 95, 200)
+            },
+            Stroke::new(
+                1.0_f32,
+                if is_dark {
+                    Color32::from_rgb(10, 132, 255)
+                } else {
+                    Color32::from_rgb(0, 102, 204)
+                },
+            ),
             Color32::WHITE,
         )
     } else if is_dark {
         (
             Color32::from_rgb(38, 38, 42),
-            Stroke::new(1.0_f32, Color32::from_rgb(58, 58, 62)),
-            Color32::from_rgb(205, 205, 212),
+            Stroke::new(1.0_f32, Color32::from_rgb(62, 62, 68)),
+            Color32::from_rgb(215, 215, 222),
         )
     } else {
         (
             Color32::WHITE,
-            Stroke::new(1.0_f32, Color32::from_rgb(209, 209, 214)),
-            Color32::from_rgb(60, 60, 64),
+            Stroke::new(1.0_f32, Color32::from_rgb(205, 205, 212)),
+            Color32::from_rgb(50, 50, 54),
         )
     };
 
@@ -721,6 +848,181 @@ mod tests {
             assert_ne!(sh_txt, Color32::TRANSPARENT);
             assert_ne!(sh_bg, Color32::TRANSPARENT);
             assert_ne!(sh_stroke, Color32::TRANSPARENT);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
+    fn test_wcag_contrast_audit() {
+        for is_dark in [true, false] {
+            let mode = if is_dark { "DARK" } else { "LIGHT" };
+            let panel = panel_background(is_dark);
+            let card_unsel = card_fill(is_dark, false);
+            let card_sel = card_fill(is_dark, true);
+            let pri = text_primary(is_dark);
+            let sec = text_secondary(is_dark);
+            let prev = text_preview(is_dark);
+
+            println!("\n=== {mode} MODE CONTRAST AUDIT ===");
+            // WCAG AA requires >= 4.5:1 for normal text; WCAG AAA requires >= 7.0:1
+            let pri_panel_cr = contrast_ratio(pri, panel);
+            let pri_card_cr = contrast_ratio(pri, card_unsel);
+            let pri_sel_cr = contrast_ratio(pri, card_sel);
+            println!("Primary on Panel: {pri_panel_cr:.2}:1");
+            println!("Primary on Card Unsel: {pri_card_cr:.2}:1");
+            println!("Primary on Card Sel: {pri_sel_cr:.2}:1");
+            assert!(
+                pri_panel_cr >= 7.0,
+                "Primary text on panel must meet WCAG AAA"
+            );
+            assert!(
+                pri_card_cr >= 7.0,
+                "Primary text on card must meet WCAG AAA"
+            );
+            assert!(
+                pri_sel_cr >= 7.0,
+                "Primary text on selected card must meet WCAG AAA"
+            );
+
+            let sec_panel_cr = contrast_ratio(sec, panel);
+            let sec_card_cr = contrast_ratio(sec, card_unsel);
+            let sec_sel_cr = contrast_ratio(sec, card_sel);
+            println!("Secondary on Panel: {sec_panel_cr:.2}:1");
+            println!("Secondary on Card Unsel: {sec_card_cr:.2}:1");
+            println!("Secondary on Card Sel: {sec_sel_cr:.2}:1");
+            assert!(
+                sec_panel_cr >= 4.5,
+                "Secondary text on panel must meet WCAG AA"
+            );
+            assert!(
+                sec_card_cr >= 4.5,
+                "Secondary text on card must meet WCAG AA"
+            );
+            assert!(
+                sec_sel_cr >= 4.5,
+                "Secondary text on selected card must meet WCAG AA"
+            );
+
+            let prev_card_cr = contrast_ratio(prev, card_unsel);
+            let prev_sel_cr = contrast_ratio(prev, card_sel);
+            println!("Preview on Card Unsel: {prev_card_cr:.2}:1");
+            println!("Preview on Card Sel: {prev_sel_cr:.2}:1");
+            assert!(
+                prev_card_cr >= 7.0,
+                "Preview text on card must meet WCAG AAA"
+            );
+            assert!(
+                prev_sel_cr >= 7.0,
+                "Preview text on selected card must meet WCAG AAA"
+            );
+
+            let s_bg = search_bg(is_dark);
+            let pri_search_cr = contrast_ratio(pri, s_bg);
+            let sec_search_cr = contrast_ratio(sec, s_bg);
+            println!("Primary on Search Bg: {pri_search_cr:.2}:1");
+            println!("Secondary on Search Bg: {sec_search_cr:.2}:1");
+            assert!(pri_search_cr >= 7.0, "Primary on search must meet WCAG AAA");
+            assert!(
+                sec_search_cr >= 4.5,
+                "Secondary on search must meet WCAG AA"
+            );
+
+            let ctx = egui::Context::default();
+            setup_theme(&ctx, is_dark);
+            let style = ctx.style();
+
+            let code_job = crate::code::highlight_code(
+                &ctx,
+                &style,
+                "fn main() { let x = 42; // comment\n}",
+                crate::code::CodeLanguage::Rust,
+            );
+            let canvas_fill = if is_dark {
+                Color32::from_rgb(26, 27, 34)
+            } else {
+                Color32::from_rgb(244, 244, 247)
+            };
+            for (i, sec_fmt) in code_job.sections.iter().enumerate() {
+                let txt = &code_job.text[sec_fmt.byte_range.clone()];
+                let c = sec_fmt.format.color;
+                let cr = contrast_ratio(c, canvas_fill);
+                println!("Code token [{i}] {txt:?}: color {c:?}, on canvas: {cr:.2}:1");
+                assert!(
+                    cr >= 4.5,
+                    "Code token {txt:?} must meet WCAG AA contrast (>= 4.5:1)"
+                );
+            }
+
+            for kind in [
+                ItemKind::Text,
+                ItemKind::Url,
+                ItemKind::Code,
+                ItemKind::Color,
+                ItemKind::Image,
+            ] {
+                let (txt, bg, stroke) = category_pill_colors(is_dark, kind);
+                let txt_bg_cr = contrast_ratio(txt, bg);
+                let txt_card_cr = contrast_ratio(txt, card_unsel);
+                println!("Pill {kind:?} text on bg_tint: {txt_bg_cr:.2}:1, on card: {txt_card_cr:.2}:1, border on card: {:.2}:1",
+                    contrast_ratio(stroke, card_unsel));
+                assert!(
+                    txt_bg_cr >= 4.5,
+                    "Pill {kind:?} text on tint must meet WCAG AA"
+                );
+                assert!(
+                    txt_card_cr >= 4.5,
+                    "Pill {kind:?} text on card must meet WCAG AA"
+                );
+            }
+
+            let (sh_txt, sh_bg, _) = shortcut_badge_colors(is_dark, false);
+            let sh_unsel_cr = contrast_ratio(sh_txt, sh_bg);
+            println!("Shortcut unselected text on badge bg: {sh_unsel_cr:.2}:1");
+            assert!(
+                sh_unsel_cr >= 4.5,
+                "Shortcut badge unselected text must meet WCAG AA"
+            );
+
+            let (sh_sel_txt, sh_sel_bg, _) = shortcut_badge_colors(is_dark, true);
+            let sh_sel_cr = contrast_ratio(sh_sel_txt, sh_sel_bg);
+            println!("Shortcut selected text on badge bg: {sh_sel_cr:.2}:1");
+            assert!(
+                sh_sel_cr >= 4.5,
+                "Shortcut badge selected text must meet WCAG AA"
+            );
+
+            let toast = success_color(is_dark);
+            let toast_cr = contrast_ratio(toast, panel);
+            println!("Toast green on Panel: {toast_cr:.2}:1");
+            assert!(
+                toast_cr >= 4.5,
+                "Toast success color on panel must meet WCAG AA"
+            );
+
+            let warning = warning_color(is_dark);
+            let warn_panel_cr = contrast_ratio(warning, panel);
+            let warn_card_cr = contrast_ratio(warning, card_unsel);
+            println!("Warning orange on Panel: {warn_panel_cr:.2}:1");
+            println!("Warning orange on Card Unsel: {warn_card_cr:.2}:1");
+            assert!(
+                warn_panel_cr >= 4.5,
+                "Warning color on panel must meet WCAG AA"
+            );
+            assert!(
+                warn_card_cr >= 4.5,
+                "Warning color on card must meet WCAG AA"
+            );
+
+            let link = link_color(is_dark);
+            let link_card_cr = contrast_ratio(link, card_unsel);
+            let link_sel_cr = contrast_ratio(link, card_sel);
+            println!("Link blue on Card Unsel: {link_card_cr:.2}:1");
+            println!("Link blue on Card Sel: {link_sel_cr:.2}:1");
+            assert!(link_card_cr >= 4.5, "Link blue on card must meet WCAG AA");
+            assert!(
+                link_sel_cr >= 4.5,
+                "Link blue on selected card must meet WCAG AA"
+            );
         }
     }
 }

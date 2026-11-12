@@ -601,13 +601,16 @@ impl ClipboardApp {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(icons::MAGNIFYING_GLASS)
-                            .weak()
+                            .color(crate::theme::text_secondary(is_dark))
                             .size(13.0_f32),
                     );
                     let search_box = ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
                             .hint_text(
-                                "Search clipboard history... (↑/↓ to select, Enter to paste)",
+                                egui::RichText::new(
+                                    "Search clipboard history... (↑/↓ to select, Enter to paste)",
+                                )
+                                .color(crate::theme::text_secondary(is_dark)),
                             )
                             .frame(false)
                             .desired_width(f32::INFINITY),
@@ -647,7 +650,7 @@ impl ClipboardApp {
                         if time.elapsed() < Duration::from_secs(2) {
                             ui.label(
                                 egui::RichText::new(msg)
-                                    .color(egui::Color32::from_rgb(46, 204, 113))
+                                    .color(crate::theme::success_color(is_dark))
                                     .strong(),
                             );
                         } else {
@@ -727,15 +730,23 @@ impl ClipboardApp {
                         }
                         ContentFilter::Image => (icons::IMAGE, "No image entries found."),
                     };
-                    ui.label(egui::RichText::new(empty_icon).size(28.0).weak());
+                    ui.label(
+                        egui::RichText::new(empty_icon)
+                            .size(28.0)
+                            .color(crate::theme::text_secondary(is_dark)),
+                    );
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new(empty_hint).weak());
+                    ui.label(
+                        egui::RichText::new(empty_hint)
+                            .color(crate::theme::text_primary(is_dark))
+                            .strong(),
+                    );
                     ui.label(
                         egui::RichText::new(
                             "Copy text, links, or screenshots in any app to save here!",
                         )
                         .size(12.0)
-                        .weak(),
+                        .color(crate::theme::text_secondary(is_dark)),
                     );
                 });
                 return;
@@ -877,7 +888,7 @@ impl ClipboardApp {
                 egui::RichText::new(
                     "Choose between Light Mode, Dark Mode, or follow your operating system appearance.",
                 )
-                .weak()
+                .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );
             ui.add_space(6.0);
@@ -930,7 +941,7 @@ impl ClipboardApp {
                 egui::RichText::new(
                     "Select the keyboard shortcut used to summon the clipboard manager from anywhere.",
                 )
-                .weak()
+                .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );
             ui.add_space(6.0);
@@ -1020,7 +1031,7 @@ impl ClipboardApp {
                             icons::WARNING
                         ))
                         .size(11.0)
-                        .color(egui::Color32::from_rgb(230, 126, 34)),
+                        .color(crate::theme::warning_color(is_dark)),
                     );
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
@@ -1074,7 +1085,7 @@ impl ClipboardApp {
                 egui::RichText::new(
                     "Your clipboard history is encrypted at rest using SQLCipher (256-bit AES-GCM).\nSettings and history are strictly stored on your local machine.",
                 )
-                .weak()
+                .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );
 
@@ -1102,7 +1113,7 @@ impl ClipboardApp {
                 egui::RichText::new(
                     "CipherClipboard v0.1.0\nA secure, platform-native clipboard manager with SQLCipher 256-bit AES encryption.",
                 )
-                .weak()
+                .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );
             ui.add_space(6.0);
@@ -1153,7 +1164,9 @@ impl ClipboardApp {
                     ItemKind::Url => Self::render_url_content(ui, &item.content, is_dark),
                     ItemKind::Code => Self::render_code_content(ui, item, is_dark),
                     ItemKind::Color => Self::render_color_content(ui, item, is_dark),
-                    ItemKind::Image => Self::render_image_content(ui, item, texture_cache, ctx),
+                    ItemKind::Image => {
+                        Self::render_image_content(ui, item, texture_cache, ctx, is_dark)
+                    }
                 };
 
                 if !matches!(content_action, ItemAction::None) {
@@ -1621,7 +1634,7 @@ impl ClipboardApp {
             ui.label(
                 egui::RichText::new(format!("{} Colors:", icons::PALETTE))
                     .size(11.0)
-                    .color(egui::Color32::from_rgb(230, 126, 34))
+                    .color(crate::theme::warning_color(is_dark))
                     .strong(),
             );
 
@@ -1718,11 +1731,7 @@ impl ClipboardApp {
             content.to_string()
         };
 
-        let link_color = if is_dark {
-            egui::Color32::from_rgb(100, 181, 246)
-        } else {
-            egui::Color32::from_rgb(0, 102, 204)
-        };
+        let link_color = crate::theme::link_color(is_dark);
 
         let label = ui.add(
             egui::Label::new(egui::RichText::new(preview).color(link_color).underline())
@@ -1770,6 +1779,7 @@ impl ClipboardApp {
         item: &ClipboardItem,
         texture_cache: &mut HashMap<i64, egui::TextureHandle>,
         ctx: &egui::Context,
+        is_dark: bool,
     ) -> ItemAction {
         let Some(png_bytes) = &item.image_data else {
             return ItemAction::None;
@@ -1802,7 +1812,7 @@ impl ClipboardApp {
                 ui.label(
                     egui::RichText::new(format!("{w} × {h} px"))
                         .size(10.0)
-                        .weak(),
+                        .color(crate::theme::text_secondary(is_dark)),
                 );
             }
 
@@ -1815,7 +1825,10 @@ impl ClipboardApp {
                 });
             }
         } else {
-            ui.label(egui::RichText::new("Failed to load image preview").weak());
+            ui.label(
+                egui::RichText::new("Failed to load image preview")
+                    .color(crate::theme::text_secondary(is_dark)),
+            );
         }
 
         ItemAction::None
@@ -1873,7 +1886,7 @@ impl ClipboardApp {
                             "This action cannot be undone. All saved clips, URLs, code snippets, and images will be permanently erased.",
                         )
                         .size(12.0_f32)
-                        .weak(),
+                        .color(crate::theme::text_secondary(is_dark)),
                     );
                     ui.add_space(16.0_f32);
 
