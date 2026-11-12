@@ -101,6 +101,12 @@ pub(crate) struct AppSettings {
     pub(crate) hotkey: HotkeyPreset,
     pub(crate) hide_on_copy: bool,
     pub(crate) max_history: usize,
+    #[serde(default = "default_hide_on_blur")]
+    pub(crate) hide_on_blur: bool,
+}
+
+const fn default_hide_on_blur() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -109,6 +115,7 @@ impl Default for AppSettings {
             hotkey: HotkeyPreset::Universal,
             hide_on_copy: true,
             max_history: 100,
+            hide_on_blur: true,
         }
     }
 }
@@ -156,6 +163,7 @@ mod tests {
         let mut modified = loaded;
         modified.hotkey = HotkeyPreset::AltSpace;
         modified.hide_on_copy = false;
+        modified.hide_on_blur = false;
         modified.max_history = 250;
         modified.save(&db).expect("Save should succeed");
 
@@ -163,6 +171,7 @@ mod tests {
         let reloaded = AppSettings::load(&db);
         assert_eq!(reloaded.hotkey, HotkeyPreset::AltSpace);
         assert!(!reloaded.hide_on_copy);
+        assert!(!reloaded.hide_on_blur);
         assert_eq!(reloaded.max_history, 250);
     }
 
