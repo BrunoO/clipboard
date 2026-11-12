@@ -1,4 +1,5 @@
 #![allow(unsafe_code)]
+#![allow(unexpected_cfgs)]
 
 //! Cross-platform focus restoration and simulated paste automation.
 //!
@@ -236,10 +237,6 @@ mod macos {
     pub(super) fn setup_reopen_observer() {
         unsafe {
             let superclass = class!(NSObject);
-            if superclass.is_null() {
-                return;
-            }
-
             if let Some(mut decl) = ClassDecl::new("CipherReopenObserver", superclass) {
                 decl.add_method(
                     sel!(onNotification:),
@@ -249,10 +246,6 @@ mod macos {
             }
 
             let observer_cls = class!(CipherReopenObserver);
-            if observer_cls.is_null() {
-                return;
-            }
-
             let observer: *mut Object = msg_send![observer_cls, new];
             let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
             if center.is_null() || observer.is_null() {
