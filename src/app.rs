@@ -53,6 +53,7 @@ pub(crate) struct ClipboardApp {
     is_visible: bool,
     has_been_focused: bool,
     was_inactive_since_hidden: bool,
+    selected_index: usize,
     focus_search_input: bool,
     last_toggle_instant: Option<Instant>,
     settings: AppSettings,
@@ -88,6 +89,7 @@ impl ClipboardApp {
             is_visible: true,
             has_been_focused: false,
             was_inactive_since_hidden: false,
+            selected_index: 0,
             focus_search_input: true,
             last_toggle_instant: None,
             settings,
@@ -115,6 +117,7 @@ impl ClipboardApp {
         self.is_visible = true;
         self.has_been_focused = false;
         self.was_inactive_since_hidden = false;
+        self.selected_index = 0;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -218,35 +221,154 @@ impl ClipboardApp {
         }
     }
 
-    fn handle_enter_key(&mut self, ctx: &egui::Context) {
+    fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
         if self.active_view != ActiveView::History || !self.is_visible {
             return;
         }
 
-        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-            let filter = self.content_filter;
-            let matched_action = self
-                .items
-                .iter()
-                .find(|i| match filter {
-                    ContentFilter::All => true,
-                    ContentFilter::Text => i.kind == ItemKind::Text,
-                    ContentFilter::Links => i.kind == ItemKind::Url,
-                    ContentFilter::Code => i.kind == ItemKind::Code,
-                    ContentFilter::Colors => {
-                        i.kind == ItemKind::Color || !i.embedded_colors().is_empty()
-                    }
-                    ContentFilter::Image => i.kind == ItemKind::Image,
-                })
-                .and_then(|item| match item.kind {
-                    ItemKind::Image => item.image_data.clone().map(ItemAction::CopyImage),
-                    _ => Some(ItemAction::CopyText(item.content.clone())),
-                });
+        let filtered_indices = self.get_filtered_indices();
+        if filtered_indices.is_empty() {
+            self.selected_index = 0;
+            return;
+        }
 
-            match matched_action {
+        if self.selected_index >= filtered_indices.len() {
+            self.selected_index = filtered_indices.len() - 1;
+        }
+
+        let mut move_down = false;
+        let mut move_up = false;
+        let mut wrap_down = false;
+        let mut wrap_up = false;
+        let mut copy_selected = false;
+        let mut delete_selected = false;
+        let mut copy_shortcut_slot: Option<usize> = None;
+
+        ctx.input_mut(|i| {
+            // 1. Direct number shortcuts (Cmd+1..9 on macOS, Ctrl+1..9 on Win/Linux)
+            let num_keys = [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
+            ];
+            for (idx, &k) in num_keys.iter().enumerate() {
+                if i.consume_key(egui::Modifiers::COMMAND, k) {
+                    copy_shortcut_slot = Some(idx);
+                    return;
+                }
+            }
+
+            // 2. Down navigation (ArrowDown, Tab without Shift, Ctrl+N, Ctrl+J)
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::N)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::J)
+            {
+                move_down = true;
+            } else if i.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
+                wrap_down = true;
+            }
+
+            // 3. Up navigation (ArrowUp, Shift+Tab, Ctrl+P, Ctrl+K)
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::P)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::K)
+            {
+                move_up = true;
+            } else if i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab) {
+                wrap_up = true;
+            }
+
+            // 4. Enter to copy selected
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+                copy_selected = true;
+            }
+
+            // 5. Delete or Cmd+Backspace / Ctrl+Backspace to delete selected
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Backspace)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::Backspace)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::D)
+            {
+                delete_selected = true;
+            }
+        });
+
+        if let Some(slot) = copy_shortcut_slot {
+            self.selected_index = slot;
+            self.copy_filtered_item(&filtered_indices, slot, ctx);
+            return;
+        }
+
+        if move_down {
+            if self.selected_index + 1 < filtered_indices.len() {
+                self.selected_index += 1;
+                ctx.request_repaint();
+            }
+        } else if wrap_down {
+            self.selected_index = if self.selected_index + 1 < filtered_indices.len() {
+                self.selected_index + 1
+            } else {
+                0
+            };
+            ctx.request_repaint();
+        }
+
+        if move_up {
+            if self.selected_index > 0 {
+                self.selected_index -= 1;
+                ctx.request_repaint();
+            }
+        } else if wrap_up {
+            self.selected_index = if self.selected_index > 0 {
+                self.selected_index - 1
+            } else {
+                filtered_indices.len().saturating_sub(1)
+            };
+            ctx.request_repaint();
+        }
+
+        if copy_selected {
+            self.copy_filtered_item(&filtered_indices, self.selected_index, ctx);
+        }
+
+        if delete_selected {
+            self.delete_filtered_item(&filtered_indices, ctx);
+        }
+    }
+
+    fn copy_filtered_item(&mut self, filtered_indices: &[usize], slot: usize, ctx: &egui::Context) {
+        if let Some(&item_idx) = filtered_indices.get(slot) {
+            let copy_action = self.items.get(item_idx).and_then(|item| match item.kind {
+                ItemKind::Image => item.image_data.clone().map(ItemAction::CopyImage),
+                _ => Some(ItemAction::CopyText(item.content.clone())),
+            });
+            match copy_action {
                 Some(ItemAction::CopyImage(png)) => self.copy_image_to_clipboard(&png, ctx),
                 Some(ItemAction::CopyText(text)) => self.copy_text_to_clipboard(&text, ctx),
                 _ => {}
+            }
+        }
+    }
+
+    fn delete_filtered_item(&mut self, filtered_indices: &[usize], ctx: &egui::Context) {
+        if let Some(&item_idx) = filtered_indices.get(self.selected_index) {
+            if let Some(item) = self.items.get(item_idx) {
+                let id = item.id;
+                let _ = self.db.delete(id);
+                self.texture_cache.remove(&id);
+                self.refresh_items();
+                let new_count = self.get_filtered_indices().len();
+                if self.selected_index >= new_count && new_count > 0 {
+                    self.selected_index = new_count - 1;
+                }
+                self.show_toast(&format!("{} Entry deleted.", icons::TRASH));
+                ctx.request_repaint();
             }
         }
     }
@@ -292,6 +414,7 @@ impl ClipboardApp {
         if new_items_detected || self.search_query != self.last_query_cached {
             self.refresh_items();
             self.last_query_cached = self.search_query.clone();
+            self.selected_index = 0;
         }
     }
 
@@ -310,6 +433,7 @@ impl ClipboardApp {
     }
 
     fn render_filter_tabs(&mut self, ui: &mut egui::Ui) {
+        let old_filter = self.content_filter;
         let all_count = self.items.len();
         let text_count = self
             .items
@@ -369,6 +493,11 @@ impl ClipboardApp {
                 format!("{} Images ({img_count})", icons::IMAGE),
             );
         });
+
+        if self.content_filter != old_filter {
+            self.selected_index = 0;
+            self.focus_search_input = true;
+        }
     }
 
     fn render_header_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -419,7 +548,7 @@ impl ClipboardApp {
             ui.label(icons::MAGNIFYING_GLASS);
             let search_box = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("Search clipboard history... (Esc to hide)")
+                    .hint_text("Search clipboard history... (↑/↓ to select, Enter to paste)")
                     .desired_width(f32::INFINITY),
             );
 
@@ -456,16 +585,19 @@ impl ClipboardApp {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new("Press Esc to hide").weak().size(11.0));
+                    #[cfg(target_os = "macos")]
+                    let nav_hint = "↑/↓ or Tab • Enter • Cmd+1..9 • Esc";
+                    #[cfg(not(target_os = "macos"))]
+                    let nav_hint = "↑/↓ or Tab • Enter • Ctrl+1..9 • Esc";
+                    ui.label(egui::RichText::new(nav_hint).weak().size(10.5));
                 });
             });
         });
     }
 
-    fn render_central_panel(&mut self, ctx: &egui::Context) {
+    fn get_filtered_indices(&self) -> Vec<usize> {
         let filter = self.content_filter;
-        let filtered_indices: Vec<usize> = self
-            .items
+        self.items
             .iter()
             .enumerate()
             .filter_map(|(idx, item)| {
@@ -485,7 +617,12 @@ impl ClipboardApp {
                     None
                 }
             })
-            .collect();
+            .collect()
+    }
+
+    fn render_central_panel(&mut self, ctx: &egui::Context) {
+        let filter = self.content_filter;
+        let filtered_indices = self.get_filtered_indices();
 
         egui::CentralPanel::default().show(ctx, |ui| {
             if filtered_indices.is_empty() {
@@ -533,16 +670,35 @@ impl ClipboardApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let mut action = ItemAction::None;
+                let mut clicked_slot: Option<usize> = None;
 
-                for &idx in filtered_indices {
+                for (slot, &idx) in filtered_indices.iter().enumerate() {
                     if let Some(item) = self.items.get(idx) {
-                        let item_action =
-                            Self::render_clipboard_item(ui, item, &mut self.texture_cache, ctx);
+                        let is_selected = slot == self.selected_index;
+                        let shortcut_num = if slot < 9 { Some(slot + 1) } else { None };
+
+                        let (item_action, clicked) = Self::render_clipboard_item(
+                            ui,
+                            item,
+                            &mut self.texture_cache,
+                            ctx,
+                            is_selected,
+                            shortcut_num,
+                        );
+
+                        if clicked {
+                            clicked_slot = Some(slot);
+                        }
+
                         if !matches!(item_action, ItemAction::None) {
                             action = item_action;
                         }
                     }
                     ui.add_space(4.0);
+                }
+
+                if let Some(slot) = clicked_slot {
+                    self.selected_index = slot;
                 }
 
                 match action {
@@ -781,14 +937,30 @@ impl ClipboardApp {
         item: &ClipboardItem,
         texture_cache: &mut HashMap<i64, egui::TextureHandle>,
         ctx: &egui::Context,
-    ) -> ItemAction {
+        is_selected: bool,
+        shortcut_num: Option<usize>,
+    ) -> (ItemAction, bool) {
         let mut action = ItemAction::None;
 
-        egui::Frame::group(ui.style())
+        let stroke = if is_selected {
+            egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(52, 152, 219))
+        } else {
+            ui.style().visuals.widgets.noninteractive.bg_stroke
+        };
+
+        let fill = if is_selected {
+            egui::Color32::from_rgb(32, 44, 58)
+        } else {
+            ui.style().visuals.widgets.noninteractive.bg_fill
+        };
+
+        let frame_resp = egui::Frame::group(ui.style())
             .rounding(6.0)
+            .stroke(stroke)
+            .fill(fill)
             .inner_margin(8.0)
             .show(ui, |ui| {
-                let header_action = Self::render_item_header(ui, item);
+                let header_action = Self::render_item_header(ui, item, shortcut_num, is_selected);
                 if !matches!(header_action, ItemAction::None) {
                     action = header_action;
                 }
@@ -819,7 +991,12 @@ impl ClipboardApp {
                 }
             });
 
-        action
+        if is_selected {
+            frame_resp.response.scroll_to_me(Some(egui::Align::Center));
+        }
+
+        let clicked = frame_resp.response.clicked();
+        (action, clicked)
     }
 
     fn render_item_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
@@ -908,23 +1085,48 @@ impl ClipboardApp {
         }
     }
 
-    fn render_item_header(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+    fn render_item_header(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        shortcut_num: Option<usize>,
+        is_selected: bool,
+    ) -> ItemAction {
         let mut action = ItemAction::None;
 
         ui.horizontal(|ui| {
             Self::render_item_badge(ui, item);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(num) = shortcut_num {
+                    #[cfg(target_os = "macos")]
+                    let shortcut_str = format!("Cmd+{num}");
+                    #[cfg(not(target_os = "macos"))]
+                    let shortcut_str = format!("Ctrl+{num}");
+
+                    let badge_color = if is_selected {
+                        egui::Color32::from_rgb(52, 152, 219)
+                    } else {
+                        egui::Color32::from_rgb(110, 120, 130)
+                    };
+
+                    ui.label(
+                        egui::RichText::new(shortcut_str)
+                            .size(10.0)
+                            .color(badge_color)
+                            .strong(),
+                    );
+                }
+
                 if ui
                     .small_button(icons::TRASH)
-                    .on_hover_text("Delete entry")
+                    .on_hover_text("Delete entry (Delete or Cmd+Backspace)")
                     .clicked()
                 {
                     action = ItemAction::Delete(item.id);
                 }
                 if ui
                     .small_button(format!("{} Copy", icons::COPY))
-                    .on_hover_text("Copy back to clipboard")
+                    .on_hover_text("Copy back to clipboard (Enter)")
                     .clicked()
                 {
                     match item.kind {
@@ -1403,7 +1605,7 @@ impl eframe::App for ClipboardApp {
         self.handle_window_close_request(ctx);
         self.handle_hotkey_toggle(ctx);
         self.handle_escape_key(ctx);
-        self.handle_enter_key(ctx);
+        self.handle_keyboard_navigation(ctx);
         self.handle_app_activation(ctx);
         self.handle_monitor_updates();
 
