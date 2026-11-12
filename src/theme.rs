@@ -12,24 +12,28 @@ pub(crate) fn setup_theme(ctx: &egui::Context) {
     visuals.panel_fill = panel_background();
     visuals.window_fill = panel_background();
     visuals.window_rounding = card_rounding();
-    visuals.override_text_color = Some(Color32::from_rgb(238, 238, 240));
+    visuals.override_text_color = Some(Color32::from_rgb(245, 245, 248));
 
     // Base widget frames
     visuals.widgets.noninteractive.bg_fill = card_fill(false);
     visuals.widgets.noninteractive.bg_stroke = card_stroke(false);
+    visuals.widgets.noninteractive.fg_stroke =
+        Stroke::new(1.0_f32, Color32::from_rgb(240, 240, 245));
     visuals.widgets.noninteractive.rounding = card_rounding();
 
     visuals.widgets.inactive.bg_fill = button_inactive_fill();
-    visuals.widgets.inactive.bg_stroke =
-        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 12));
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(70, 70, 75));
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(240, 240, 245));
     visuals.widgets.inactive.rounding = button_rounding();
 
     visuals.widgets.hovered.bg_fill = button_hover_fill();
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, accent_color());
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
     visuals.widgets.hovered.rounding = button_rounding();
 
     visuals.widgets.active.bg_fill = accent_color();
     visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, accent_color());
+    visuals.widgets.active.fg_stroke = Stroke::new(2.0_f32, Color32::WHITE);
     visuals.widgets.active.rounding = button_rounding();
 
     // Selection visuals
@@ -114,8 +118,8 @@ pub(crate) const fn card_fill(is_selected: bool) -> Color32 {
     if is_selected {
         #[cfg(target_os = "macos")]
         {
-            // Apple System Blue tinted dark selection (#183350)
-            Color32::from_rgb(24, 51, 80)
+            // Apple System Blue tinted dark selection (#1E3A5F)
+            Color32::from_rgb(30, 58, 95)
         }
         #[cfg(target_os = "windows")]
         {
@@ -129,8 +133,8 @@ pub(crate) const fn card_fill(is_selected: bool) -> Color32 {
     } else {
         #[cfg(target_os = "macos")]
         {
-            // Apple Secondary Grouped Background (#2C2C2E)
-            Color32::from_rgb(44, 44, 46)
+            // Apple Secondary Grouped Background (#28282A)
+            Color32::from_rgb(40, 40, 43)
         }
         #[cfg(target_os = "windows")]
         {
@@ -152,17 +156,17 @@ pub(crate) fn card_stroke(is_selected: bool) -> Stroke {
     } else {
         #[cfg(target_os = "macos")]
         {
-            // Subtle Apple separator hairline (#3A3A3C)
-            Stroke::new(1.0_f32, Color32::from_rgb(58, 58, 60))
+            // High-contrast clean card border (#444448)
+            Stroke::new(1.0_f32, Color32::from_rgb(68, 68, 72))
         }
         #[cfg(target_os = "windows")]
         {
-            // Windows 11 CardStrokeColorDefault (#383838)
-            Stroke::new(1.0_f32, Color32::from_rgb(56, 56, 56))
+            // Windows 11 CardStrokeColorDefault (#3C3C3C)
+            Stroke::new(1.0_f32, Color32::from_rgb(60, 60, 60))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Stroke::new(1.0_f32, Color32::from_rgb(58, 58, 60))
+            Stroke::new(1.0_f32, Color32::from_rgb(68, 68, 72))
         }
     }
 }
@@ -215,8 +219,8 @@ pub(crate) const fn accent_color() -> Color32 {
 pub(crate) const fn search_bg() -> Color32 {
     #[cfg(target_os = "macos")]
     {
-        // Apple Spotlight / Raycast input fill (#262628)
-        Color32::from_rgb(38, 38, 40)
+        // Apple Spotlight / Raycast input fill (#222224)
+        Color32::from_rgb(34, 34, 36)
     }
     #[cfg(target_os = "windows")]
     {
@@ -237,7 +241,7 @@ pub(crate) fn search_stroke(is_focused: bool) -> Stroke {
     } else {
         #[cfg(target_os = "macos")]
         {
-            Stroke::new(1.0_f32, Color32::from_rgb(58, 58, 60))
+            Stroke::new(1.0_f32, Color32::from_rgb(68, 68, 72))
         }
         #[cfg(target_os = "windows")]
         {
@@ -245,7 +249,7 @@ pub(crate) fn search_stroke(is_focused: bool) -> Stroke {
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Stroke::new(1.0_f32, Color32::from_rgb(58, 58, 60))
+            Stroke::new(1.0_f32, Color32::from_rgb(68, 68, 72))
         }
     }
 }
@@ -255,7 +259,7 @@ pub(crate) fn search_stroke(is_focused: bool) -> Stroke {
 pub(crate) const fn button_inactive_fill() -> Color32 {
     #[cfg(target_os = "macos")]
     {
-        Color32::from_rgba_premultiplied(255, 255, 255, 14)
+        Color32::from_rgb(46, 46, 50)
     }
     #[cfg(target_os = "windows")]
     {
@@ -272,15 +276,15 @@ pub(crate) const fn button_inactive_fill() -> Color32 {
 pub(crate) const fn button_hover_fill() -> Color32 {
     #[cfg(target_os = "macos")]
     {
-        Color32::from_rgba_premultiplied(255, 255, 255, 26)
+        Color32::from_rgb(64, 64, 70)
     }
     #[cfg(target_os = "windows")]
     {
-        Color32::from_rgb(54, 54, 54)
+        Color32::from_rgb(56, 56, 56)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        Color32::from_rgb(56, 56, 58)
+        Color32::from_rgb(58, 58, 60)
     }
 }
 
@@ -392,18 +396,20 @@ pub(crate) const fn top_padding() -> f32 {
 // Pill & Badge UI Components
 // ---------------------------------------------------------------------------
 
-/// Renders a category pill tag with subtle tinted background and distinct colored text.
+/// Renders a category pill tag with high-contrast, pleasing colors and distinct border.
 pub(crate) fn render_pill_tag(
     ui: &mut egui::Ui,
     icon: &str,
     text: &str,
     text_color: Color32,
     bg_tint: Color32,
+    border_color: Color32,
 ) {
     egui::Frame::none()
         .rounding(pill_rounding())
         .fill(bg_tint)
-        .inner_margin(egui::Margin::symmetric(6.0_f32, 2.0_f32))
+        .stroke(Stroke::new(1.0_f32, border_color))
+        .inner_margin(egui::Margin::symmetric(7.0_f32, 2.0_f32))
         .show(ui, |ui| {
             ui.label(
                 egui::RichText::new(format!("{icon} {text}"))
@@ -423,21 +429,16 @@ pub(crate) fn render_segmented_tab(
     count: usize,
 ) -> egui::Response {
     let (fill, stroke, text_color) = if selected {
-        #[cfg(target_os = "macos")]
-        let sel_fill = Color32::from_rgba_premultiplied(255, 255, 255, 38);
-        #[cfg(not(target_os = "macos"))]
-        let sel_fill = Color32::from_rgba_premultiplied(255, 255, 255, 28);
-
         (
-            sel_fill,
+            accent_color(),
             Stroke::new(1.0_f32, accent_color()),
             Color32::WHITE,
         )
     } else {
         (
-            Color32::TRANSPARENT,
-            Stroke::NONE,
-            Color32::from_rgb(160, 160, 165),
+            Color32::from_rgb(38, 38, 42),
+            Stroke::new(1.0_f32, Color32::from_rgb(58, 58, 62)),
+            Color32::from_rgb(205, 205, 212),
         )
     };
 

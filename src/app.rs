@@ -502,7 +502,11 @@ impl ClipboardApp {
         ui.horizontal(|ui| {
             ui.add_space(crate::theme::header_left_padding());
 
-            let title_resp = ui.heading(format!("{} Clipboard", icons::LOCK_KEY));
+            let title_resp = ui.heading(
+                egui::RichText::new(format!("{} Clipboard", icons::LOCK_KEY))
+                    .color(egui::Color32::from_rgb(245, 245, 248))
+                    .strong(),
+            );
             if title_resp.interact(egui::Sense::drag()).dragged() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
@@ -510,7 +514,7 @@ impl ClipboardApp {
             let badge = self.settings.hotkey.badge();
             ui.label(
                 egui::RichText::new(format!("({badge})"))
-                    .weak()
+                    .color(egui::Color32::from_rgb(180, 180, 186))
                     .size(11.0_f32),
             );
 
@@ -597,7 +601,7 @@ impl ClipboardApp {
                     .fill(crate::theme::panel_background())
                     .stroke(egui::Stroke::new(
                         1.0_f32,
-                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 15),
+                        egui::Color32::from_rgb(58, 58, 62),
                     ))
                     .inner_margin(egui::Margin::symmetric(10.0_f32, 6.0_f32)),
             )
@@ -620,7 +624,7 @@ impl ClipboardApp {
                                 icons::SHIELD_CHECK,
                                 self.items.len()
                             ))
-                            .weak()
+                            .color(egui::Color32::from_rgb(180, 180, 186))
                             .size(11.0_f32),
                         );
                     }
@@ -630,7 +634,11 @@ impl ClipboardApp {
                         let nav_hint = "↑/↓ or Tab • Enter • Cmd+1..9 • Esc";
                         #[cfg(not(target_os = "macos"))]
                         let nav_hint = "↑/↓ or Tab • Enter • Ctrl+1..9 • Esc";
-                        ui.label(egui::RichText::new(nav_hint).weak().size(10.5_f32));
+                        ui.label(
+                            egui::RichText::new(nav_hint)
+                                .color(egui::Color32::from_rgb(165, 165, 172))
+                                .size(10.5_f32),
+                        );
                     });
                 });
             });
@@ -1032,105 +1040,120 @@ impl ClipboardApp {
         (action, clicked)
     }
 
+    fn render_text_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+        let embedded = item.embedded_colors();
+        let color_hint = match embedded.len() {
+            0 => String::new(),
+            1 => format!(" • {} 1 color", icons::PALETTE),
+            n => format!(" • {} {n} colors", icons::PALETTE),
+        };
+        crate::theme::render_pill_tag(
+            ui,
+            icons::FILE_TEXT,
+            "Text",
+            egui::Color32::from_rgb(220, 220, 225),
+            egui::Color32::from_rgb(45, 45, 48),
+            egui::Color32::from_rgb(70, 70, 74),
+        );
+        ui.label(
+            egui::RichText::new(format!("{color_hint} • {}", item.created_at))
+                .size(10.0_f32)
+                .color(egui::Color32::from_rgb(175, 175, 182)),
+        );
+    }
+
+    fn render_url_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+        let host = item.url_host().unwrap_or_else(|| "link".to_string());
+        crate::theme::render_pill_tag(
+            ui,
+            icons::LINK,
+            "Link",
+            egui::Color32::from_rgb(100, 190, 255),
+            egui::Color32::from_rgb(18, 44, 75),
+            egui::Color32::from_rgb(30, 90, 160),
+        );
+        ui.label(
+            egui::RichText::new(format!("• {host} • {}", item.created_at))
+                .size(10.0_f32)
+                .color(egui::Color32::from_rgb(175, 175, 182)),
+        );
+    }
+
+    fn render_code_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+        let (icon, lang_name) = item
+            .code_language()
+            .map_or((icons::CODE, "Code"), |l| (l.icon(), l.name()));
+        let line_count = item.content.lines().count();
+        let embedded = item.embedded_colors();
+        let color_hint = match embedded.len() {
+            0 => String::new(),
+            1 => format!(" • {} 1 color", icons::PALETTE),
+            n => format!(" • {} {n} colors", icons::PALETTE),
+        };
+        crate::theme::render_pill_tag(
+            ui,
+            icon,
+            lang_name,
+            egui::Color32::from_rgb(255, 130, 120),
+            egui::Color32::from_rgb(58, 26, 26),
+            egui::Color32::from_rgb(130, 48, 48),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                "• {line_count} lines{color_hint} • {}",
+                item.created_at
+            ))
+            .size(10.0_f32)
+            .color(egui::Color32::from_rgb(175, 175, 182)),
+        );
+    }
+
+    fn render_color_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+        let hex = item
+            .parsed_color()
+            .map_or_else(|| item.content.clone(), crate::color::ParsedColor::to_hex);
+        crate::theme::render_pill_tag(
+            ui,
+            icons::PALETTE,
+            "Color",
+            egui::Color32::from_rgb(220, 150, 255),
+            egui::Color32::from_rgb(46, 24, 58),
+            egui::Color32::from_rgb(110, 50, 140),
+        );
+        ui.label(
+            egui::RichText::new(format!("• {hex} • {}", item.created_at))
+                .size(10.0_f32)
+                .color(egui::Color32::from_rgb(175, 175, 182)),
+        );
+    }
+
+    fn render_image_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
+        let dims = match (item.width, item.height) {
+            (Some(w), Some(h)) => format!("Image ({w}x{h})"),
+            _ => "Image".to_string(),
+        };
+        crate::theme::render_pill_tag(
+            ui,
+            icons::IMAGE,
+            &dims,
+            egui::Color32::from_rgb(110, 230, 145),
+            egui::Color32::from_rgb(20, 48, 30),
+            egui::Color32::from_rgb(40, 110, 65),
+        );
+        ui.label(
+            egui::RichText::new(format!("• {}", item.created_at))
+                .size(10.0_f32)
+                .color(egui::Color32::from_rgb(175, 175, 182)),
+        );
+    }
+
     fn render_item_badge(ui: &mut egui::Ui, item: &ClipboardItem) {
         match item.kind {
-            ItemKind::Text => {
-                let embedded = item.embedded_colors();
-                let color_hint = match embedded.len() {
-                    0 => String::new(),
-                    1 => format!(" • {} 1 color", icons::PALETTE),
-                    n => format!(" • {} {n} colors", icons::PALETTE),
-                };
-                crate::theme::render_pill_tag(
-                    ui,
-                    icons::FILE_TEXT,
-                    "Text",
-                    egui::Color32::from_rgb(174, 174, 178),
-                    egui::Color32::from_rgba_premultiplied(142, 142, 147, 30),
-                );
-                ui.label(
-                    egui::RichText::new(format!("{color_hint} • {}", item.created_at))
-                        .size(10.0_f32)
-                        .weak(),
-                );
-            }
-            ItemKind::Url => {
-                let host = item.url_host().unwrap_or_else(|| "link".to_string());
-                crate::theme::render_pill_tag(
-                    ui,
-                    icons::LINK,
-                    "Link",
-                    egui::Color32::from_rgb(64, 156, 255),
-                    egui::Color32::from_rgba_premultiplied(10, 132, 255, 30),
-                );
-                ui.label(
-                    egui::RichText::new(format!("• {host} • {}", item.created_at))
-                        .size(10.0_f32)
-                        .weak(),
-                );
-            }
-            ItemKind::Code => {
-                let (icon, lang_name) = item
-                    .code_language()
-                    .map_or((icons::CODE, "Code"), |l| (l.icon(), l.name()));
-                let line_count = item.content.lines().count();
-                let embedded = item.embedded_colors();
-                let color_hint = match embedded.len() {
-                    0 => String::new(),
-                    1 => format!(" • {} 1 color", icons::PALETTE),
-                    n => format!(" • {} {n} colors", icons::PALETTE),
-                };
-                crate::theme::render_pill_tag(
-                    ui,
-                    icon,
-                    lang_name,
-                    egui::Color32::from_rgb(255, 105, 97),
-                    egui::Color32::from_rgba_premultiplied(255, 69, 58, 30),
-                );
-                ui.label(
-                    egui::RichText::new(format!(
-                        "• {line_count} lines{color_hint} • {}",
-                        item.created_at
-                    ))
-                    .size(10.0_f32)
-                    .weak(),
-                );
-            }
-            ItemKind::Color => {
-                let hex = item
-                    .parsed_color()
-                    .map_or_else(|| item.content.clone(), crate::color::ParsedColor::to_hex);
-                crate::theme::render_pill_tag(
-                    ui,
-                    icons::PALETTE,
-                    "Color",
-                    egui::Color32::from_rgb(218, 143, 255),
-                    egui::Color32::from_rgba_premultiplied(191, 90, 242, 30),
-                );
-                ui.label(
-                    egui::RichText::new(format!("• {hex} • {}", item.created_at))
-                        .size(10.0_f32)
-                        .weak(),
-                );
-            }
-            ItemKind::Image => {
-                let dims = match (item.width, item.height) {
-                    (Some(w), Some(h)) => format!("Image ({w}x{h})"),
-                    _ => "Image".to_string(),
-                };
-                crate::theme::render_pill_tag(
-                    ui,
-                    icons::IMAGE,
-                    &dims,
-                    egui::Color32::from_rgb(74, 222, 128),
-                    egui::Color32::from_rgba_premultiplied(48, 209, 88, 30),
-                );
-                ui.label(
-                    egui::RichText::new(format!("• {}", item.created_at))
-                        .size(10.0_f32)
-                        .weak(),
-                );
-            }
+            ItemKind::Text => Self::render_text_badge(ui, item),
+            ItemKind::Url => Self::render_url_badge(ui, item),
+            ItemKind::Code => Self::render_code_badge(ui, item),
+            ItemKind::Color => Self::render_color_badge(ui, item),
+            ItemKind::Image => Self::render_image_badge(ui, item),
         }
     }
 
@@ -1152,18 +1175,24 @@ impl ClipboardApp {
                     #[cfg(not(target_os = "macos"))]
                     let shortcut_str = format!("Ctrl+{num}");
 
-                    let (text_c, bg_c) = if is_selected {
-                        (egui::Color32::WHITE, crate::theme::accent_color())
+                    let (text_c, bg_c, stroke_c) = if is_selected {
+                        (
+                            egui::Color32::WHITE,
+                            crate::theme::accent_color(),
+                            crate::theme::accent_color(),
+                        )
                     } else {
                         (
-                            egui::Color32::from_rgb(140, 140, 145),
-                            egui::Color32::from_rgba_premultiplied(255, 255, 255, 16),
+                            egui::Color32::from_rgb(210, 210, 215),
+                            egui::Color32::from_rgb(46, 46, 50),
+                            egui::Color32::from_rgb(70, 70, 75),
                         )
                     };
 
                     egui::Frame::none()
                         .rounding(crate::theme::pill_rounding())
                         .fill(bg_c)
+                        .stroke(egui::Stroke::new(1.0_f32, stroke_c))
                         .inner_margin(egui::Margin::symmetric(5.0_f32, 1.5_f32))
                         .show(ui, |ui| {
                             ui.label(
@@ -1588,7 +1617,12 @@ impl ClipboardApp {
         };
 
         let label = ui.add(
-            egui::Label::new(egui::RichText::new(preview).monospace()).sense(egui::Sense::click()),
+            egui::Label::new(
+                egui::RichText::new(preview)
+                    .monospace()
+                    .color(egui::Color32::from_rgb(235, 235, 240)),
+            )
+            .sense(egui::Sense::click()),
         );
 
         if label.clicked() {
