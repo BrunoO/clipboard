@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod code;
 mod color;
@@ -17,7 +19,7 @@ use std::fs;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🚀 Starting Encrypted Clipboard Manager...");
+    println!("🚀 Starting CipherClipboard (Encrypted Clipboard Manager)...");
 
     // 1. Resolve application data directory (cross-platform: macOS, Windows, Linux)
     let data_dir = get_app_data_dir();
@@ -40,11 +42,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("⚙️  Loaded settings: hotkey preset {:?}", settings.hotkey);
 
     // 6. Configure window options for eframe
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([440.0, 580.0])
+        .with_min_inner_size([320.0, 400.0])
+        .with_title("CipherClipboard");
+
+    // Load bundled icon for the window title bar and taskbar
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
+        viewport = viewport.with_icon(icon);
+    }
+
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([440.0, 580.0])
-            .with_min_inner_size([320.0, 400.0])
-            .with_title("Encrypted Clipboard"),
+        viewport,
         ..Default::default()
     };
 
@@ -54,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 8. Start GUI, global hotkeys, and background monitor
     eframe::run_native(
-        "Encrypted Clipboard",
+        "CipherClipboard",
         native_options,
         Box::new(move |cc| {
             // Apply modern dark visuals
@@ -92,9 +101,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Computes the OS-appropriate local application data directory.
 ///
-/// - macOS:   ~/Library/Application Support/rusty-clipboard/
-/// - Windows: %LOCALAPPDATA%\rusty-clipboard\
-/// - Linux:   ~/.local/share/rusty-clipboard/
+/// - macOS:   ~/Library/Application Support/cipherclipboard/
+/// - Windows: %LOCALAPPDATA%\cipherclipboard\
+/// - Linux:   ~/.local/share/cipherclipboard/
 fn get_app_data_dir() -> PathBuf {
-    dirs::data_local_dir().map_or_else(|| PathBuf::from("./data"), |p| p.join("rusty-clipboard"))
+    dirs::data_local_dir().map_or_else(
+        || PathBuf::from("./data"),
+        |p| {
+            let new_dir = p.join("cipherclipboard");
+            let legacy_dir = p.join("rusty-clipboard");
+            if !new_dir.exists() && legacy_dir.exists() {
+                legacy_dir
+            } else {
+                new_dir
+            }
+        },
+    )
 }

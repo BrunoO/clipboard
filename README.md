@@ -1,4 +1,4 @@
-# Rusty Clipboard 📋🔒
+# CipherClipboard 📋🔒
 
 A lightweight, encrypted cross-platform clipboard manager written in Rust.
 
@@ -42,7 +42,7 @@ Designed as a clean, idiomatic project for learning Rust, featuring:
 ## Project Structure
 
 ```
-rusty-clipboard/
+cipherclipboard/
 ├── Cargo.toml            # Project manifest & dependencies
 ├── src/
 │   ├── main.rs           # App setup, directory discovery, eframe launcher
@@ -86,8 +86,8 @@ cargo run
 ```
 
 On first launch:
-1. It automatically generates a secure 256-bit encryption key and registers it with your **macOS Keychain** (under service `rusty_clipboard`).
-2. Creates an encrypted database `clipboard_history.db` in `~/Library/Application Support/rusty-clipboard/`.
+1. It automatically generates a secure 256-bit encryption key and registers it with your **OS Keyring** (under service `cipherclipboard`).
+2. Creates an encrypted database `clipboard_history.db` in `~/Library/Application Support/cipherclipboard/` (or `%LOCALAPPDATA%\cipherclipboard\` on Windows).
 3. Opens the UI and starts monitoring copied text in the background.
 
 ---

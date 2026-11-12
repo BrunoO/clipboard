@@ -1,10 +1,16 @@
 [package]
-name = "rusty-clipboard"
+name = "cipherclipboard"
 version = "0.1.0"
 edition = "2021"
 description = "A simple, encrypted cross-platform clipboard manager in Rust"
-authors = ["Your Name"]
+authors = ["BrunoO"]
 license = "MIT"
+repository = "https://github.com/BrunoO/clipboard"
+homepage = "https://github.com/BrunoO/clipboard"
+readme = "README.md"
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
 
 [dependencies]
 eframe = "0.29"

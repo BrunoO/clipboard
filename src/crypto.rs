@@ -3,7 +3,8 @@ use rand::Rng;
 use std::fs;
 use std::path::Path;
 
-const SERVICE_NAME: &str = "rusty_clipboard";
+const SERVICE_NAME: &str = "cipherclipboard";
+const LEGACY_SERVICE_NAME: &str = "rusty_clipboard";
 const KEY_NAME: &str = "db_encryption_key";
 
 /// Retrieves or securely generates a 256-bit encryption key.
@@ -36,16 +37,17 @@ pub(crate) fn get_or_create_encryption_key(
         }
     }
 
-    // 2. Try reading from the OS Keyring
-    let keyring_entry = Entry::new(SERVICE_NAME, KEY_NAME).ok();
-    if let Some(ref entry) = keyring_entry {
-        if let Ok(key) = entry.get_password() {
-            let trimmed = key.trim().to_string();
-            if !trimmed.is_empty() {
-                println!("🔐 Loaded encryption key from OS Keyring.");
-                // Cache locally so future rebuilds don't trigger macOS Keychain prompts
-                save_key_file(&key_file, &trimmed)?;
-                return Ok(trimmed);
+    // 2. Try reading from the OS Keyring (checking current service, then legacy fallback)
+    for service in [SERVICE_NAME, LEGACY_SERVICE_NAME] {
+        if let Ok(entry) = Entry::new(service, KEY_NAME) {
+            if let Ok(key) = entry.get_password() {
+                let trimmed = key.trim().to_string();
+                if !trimmed.is_empty() {
+                    println!("🔐 Loaded encryption key from OS Keyring ({service}).");
+                    // Cache locally so future rebuilds don't trigger macOS Keychain prompts
+                    save_key_file(&key_file, &trimmed)?;
+                    return Ok(trimmed);
+                }
             }
         }
     }
@@ -70,7 +72,7 @@ pub(crate) fn get_or_create_encryption_key(
     save_key_file(&key_file, &new_key)?;
 
     // Best-effort backup to OS Keyring
-    if let Some(entry) = keyring_entry {
+    if let Ok(entry) = Entry::new(SERVICE_NAME, KEY_NAME) {
         if let Err(e) = entry.set_password(&new_key) {
             eprintln!(
                 "ℹ️ Could not write key to OS Keyring ({e}); using local secure file instead."
