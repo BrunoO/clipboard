@@ -170,7 +170,7 @@ pub(crate) fn open_accessibility_settings() {
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::{AtomicBool, AtomicI32, Ordering, PREVIOUS_APP_PID};
+    use super::{AtomicBool, Ordering, PREVIOUS_APP_PID};
     use objc::declare::ClassDecl;
     use objc::runtime::{Object, Sel};
     use objc::{class, msg_send, sel, sel_impl};
