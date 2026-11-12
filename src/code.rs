@@ -49,6 +49,7 @@ impl CodeLanguage {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn badge(self) -> String {
         format!("{} {}", self.icon(), self.name())
     }

@@ -11,6 +11,7 @@ mod media;
 mod monitor;
 mod platform;
 mod settings;
+mod theme;
 
 use app::ClipboardApp;
 use db::Database;
@@ -49,6 +50,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_min_inner_size([320.0, 400.0])
         .with_title("CipherClipboard");
 
+    #[cfg(target_os = "macos")]
+    {
+        viewport = viewport
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false);
+    }
+
     // Load bundled icon for the window title bar and taskbar
     if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
         viewport = viewport.with_icon(icon);
@@ -68,13 +77,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "CipherClipboard",
         native_options,
         Box::new(move |cc| {
-            // Register Phosphor icons with egui font definitions
+            // Register Phosphor icons and probe native system fonts (San Francisco, Segoe UI)
             let mut fonts = egui::FontDefinitions::default();
             egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+            theme::setup_fonts(&mut fonts);
             cc.egui_ctx.set_fonts(fonts);
 
-            // Apply modern dark visuals
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // Apply platform-adaptive HIG visuals
+            theme::setup_theme(&cc.egui_ctx);
 
             // Initialize OS activation & reopen observers (macOS Dock click / Cmd+Tab)
             platform::set_repaint_context(&cc.egui_ctx);

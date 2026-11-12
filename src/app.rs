@@ -419,17 +419,23 @@ impl ClipboardApp {
     }
 
     fn render_top_panel(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.add_space(6.0);
-            self.render_header_row(ui, ctx);
-            ui.add_space(4.0);
-            if self.active_view == ActiveView::History {
-                self.render_search_bar(ui);
-                ui.add_space(4.0);
-                self.render_filter_tabs(ui);
-                ui.add_space(4.0);
-            }
-        });
+        egui::TopBottomPanel::top("top_panel")
+            .frame(
+                egui::Frame::none()
+                    .fill(crate::theme::panel_background())
+                    .inner_margin(egui::Margin::symmetric(10.0_f32, 6.0_f32)),
+            )
+            .show(ctx, |ui| {
+                ui.add_space(crate::theme::top_padding());
+                self.render_header_row(ui, ctx);
+                ui.add_space(6.0_f32);
+                if self.active_view == ActiveView::History {
+                    self.render_search_bar(ui);
+                    ui.add_space(6.0_f32);
+                    self.render_filter_tabs(ui);
+                    ui.add_space(4.0_f32);
+                }
+            });
     }
 
     fn render_filter_tabs(&mut self, ui: &mut egui::Ui) {
@@ -462,36 +468,28 @@ impl ClipboardApp {
             .count();
 
         ui.horizontal(|ui| {
-            ui.selectable_value(
-                &mut self.content_filter,
-                ContentFilter::All,
-                format!("{} All ({all_count})", icons::STACK),
-            );
-            ui.selectable_value(
-                &mut self.content_filter,
-                ContentFilter::Text,
-                format!("{} Text ({text_count})", icons::FILE_TEXT),
-            );
-            ui.selectable_value(
-                &mut self.content_filter,
-                ContentFilter::Links,
-                format!("{} Links ({link_count})", icons::LINK),
-            );
-            ui.selectable_value(
-                &mut self.content_filter,
-                ContentFilter::Code,
-                format!("{} Code ({code_count})", icons::CODE),
-            );
-            ui.selectable_value(
-                &mut self.content_filter,
-                ContentFilter::Colors,
-                format!("{} Colors ({color_count})", icons::PALETTE),
-            );
-            ui.selectable_value(
-                &mut self.content_filter,
-                ContentFilter::Image,
-                format!("{} Images ({img_count})", icons::IMAGE),
-            );
+            let tabs = [
+                (ContentFilter::All, icons::STACK, "All", all_count),
+                (ContentFilter::Text, icons::FILE_TEXT, "Text", text_count),
+                (ContentFilter::Links, icons::LINK, "Links", link_count),
+                (ContentFilter::Code, icons::CODE, "Code", code_count),
+                (ContentFilter::Colors, icons::PALETTE, "Colors", color_count),
+                (ContentFilter::Image, icons::IMAGE, "Images", img_count),
+            ];
+
+            for (target, icon, label, count) in tabs {
+                if crate::theme::render_segmented_tab(
+                    ui,
+                    self.content_filter == target,
+                    icon,
+                    label,
+                    count,
+                )
+                .clicked()
+                {
+                    self.content_filter = target;
+                }
+            }
         });
 
         if self.content_filter != old_filter {
@@ -502,10 +500,19 @@ impl ClipboardApp {
 
     fn render_header_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
-            ui.heading(format!("{} Clipboard", icons::LOCK_KEY));
+            ui.add_space(crate::theme::header_left_padding());
+
+            let title_resp = ui.heading(format!("{} Clipboard", icons::LOCK_KEY));
+            if title_resp.interact(egui::Sense::drag()).dragged() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
 
             let badge = self.settings.hotkey.badge();
-            ui.label(egui::RichText::new(format!("({badge})")).weak().size(11.0));
+            ui.label(
+                egui::RichText::new(format!("({badge})"))
+                    .weak()
+                    .size(11.0_f32),
+            );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -544,55 +551,89 @@ impl ClipboardApp {
     }
 
     fn render_search_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(icons::MAGNIFYING_GLASS);
-            let search_box = ui.add(
-                egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("Search clipboard history... (↑/↓ to select, Enter to paste)")
-                    .desired_width(f32::INFINITY),
-            );
+        let is_focused = self.focus_search_input;
+        egui::Frame::none()
+            .fill(crate::theme::search_bg())
+            .stroke(crate::theme::search_stroke(is_focused))
+            .rounding(crate::theme::search_rounding())
+            .inner_margin(egui::Margin::symmetric(8.0_f32, 6.0_f32))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(icons::MAGNIFYING_GLASS)
+                            .weak()
+                            .size(13.0_f32),
+                    );
+                    let search_box = ui.add(
+                        egui::TextEdit::singleline(&mut self.search_query)
+                            .hint_text(
+                                "Search clipboard history... (↑/↓ to select, Enter to paste)",
+                            )
+                            .frame(false)
+                            .desired_width(f32::INFINITY),
+                    );
 
-            if self.focus_search_input {
-                search_box.request_focus();
-                self.focus_search_input = false;
-            }
-        });
+                    if !self.search_query.is_empty()
+                        && ui
+                            .small_button(icons::X)
+                            .on_hover_text("Clear search")
+                            .clicked()
+                    {
+                        self.search_query.clear();
+                    }
+
+                    if self.focus_search_input {
+                        search_box.request_focus();
+                        self.focus_search_input = false;
+                    }
+                });
+            });
     }
 
     fn render_bottom_panel(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if let Some((msg, time)) = &self.toast {
-                    if time.elapsed() < Duration::from_secs(2) {
-                        ui.label(
-                            egui::RichText::new(msg)
-                                .color(egui::Color32::from_rgb(46, 204, 113))
-                                .strong(),
-                        );
+        egui::TopBottomPanel::bottom("bottom_panel")
+            .frame(
+                egui::Frame::none()
+                    .fill(crate::theme::panel_background())
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 15),
+                    ))
+                    .inner_margin(egui::Margin::symmetric(10.0_f32, 6.0_f32)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if let Some((msg, time)) = &self.toast {
+                        if time.elapsed() < Duration::from_secs(2) {
+                            ui.label(
+                                egui::RichText::new(msg)
+                                    .color(egui::Color32::from_rgb(46, 204, 113))
+                                    .strong(),
+                            );
+                        } else {
+                            self.toast = None;
+                        }
                     } else {
-                        self.toast = None;
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {} entries • SQLCipher encrypted",
+                                icons::SHIELD_CHECK,
+                                self.items.len()
+                            ))
+                            .weak()
+                            .size(11.0_f32),
+                        );
                     }
-                } else {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} {} entries • SQLCipher encrypted",
-                            icons::SHIELD_CHECK,
-                            self.items.len()
-                        ))
-                        .weak()
-                        .size(11.0),
-                    );
-                }
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    #[cfg(target_os = "macos")]
-                    let nav_hint = "↑/↓ or Tab • Enter • Cmd+1..9 • Esc";
-                    #[cfg(not(target_os = "macos"))]
-                    let nav_hint = "↑/↓ or Tab • Enter • Ctrl+1..9 • Esc";
-                    ui.label(egui::RichText::new(nav_hint).weak().size(10.5));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        #[cfg(target_os = "macos")]
+                        let nav_hint = "↑/↓ or Tab • Enter • Cmd+1..9 • Esc";
+                        #[cfg(not(target_os = "macos"))]
+                        let nav_hint = "↑/↓ or Tab • Enter • Ctrl+1..9 • Esc";
+                        ui.label(egui::RichText::new(nav_hint).weak().size(10.5_f32));
+                    });
                 });
             });
-        });
     }
 
     fn get_filtered_indices(&self) -> Vec<usize> {
@@ -942,23 +983,15 @@ impl ClipboardApp {
     ) -> (ItemAction, bool) {
         let mut action = ItemAction::None;
 
-        let stroke = if is_selected {
-            egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(52, 152, 219))
-        } else {
-            ui.style().visuals.widgets.noninteractive.bg_stroke
-        };
-
-        let fill = if is_selected {
-            egui::Color32::from_rgb(32, 44, 58)
-        } else {
-            ui.style().visuals.widgets.noninteractive.bg_fill
-        };
+        let stroke = crate::theme::card_stroke(is_selected);
+        let fill = crate::theme::card_fill(is_selected);
+        let rounding = crate::theme::card_rounding();
 
         let frame_resp = egui::Frame::group(ui.style())
-            .rounding(6.0)
+            .rounding(rounding)
             .stroke(stroke)
             .fill(fill)
-            .inner_margin(8.0)
+            .inner_margin(8.0_f32)
             .show(ui, |ui| {
                 let header_action = Self::render_item_header(ui, item, shortcut_num, is_selected);
                 if !matches!(header_action, ItemAction::None) {
@@ -1008,35 +1041,38 @@ impl ClipboardApp {
                     1 => format!(" • {} 1 color", icons::PALETTE),
                     n => format!(" • {} {n} colors", icons::PALETTE),
                 };
+                crate::theme::render_pill_tag(
+                    ui,
+                    icons::FILE_TEXT,
+                    "Text",
+                    egui::Color32::from_rgb(174, 174, 178),
+                    egui::Color32::from_rgba_premultiplied(142, 142, 147, 30),
+                );
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{} Text{color_hint} • {}",
-                        icons::FILE_TEXT,
-                        item.created_at
-                    ))
-                    .size(10.0)
-                    .weak(),
+                    egui::RichText::new(format!("{color_hint} • {}", item.created_at))
+                        .size(10.0_f32)
+                        .weak(),
                 );
             }
             ItemKind::Url => {
                 let host = item.url_host().unwrap_or_else(|| "link".to_string());
-                ui.label(
-                    egui::RichText::new(format!("{} Link", icons::LINK))
-                        .size(10.0)
-                        .color(egui::Color32::from_rgb(52, 152, 219))
-                        .strong(),
+                crate::theme::render_pill_tag(
+                    ui,
+                    icons::LINK,
+                    "Link",
+                    egui::Color32::from_rgb(64, 156, 255),
+                    egui::Color32::from_rgba_premultiplied(10, 132, 255, 30),
                 );
                 ui.label(
                     egui::RichText::new(format!("• {host} • {}", item.created_at))
-                        .size(10.0)
+                        .size(10.0_f32)
                         .weak(),
                 );
             }
             ItemKind::Code => {
-                let lang_badge = item.code_language().map_or_else(
-                    || format!("{} Code", icons::CODE),
-                    crate::code::CodeLanguage::badge,
-                );
+                let (icon, lang_name) = item
+                    .code_language()
+                    .map_or((icons::CODE, "Code"), |l| (l.icon(), l.name()));
                 let line_count = item.content.lines().count();
                 let embedded = item.embedded_colors();
                 let color_hint = match embedded.len() {
@@ -1044,18 +1080,19 @@ impl ClipboardApp {
                     1 => format!(" • {} 1 color", icons::PALETTE),
                     n => format!(" • {} {n} colors", icons::PALETTE),
                 };
-                ui.label(
-                    egui::RichText::new(lang_badge)
-                        .size(10.0)
-                        .color(egui::Color32::from_rgb(224, 108, 117))
-                        .strong(),
+                crate::theme::render_pill_tag(
+                    ui,
+                    icon,
+                    lang_name,
+                    egui::Color32::from_rgb(255, 105, 97),
+                    egui::Color32::from_rgba_premultiplied(255, 69, 58, 30),
                 );
                 ui.label(
                     egui::RichText::new(format!(
                         "• {line_count} lines{color_hint} • {}",
                         item.created_at
                     ))
-                    .size(10.0)
+                    .size(10.0_f32)
                     .weak(),
                 );
             }
@@ -1063,22 +1100,34 @@ impl ClipboardApp {
                 let hex = item
                     .parsed_color()
                     .map_or_else(|| item.content.clone(), crate::color::ParsedColor::to_hex);
-                ui.label(
-                    egui::RichText::new(format!("{} Color", icons::PALETTE))
-                        .size(10.0)
-                        .color(egui::Color32::from_rgb(230, 126, 34))
-                        .strong(),
+                crate::theme::render_pill_tag(
+                    ui,
+                    icons::PALETTE,
+                    "Color",
+                    egui::Color32::from_rgb(218, 143, 255),
+                    egui::Color32::from_rgba_premultiplied(191, 90, 242, 30),
                 );
                 ui.label(
                     egui::RichText::new(format!("• {hex} • {}", item.created_at))
-                        .size(10.0)
+                        .size(10.0_f32)
                         .weak(),
                 );
             }
             ItemKind::Image => {
+                let dims = match (item.width, item.height) {
+                    (Some(w), Some(h)) => format!("Image ({w}x{h})"),
+                    _ => "Image".to_string(),
+                };
+                crate::theme::render_pill_tag(
+                    ui,
+                    icons::IMAGE,
+                    &dims,
+                    egui::Color32::from_rgb(74, 222, 128),
+                    egui::Color32::from_rgba_premultiplied(48, 209, 88, 30),
+                );
                 ui.label(
-                    egui::RichText::new(format!("{} Image • {}", icons::IMAGE, item.created_at))
-                        .size(10.0)
+                    egui::RichText::new(format!("• {}", item.created_at))
+                        .size(10.0_f32)
                         .weak(),
                 );
             }
@@ -1103,18 +1152,27 @@ impl ClipboardApp {
                     #[cfg(not(target_os = "macos"))]
                     let shortcut_str = format!("Ctrl+{num}");
 
-                    let badge_color = if is_selected {
-                        egui::Color32::from_rgb(52, 152, 219)
+                    let (text_c, bg_c) = if is_selected {
+                        (egui::Color32::WHITE, crate::theme::accent_color())
                     } else {
-                        egui::Color32::from_rgb(110, 120, 130)
+                        (
+                            egui::Color32::from_rgb(140, 140, 145),
+                            egui::Color32::from_rgba_premultiplied(255, 255, 255, 16),
+                        )
                     };
 
-                    ui.label(
-                        egui::RichText::new(shortcut_str)
-                            .size(10.0)
-                            .color(badge_color)
-                            .strong(),
-                    );
+                    egui::Frame::none()
+                        .rounding(crate::theme::pill_rounding())
+                        .fill(bg_c)
+                        .inner_margin(egui::Margin::symmetric(5.0_f32, 1.5_f32))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(shortcut_str)
+                                    .size(9.5_f32)
+                                    .color(text_c)
+                                    .strong(),
+                            );
+                        });
                 }
 
                 if ui
