@@ -8,6 +8,7 @@ mod db;
 mod hotkey;
 mod media;
 mod monitor;
+mod platform;
 mod settings;
 
 use app::ClipboardApp;

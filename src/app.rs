@@ -117,6 +117,10 @@ impl ClipboardApp {
                     self.is_visible = false;
                     self.has_been_focused = false;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    crate::platform::restore_focus_and_paste(
+                        self.settings.restore_focus,
+                        self.settings.auto_paste,
+                    );
                 }
             }
         }
@@ -139,6 +143,10 @@ impl ClipboardApp {
                             self.is_visible = false;
                             self.has_been_focused = false;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            crate::platform::restore_focus_and_paste(
+                                self.settings.restore_focus,
+                                self.settings.auto_paste,
+                            );
                         }
                     }
                 }
@@ -175,6 +183,9 @@ impl ClipboardApp {
             self.is_visible = false;
             self.has_been_focused = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if self.settings.restore_focus {
+                crate::platform::restore_focus_and_paste(true, false);
+            }
         } else {
             // Window is hidden, minimized, or in the background behind other apps:
             // ALWAYS summon and focus it immediately on the first press!
@@ -197,6 +208,42 @@ impl ClipboardApp {
                 self.is_visible = false;
                 self.has_been_focused = false;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                if self.settings.restore_focus {
+                    crate::platform::restore_focus_and_paste(true, false);
+                }
+            }
+        }
+    }
+
+    fn handle_enter_key(&mut self, ctx: &egui::Context) {
+        if self.active_view != ActiveView::History || !self.is_visible {
+            return;
+        }
+
+        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+            let filter = self.content_filter;
+            let matched_action = self
+                .items
+                .iter()
+                .find(|i| match filter {
+                    ContentFilter::All => true,
+                    ContentFilter::Text => i.kind == ItemKind::Text,
+                    ContentFilter::Links => i.kind == ItemKind::Url,
+                    ContentFilter::Code => i.kind == ItemKind::Code,
+                    ContentFilter::Colors => {
+                        i.kind == ItemKind::Color || !i.embedded_colors().is_empty()
+                    }
+                    ContentFilter::Image => i.kind == ItemKind::Image,
+                })
+                .and_then(|item| match item.kind {
+                    ItemKind::Image => item.image_data.clone().map(ItemAction::CopyImage),
+                    _ => Some(ItemAction::CopyText(item.content.clone())),
+                });
+
+            match matched_action {
+                Some(ItemAction::CopyImage(png)) => self.copy_image_to_clipboard(&png, ctx),
+                Some(ItemAction::CopyText(text)) => self.copy_text_to_clipboard(&text, ctx),
+                _ => {}
             }
         }
     }
@@ -321,6 +368,9 @@ impl ClipboardApp {
                     self.is_visible = false;
                     self.has_been_focused = false;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    if self.settings.restore_focus {
+                        crate::platform::restore_focus_and_paste(true, false);
+                    }
                 }
 
                 let settings_btn = match self.active_view {
@@ -578,6 +628,42 @@ impl ClipboardApp {
             {
                 self.settings.hide_on_blur = hide_on_blur;
                 let _ = self.settings.save(&self.db);
+            }
+
+            let mut restore_focus = self.settings.restore_focus;
+            if ui
+                .checkbox(
+                    &mut restore_focus,
+                    "Restore focus to initial window after copying or hiding",
+                )
+                .changed()
+            {
+                self.settings.restore_focus = restore_focus;
+                let _ = self.settings.save(&self.db);
+            }
+
+            let mut auto_paste = self.settings.auto_paste;
+            if ui
+                .checkbox(
+                    &mut auto_paste,
+                    "Auto-paste selected entry directly into initial window",
+                )
+                .changed()
+            {
+                self.settings.auto_paste = auto_paste;
+                let _ = self.settings.save(&self.db);
+            }
+
+            #[cfg(target_os = "macos")]
+            if auto_paste && !crate::platform::is_accessibility_trusted() {
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(
+                        "⚠️ macOS note: Direct auto-paste requires Accessibility permissions in System Settings → Privacy & Security → Accessibility.",
+                    )
+                    .size(11.0)
+                    .color(egui::Color32::from_rgb(230, 126, 34)),
+                );
             }
 
             ui.add_space(6.0);
@@ -1248,6 +1334,7 @@ impl eframe::App for ClipboardApp {
         self.handle_window_close_request(ctx);
         self.handle_hotkey_toggle(ctx);
         self.handle_escape_key(ctx);
+        self.handle_enter_key(ctx);
         self.handle_focus_loss(ctx);
         self.handle_monitor_updates();
 

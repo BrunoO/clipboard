@@ -96,6 +96,7 @@ impl HotkeyPreset {
 }
 
 /// Persistent user configuration for the clipboard manager.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AppSettings {
     pub(crate) hotkey: HotkeyPreset,
@@ -103,9 +104,21 @@ pub(crate) struct AppSettings {
     pub(crate) max_history: usize,
     #[serde(default = "default_hide_on_blur")]
     pub(crate) hide_on_blur: bool,
+    #[serde(default = "default_restore_focus")]
+    pub(crate) restore_focus: bool,
+    #[serde(default = "default_auto_paste")]
+    pub(crate) auto_paste: bool,
 }
 
 const fn default_hide_on_blur() -> bool {
+    true
+}
+
+const fn default_restore_focus() -> bool {
+    true
+}
+
+const fn default_auto_paste() -> bool {
     true
 }
 
@@ -116,6 +129,8 @@ impl Default for AppSettings {
             hide_on_copy: true,
             max_history: 100,
             hide_on_blur: true,
+            restore_focus: true,
+            auto_paste: true,
         }
     }
 }
@@ -164,6 +179,8 @@ mod tests {
         modified.hotkey = HotkeyPreset::AltSpace;
         modified.hide_on_copy = false;
         modified.hide_on_blur = false;
+        modified.restore_focus = false;
+        modified.auto_paste = false;
         modified.max_history = 250;
         modified.save(&db).expect("Save should succeed");
 
@@ -172,6 +189,8 @@ mod tests {
         assert_eq!(reloaded.hotkey, HotkeyPreset::AltSpace);
         assert!(!reloaded.hide_on_copy);
         assert!(!reloaded.hide_on_blur);
+        assert!(!reloaded.restore_focus);
+        assert!(!reloaded.auto_paste);
         assert_eq!(reloaded.max_history, 250);
     }
 

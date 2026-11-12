@@ -43,6 +43,7 @@ impl HotkeyService {
                     lock.contains(&event.id)
                 };
                 if matches && event.state == HotKeyState::Pressed {
+                    crate::platform::capture_active_window();
                     let _ = hotkey_tx.send(());
                     ctx.request_repaint();
                 }
