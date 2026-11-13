@@ -1,12 +1,17 @@
 use image::{ImageBuffer, RgbaImage};
 use std::io::Cursor;
 
+const MAX_IMAGE_PIXELS: usize = 40_000_000; // Guard against decompression bombs (~40 MP)
+
 /// Encodes raw RGBA bytes into PNG format.
 pub(crate) fn rgba_to_png(
     width: usize,
     height: usize,
     rgba: &[u8],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    if width.saturating_mul(height) > MAX_IMAGE_PIXELS {
+        return Err("Image dimensions exceed maximum safe limit".into());
+    }
     let width_u32 = u32::try_from(width)?;
     let height_u32 = u32::try_from(height)?;
 
@@ -23,9 +28,12 @@ pub(crate) fn png_to_rgba(
     png_bytes: &[u8],
 ) -> Result<(usize, usize, Vec<u8>), Box<dyn std::error::Error + Send + Sync>> {
     let img = image::load_from_memory_with_format(png_bytes, image::ImageFormat::Png)?;
+    let width = usize::try_from(img.width())?;
+    let height = usize::try_from(img.height())?;
+    if width.saturating_mul(height) > MAX_IMAGE_PIXELS {
+        return Err("Image dimensions exceed maximum safe limit".into());
+    }
     let rgba = img.to_rgba8();
-    let width = usize::try_from(rgba.width())?;
-    let height = usize::try_from(rgba.height())?;
     Ok((width, height, rgba.into_raw()))
 }
 
@@ -52,5 +60,11 @@ mod tests {
         assert_eq!(decoded_w, width);
         assert_eq!(decoded_h, height);
         assert_eq!(decoded_rgba, raw_rgba);
+    }
+
+    #[test]
+    fn test_oversized_image_rejected() {
+        let err = rgba_to_png(10_000, 10_000, &[]).unwrap_err();
+        assert!(err.to_string().contains("exceed maximum safe limit"));
     }
 }

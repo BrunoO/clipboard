@@ -81,3 +81,13 @@ impl HotkeyService {
         }
     }
 }
+
+impl Drop for HotkeyService {
+    fn drop(&mut self) {
+        for hk in &self.hotkeys {
+            if let Err(e) = self.manager.unregister(*hk) {
+                eprintln!("⚠️ Failed to unregister hotkey {hk:?} on drop: {e}");
+            }
+        }
+    }
+}

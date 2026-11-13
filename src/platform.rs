@@ -128,7 +128,11 @@ pub(crate) fn restore_focus_and_paste(restore_focus: bool, auto_paste: bool) {
     }
 
     std::thread::spawn(move || {
-        if restore_focus {
+        // If auto_paste is active, focus MUST be switched to the target application
+        // so the simulated keystrokes are received by that application.
+        let should_restore = restore_focus || auto_paste;
+
+        if should_restore {
             #[cfg(target_os = "macos")]
             macos::restore_focus();
 
@@ -137,9 +141,9 @@ pub(crate) fn restore_focus_and_paste(restore_focus: bool, auto_paste: bool) {
         }
 
         if auto_paste {
-            // Give the OS window server 100ms to switch key focus
+            // Give the OS window server 120ms to switch key focus
             // to the target application before dispatching keystrokes.
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(120));
 
             #[cfg(target_os = "macos")]
             macos::simulate_paste();
@@ -491,8 +495,11 @@ mod windows {
     extern "system" {
         fn GetForegroundWindow() -> HWND;
         fn SetForegroundWindow(hwnd: HWND) -> i32;
+        fn BringWindowToTop(hwnd: HWND) -> i32;
         fn GetCurrentProcessId() -> u32;
+        fn GetCurrentThreadId() -> u32;
         fn GetWindowThreadProcessId(hwnd: HWND, lpdwProcessId: *mut u32) -> u32;
+        fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
     }
 
     pub(super) fn is_active() -> bool {
@@ -524,7 +531,20 @@ mod windows {
         let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
         if hwnd_raw != 0 {
             unsafe {
-                SetForegroundWindow(hwnd_raw as HWND);
+                let target_hwnd = hwnd_raw as HWND;
+                let cur_thread = GetCurrentThreadId();
+                let mut target_pid: u32 = 0;
+                let target_thread = GetWindowThreadProcessId(target_hwnd, &mut target_pid);
+
+                if target_thread != 0 && target_thread != cur_thread {
+                    AttachThreadInput(cur_thread, target_thread, 1);
+                    BringWindowToTop(target_hwnd);
+                    SetForegroundWindow(target_hwnd);
+                    AttachThreadInput(cur_thread, target_thread, 0);
+                } else {
+                    BringWindowToTop(target_hwnd);
+                    SetForegroundWindow(target_hwnd);
+                }
             }
         }
     }

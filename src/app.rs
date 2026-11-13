@@ -5,9 +5,79 @@ use crate::settings::{AppSettings, HotkeyPreset};
 use arboard::Clipboard;
 use eframe::egui;
 use egui_phosphor::regular as icons;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
+
+const MAX_CACHED_TEXTURES: usize = 24;
+
+/// Bound-capped LRU texture cache for clipboard image previews.
+/// Drops `egui::TextureHandle` references when capacity is exceeded or items are purged,
+/// immediately freeing underlying GPU VRAM.
+#[derive(Default)]
+pub(crate) struct ImageTextureCache {
+    textures: HashMap<i64, egui::TextureHandle>,
+    access_order: VecDeque<i64>,
+}
+
+impl ImageTextureCache {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn get_or_load(
+        &mut self,
+        id: i64,
+        png_bytes: &[u8],
+        ctx: &egui::Context,
+    ) -> Option<&egui::TextureHandle> {
+        if self.textures.contains_key(&id) {
+            if let Some(pos) = self.access_order.iter().position(|&x| x == id) {
+                self.access_order.remove(pos);
+            }
+            self.access_order.push_back(id);
+            return self.textures.get(&id);
+        }
+
+        let (w, h, rgba) = media::png_to_rgba(png_bytes).ok()?;
+        let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+        let handle = ctx.load_texture(
+            format!("clip_img_{id}"),
+            color_image,
+            egui::TextureOptions::LINEAR,
+        );
+
+        while self.textures.len() >= MAX_CACHED_TEXTURES {
+            if let Some(oldest_id) = self.access_order.pop_front() {
+                self.textures.remove(&oldest_id);
+            } else {
+                break;
+            }
+        }
+
+        self.access_order.push_back(id);
+        self.textures.insert(id, handle);
+        self.textures.get(&id)
+    }
+
+    pub(crate) fn remove(&mut self, id: i64) {
+        self.textures.remove(&id);
+        if let Some(pos) = self.access_order.iter().position(|&x| x == id) {
+            self.access_order.remove(pos);
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.textures.clear();
+        self.access_order.clear();
+    }
+
+    pub(crate) fn retain_active(&mut self, active_ids: &HashSet<i64>) {
+        self.textures.retain(|id, _| active_ids.contains(id));
+        self.access_order.retain(|id| active_ids.contains(id));
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ContentFilter {
@@ -49,7 +119,7 @@ pub(crate) struct ClipboardApp {
     notify_rx: Receiver<()>,
     hotkey_rx: Receiver<()>,
     hotkey_service: Option<HotkeyService>,
-    texture_cache: HashMap<i64, egui::TextureHandle>,
+    texture_cache: ImageTextureCache,
     is_visible: bool,
     has_been_focused: bool,
     was_inactive_since_hidden: bool,
@@ -92,7 +162,7 @@ impl ClipboardApp {
             notify_rx,
             hotkey_rx,
             hotkey_service,
-            texture_cache: HashMap::new(),
+            texture_cache: ImageTextureCache::new(),
             is_visible: true,
             has_been_focused: false,
             was_inactive_since_hidden: false,
@@ -121,6 +191,8 @@ impl ClipboardApp {
             .db
             .get_recent(self.settings.max_history, filter)
             .unwrap_or_default();
+        let active_ids: HashSet<i64> = self.items.iter().map(|it| it.id).collect();
+        self.texture_cache.retain_active(&active_ids);
     }
 
     fn show_toast(&mut self, message: &str) {
@@ -388,7 +460,7 @@ impl ClipboardApp {
             if let Some(item) = self.items.get(item_idx) {
                 let id = item.id;
                 let _ = self.db.delete(id);
-                self.texture_cache.remove(&id);
+                self.texture_cache.remove(id);
                 self.refresh_items();
                 let new_count = self.get_filtered_indices().len();
                 if self.selected_index >= new_count && new_count > 0 {
@@ -840,7 +912,7 @@ impl ClipboardApp {
                     }
                     ItemAction::Delete(id) => {
                         let _ = self.db.delete(id);
-                        self.texture_cache.remove(&id);
+                        self.texture_cache.remove(id);
                         self.refresh_items();
                         self.show_toast(&format!("{} Entry deleted.", icons::TRASH));
                     }
@@ -1156,7 +1228,7 @@ impl ClipboardApp {
     fn render_clipboard_item(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
-        texture_cache: &mut HashMap<i64, egui::TextureHandle>,
+        texture_cache: &mut ImageTextureCache,
         ctx: &egui::Context,
         is_selected: bool,
         shortcut_num: Option<usize>,
@@ -1803,7 +1875,7 @@ impl ClipboardApp {
     fn render_image_content(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
-        texture_cache: &mut HashMap<i64, egui::TextureHandle>,
+        texture_cache: &mut ImageTextureCache,
         ctx: &egui::Context,
         is_dark: bool,
     ) -> ItemAction {
@@ -1811,25 +1883,10 @@ impl ClipboardApp {
             return ItemAction::None;
         };
 
-        let texture = match texture_cache.entry(item.id) {
-            std::collections::hash_map::Entry::Occupied(e) => Some(e.into_mut()),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                if let Ok((w, h, rgba)) = media::png_to_rgba(png_bytes) {
-                    let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
-                    let handle = ctx.load_texture(
-                        format!("clip_img_{}", item.id),
-                        color_image,
-                        egui::TextureOptions::LINEAR,
-                    );
-                    Some(e.insert(handle))
-                } else {
-                    None
-                }
-            }
-        };
+        let texture = texture_cache.get_or_load(item.id, png_bytes, ctx);
 
         if let Some(texture) = texture {
-            let img_widget = egui::Image::new(&*texture)
+            let img_widget = egui::Image::new(texture)
                 .max_size(egui::vec2(340.0, 160.0))
                 .sense(egui::Sense::click());
             let response = ui.add(img_widget);
