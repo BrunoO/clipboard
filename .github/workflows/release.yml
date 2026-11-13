@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-windows:
+    name: Build & Package Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Resolve release version and tag
+        shell: pwsh
+        run: |
+          $inputTag = "${{ inputs.tag_name }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($inputTag)) {
+            $tag = $inputTag
+          } elseif ($env:GITHUB_REF -like "refs/tags/*") {
+            $tag = $env:GITHUB_REF -replace '^refs/tags/', ''
+          } else {
+            $cargoToml = Get-Content Cargo.toml -Raw
+            if ($cargoToml -match 'version\s*=\s*"([^"]+)"') {
+              $tag = "v$($matches[1])"
+            } else {
+              $tag = "v0.1.0"
+            }
+          }
+          $version = $tag.TrimStart('v')
+          Write-Host "Resolved Version: $version"
+          Write-Host "Resolved Tag: $tag"
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "TAG_NAME=$tag" >> $env:GITHUB_ENV
+
+      - name: Install Windows OpenSSL dependencies
+        run: |
+          choco install openssl -y --no-progress
+          Get-ChildItem -Path "C:\Program Files\OpenSSL\lib" -Filter "*.lib" -Recurse | Copy-Item -Destination "C:\Program Files\OpenSSL\lib" -Force
+          echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
+
+      - name: Install Inno Setup
+        run: |
+          choco install innosetup -y --no-progress
+          echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Verify release executable exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "target\release\CipherClipboard.exe")) {
+            throw "target\release\CipherClipboard.exe was not found after compilation!"
+          }
+          Write-Host "CipherClipboard.exe built successfully."
+
+      - name: Compile Inno Setup installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist"
+          & iscc.exe /DMyAppVersion="$env:VERSION" scripts\windows\setup.iss
+
+      - name: Package portable ZIP archive
+        shell: pwsh
+        run: |
+          $portableDir = "dist\CipherClipboard-$env:VERSION-windows-x64-portable"
+          New-Item -ItemType Directory -Force -Path $portableDir
+          Copy-Item "target\release\CipherClipboard.exe" -Destination $portableDir
+          Copy-Item "assets\icon.ico" -Destination $portableDir
+          Copy-Item "assets\icon.png" -Destination $portableDir
+          Copy-Item "README.md" -Destination $portableDir
+          Copy-Item "LICENSE" -Destination $portableDir
+          Compress-Archive -Path "$portableDir\*" -DestinationPath "dist\CipherClipboard-$env:VERSION-windows-x64-portable.zip" -Force
+          Remove-Item -Recurse -Force $portableDir
+
+      - name: Compute SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path "dist" -Include "*.exe","*.zip" -File
+          $sums = @()
+          foreach ($file in $files) {
+            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLower()
+            $entry = "$hash *$($file.Name)"
+            $sums += $entry
+            $entry | Set-Content -Path "$($file.FullName).sha256" -Encoding ascii
+            Write-Host "File: $($file.Name) | SHA256: $hash"
+          }
+          $sums | Set-Content -Path "dist\SHA256SUMS-windows-x64.txt" -Encoding ascii
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: CipherClipboard ${{ env.TAG_NAME }}
+          files: |
+            dist/*.exe
+            dist/*.zip
+            dist/*.sha256
+            dist/SHA256SUMS-windows-x64.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false

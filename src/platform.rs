@@ -473,6 +473,7 @@ mod windows {
     }
 
     pub(super) fn simulate_paste() {
+        #[allow(non_snake_case, non_camel_case_types)]
         #[repr(C)]
         struct KEYBDINPUT {
             wVk: u16,
@@ -482,6 +483,7 @@ mod windows {
             dwExtraInfo: usize,
         }
 
+        #[allow(non_snake_case, non_camel_case_types)]
         #[repr(C)]
         struct INPUT {
             r#type: u32,
