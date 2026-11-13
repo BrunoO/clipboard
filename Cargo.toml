@@ -6,7 +6,6 @@ description = "A simple, encrypted cross-platform clipboard manager in Rust"
 authors = ["BrunoO"]
 license = "MIT"
 repository = "https://github.com/BrunoO/clipboard"
-homepage = "https://github.com/BrunoO/clipboard"
 readme = "README.md"
 default-run = "CipherClipboard"
 
