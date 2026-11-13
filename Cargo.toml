@@ -29,7 +29,7 @@ winres = "0.1"
 objc = "0.2"
 
 [dependencies]
-eframe = "0.29"
+eframe = "0.37"
 egui_extras = { version = "0.29", features = ["syntect"] }
 egui-phosphor = "0.7.3"
 
