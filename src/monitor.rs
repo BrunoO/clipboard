@@ -57,6 +57,11 @@ pub(crate) fn start_clipboard_monitor(
         loop {
             thread::sleep(POLL_INTERVAL);
 
+            // Skip processing if marked as concealed/transient by password managers
+            if db.ignore_concealed() && crate::platform::is_clipboard_concealed() {
+                continue;
+            }
+
             // 1. Check for text on clipboard
             if let Ok(text) = clipboard.get_text() {
                 let trimmed = text.trim();
@@ -69,8 +74,9 @@ pub(crate) fn start_clipboard_monitor(
 
                     match db.insert(&text) {
                         Ok(Some(id)) => {
-                            let preview = if text.len() > 40 {
-                                format!("{}...", &text[..40])
+                            let preview = if text.chars().count() > 40 {
+                                let truncated: String = text.chars().take(40).collect();
+                                format!("{truncated}...")
                             } else {
                                 text.clone()
                             };

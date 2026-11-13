@@ -72,6 +72,10 @@ impl ClipboardApp {
         hotkey_service: Option<HotkeyService>,
         settings: AppSettings,
     ) -> Self {
+        db.set_max_history(settings.max_history);
+        db.set_ignore_concealed(settings.ignore_concealed);
+        let _ = db.prune_history(settings.max_history);
+
         let initial_items = db
             .get_recent(settings.max_history, None)
             .unwrap_or_default();
@@ -448,6 +452,9 @@ impl ClipboardApp {
         }
 
         if new_items_detected || self.search_query != self.last_query_cached {
+            if new_items_detected {
+                let _ = self.db.prune_history(self.settings.max_history);
+            }
             self.refresh_items();
             self.last_query_cached = self.search_query.clone();
             self.selected_index = 0;
@@ -1064,6 +1071,8 @@ impl ClipboardApp {
                                 .clicked()
                             {
                                 self.settings.max_history = limit;
+                                self.db.set_max_history(limit);
+                                let _ = self.db.prune_history(limit);
                                 let _ = self.settings.save(&self.db);
                                 self.refresh_items();
                             }
@@ -1076,7 +1085,7 @@ impl ClipboardApp {
     fn render_security_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         ui.group(|ui| {
             ui.label(
-                egui::RichText::new(format!("{} Security & Encryption", icons::SHIELD_CHECK))
+                egui::RichText::new(format!("{} Security & Privacy", icons::SHIELD_CHECK))
                     .color(crate::theme::text_primary(is_dark))
                     .strong(),
             );
@@ -1088,6 +1097,21 @@ impl ClipboardApp {
                 .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );
+
+            ui.add_space(6.0);
+            if ui
+                .checkbox(
+                    &mut self.settings.ignore_concealed,
+                    "Ignore passwords & concealed items (1Password, Bitwarden, KeePass)",
+                )
+                .on_hover_text(
+                    "Detects OS privacy flags and prevents sensitive credentials from being recorded into history.",
+                )
+                .changed()
+            {
+                self.db.set_ignore_concealed(self.settings.ignore_concealed);
+                let _ = self.settings.save(&self.db);
+            }
 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -1725,8 +1749,9 @@ impl ClipboardApp {
     }
 
     fn render_url_content(ui: &mut egui::Ui, content: &str, is_dark: bool) -> ItemAction {
-        let preview = if content.len() > 180 {
-            format!("{}...", &content[..180])
+        let preview = if content.chars().count() > 180 {
+            let prefix: String = content.chars().take(180).collect();
+            format!("{prefix}...")
         } else {
             content.to_string()
         };
@@ -1749,8 +1774,9 @@ impl ClipboardApp {
     }
 
     fn render_text_content(ui: &mut egui::Ui, content: &str, is_dark: bool) -> ItemAction {
-        let preview = if content.len() > 180 {
-            format!("{}...", &content[..180])
+        let preview = if content.chars().count() > 180 {
+            let prefix: String = content.chars().take(180).collect();
+            format!("{prefix}...")
         } else {
             content.to_string()
         };

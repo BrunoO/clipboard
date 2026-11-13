@@ -99,7 +99,9 @@ fn save_key_file(path: &Path, key: &str) -> Result<(), std::io::Error> {
 fn generate_random_hex_key() -> String {
     let mut key_bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut key_bytes);
-    hex::encode(key_bytes)
+    let hex_key = hex::encode(key_bytes);
+    key_bytes.fill(0);
+    hex_key
 }
 
 #[cfg(unix)]

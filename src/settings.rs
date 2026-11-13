@@ -143,6 +143,8 @@ pub(crate) struct AppSettings {
     pub(crate) restore_focus: bool,
     #[serde(default = "default_auto_paste")]
     pub(crate) auto_paste: bool,
+    #[serde(default = "default_ignore_concealed")]
+    pub(crate) ignore_concealed: bool,
 }
 
 const fn default_hide_on_blur() -> bool {
@@ -157,6 +159,10 @@ const fn default_auto_paste() -> bool {
     true
 }
 
+const fn default_ignore_concealed() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -167,6 +173,7 @@ impl Default for AppSettings {
             hide_on_blur: true,
             restore_focus: true,
             auto_paste: true,
+            ignore_concealed: true,
         }
     }
 }
@@ -262,6 +269,7 @@ mod tests {
         let parsed: AppSettings =
             serde_json::from_str(legacy_json).expect("Legacy JSON should parse");
         assert_eq!(parsed.theme, AppThemeMode::System);
+        assert!(parsed.ignore_concealed);
 
         // Explicit theme mode JSON
         let light_json = r#"{

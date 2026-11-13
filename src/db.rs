@@ -1,6 +1,7 @@
 use chrono::Local;
 use rusqlite::{params, Connection, Result};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Represents the type of clipboard content.
@@ -95,6 +96,8 @@ impl ClipboardItem {
 #[derive(Clone)]
 pub(crate) struct Database {
     conn: Arc<Mutex<Connection>>,
+    max_history: Arc<AtomicUsize>,
+    ignore_concealed: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for Database {
@@ -105,7 +108,7 @@ impl std::fmt::Debug for Database {
 
 impl Database {
     /// Opens or creates the SQLite database, unlocks it with the `SQLCipher` key,
-    /// and initializes or migrates the schema.
+    /// enables WAL mode for high performance concurrency, and initializes or migrates the schema.
     pub(crate) fn open(
         path: &Path,
         encryption_key: &str,
@@ -120,6 +123,13 @@ impl Database {
         // If the key is incorrect or database is corrupted, this will fail immediately.
         let _test: i64 =
             conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))?;
+
+        // Enable WAL mode and normal synchronous writing for maximum responsiveness and concurrency
+        let _: String = conn.query_row("PRAGMA journal_mode = WAL;", [], |r| r.get(0))?;
+        conn.execute_batch(
+            "PRAGMA synchronous = NORMAL;
+             PRAGMA foreign_keys = ON;",
+        )?;
 
         // Initialize schema
         conn.execute_batch(
@@ -156,15 +166,69 @@ impl Database {
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            max_history: Arc::new(AtomicUsize::new(100)),
+            ignore_concealed: Arc::new(AtomicBool::new(true)),
         })
     }
 
-    /// Inserts a new text clipboard entry, deduplicating against the latest entry.
-    /// Returns `Ok(Some(id))` if inserted, or `Ok(None)` if duplicate.
+    /// Sets the maximum history limit dynamically.
+    pub(crate) fn set_max_history(&self, max: usize) {
+        self.max_history.store(max, Ordering::Relaxed);
+    }
+
+    /// Retrieves the current maximum history limit.
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn max_history(&self) -> usize {
+        self.max_history.load(Ordering::Relaxed)
+    }
+
+    /// Sets whether to ignore concealed clipboard data from password managers.
+    pub(crate) fn set_ignore_concealed(&self, ignore: bool) {
+        self.ignore_concealed.store(ignore, Ordering::Relaxed);
+    }
+
+    /// Checks whether to ignore concealed clipboard data.
+    #[must_use]
+    pub(crate) fn ignore_concealed(&self) -> bool {
+        self.ignore_concealed.load(Ordering::Relaxed)
+    }
+
+    /// Prunes older clipboard items exceeding the maximum history threshold.
+    /// Returns the number of purged rows.
+    pub(crate) fn prune_history(&self, max_history: usize) -> Result<usize, rusqlite::Error> {
+        if max_history == 0 {
+            return Ok(0);
+        }
+        let conn = self.conn.lock().unwrap();
+        let limit_i64 = i64::try_from(max_history).unwrap_or(i64::MAX);
+        let deleted = conn.execute(
+            "DELETE FROM clipboard_history
+             WHERE id NOT IN (
+                 SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
+             )",
+            params![limit_i64],
+        )?;
+        Ok(deleted)
+    }
+
+    /// Compacts and defragments the encrypted database to reclaim free disk space.
+    #[allow(dead_code)]
+    pub(crate) fn vacuum(&self) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("VACUUM;")?;
+        Ok(())
+    }
+
+    /// Inserts a new text clipboard entry, deduplicating against history.
+    /// If an identical item was already the most recent, returns `Ok(None)`.
+    /// If an identical item exists earlier in history, deletes the stale copy and promotes
+    /// the item to the top with an updated timestamp.
+    /// Also automatically enforces the `max_history` limit.
     pub(crate) fn insert(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
 
-        // Check if the most recent entry has the exact same content
+        // 1. Check if the most recent entry has the exact same content
         let mut stmt =
             conn.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
         let mut rows = stmt.query([])?;
@@ -177,9 +241,16 @@ impl Database {
                 || last_kind == "color")
                 && last_content == content
             {
-                return Ok(None); // Duplicate, ignore
+                return Ok(None); // Exact consecutive duplicate, ignore
             }
         }
+
+        // 2. Remove any older duplicate so the item moves to the top of history
+        conn.execute(
+            "DELETE FROM clipboard_history
+             WHERE content = ?1 AND kind IN ('text', 'url', 'code', 'color')",
+            params![content],
+        )?;
 
         let is_url = is_valid_url(content);
         let is_color = !is_url && crate::color::parse_color(content).is_some();
@@ -200,11 +271,29 @@ impl Database {
             params![kind_str, content, now],
         )?;
 
-        Ok(Some(conn.last_insert_rowid()))
+        let new_id = conn.last_insert_rowid();
+
+        // 3. Automatically prune older entries beyond max_history
+        let max_limit = self.max_history.load(Ordering::Relaxed);
+        if max_limit > 0 {
+            let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
+            let _ = conn.execute(
+                "DELETE FROM clipboard_history
+                 WHERE id NOT IN (
+                     SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
+                 )",
+                params![limit_i64],
+            );
+        }
+
+        Ok(Some(new_id))
     }
 
-    /// Inserts a new image clipboard entry, deduplicating against the latest entry.
-    /// Returns `Ok(Some(id))` if inserted, or `Ok(None)` if duplicate.
+    /// Inserts a new image clipboard entry, deduplicating against history.
+    /// If an identical image was already the most recent, returns `Ok(None)`.
+    /// If an identical image exists earlier in history, deletes the stale copy and
+    /// promotes the item to the top with an updated timestamp.
+    /// Also automatically enforces the `max_history` limit.
     pub(crate) fn insert_image(
         &self,
         width: u32,
@@ -213,7 +302,7 @@ impl Database {
     ) -> Result<Option<i64>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
 
-        // Check if the most recent entry has the exact same image content
+        // 1. Check if the most recent entry has the exact same image content
         let mut stmt = conn
             .prepare("SELECT kind, image_data FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
         let mut rows = stmt.query([])?;
@@ -222,11 +311,18 @@ impl Database {
             if last_kind == "image" {
                 if let Ok(last_bytes) = row.get::<_, Vec<u8>>(1) {
                     if last_bytes == png_bytes {
-                        return Ok(None); // Duplicate, ignore
+                        return Ok(None); // Exact consecutive duplicate, ignore
                     }
                 }
             }
         }
+
+        // 2. Remove any older duplicate image so the new copy moves to the top
+        conn.execute(
+            "DELETE FROM clipboard_history
+             WHERE kind = 'image' AND width = ?1 AND height = ?2 AND image_data = ?3",
+            params![width, height, png_bytes],
+        )?;
 
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let content = format!("[Image {width}x{height}]");
@@ -236,7 +332,22 @@ impl Database {
             params![content, png_bytes, width, height, now],
         )?;
 
-        Ok(Some(conn.last_insert_rowid()))
+        let new_id = conn.last_insert_rowid();
+
+        // 3. Automatically prune older entries beyond max_history
+        let max_limit = self.max_history.load(Ordering::Relaxed);
+        if max_limit > 0 {
+            let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
+            let _ = conn.execute(
+                "DELETE FROM clipboard_history
+                 WHERE id NOT IN (
+                     SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
+                 )",
+                params![limit_i64],
+            );
+        }
+
+        Ok(Some(new_id))
     }
 
     /// Fetches the most recent clipboard entries, optionally filtered by search text.
@@ -314,10 +425,11 @@ impl Database {
         Ok(())
     }
 
-    /// Clears all clipboard history.
+    /// Clears all clipboard history and compacts the database to reclaim disk space.
     pub(crate) fn clear(&self) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM clipboard_history", [])?;
+        let _ = conn.execute_batch("VACUUM;");
         Ok(())
     }
 
@@ -403,6 +515,53 @@ mod tests {
 
         let items = db.get_recent(10, None).unwrap();
         assert_eq!(items.len(), 1);
+
+        // Alternating deduplication: A -> B -> A promotes A to the top
+        let id_a1 = db.insert("Alpha").unwrap().unwrap();
+        let _id_b = db.insert("Beta").unwrap().unwrap();
+        let id_a2 = db.insert("Alpha").unwrap().unwrap();
+        assert_ne!(id_a1, id_a2, "Re-copied item should receive new highest id");
+
+        let items_alt = db.get_recent(10, None).unwrap();
+        // Should only have "Alpha", "Beta", and "Duplicate content" (3 items total, no duplicate Alpha)
+        assert_eq!(items_alt.len(), 3);
+        assert_eq!(items_alt[0].content, "Alpha");
+        assert_eq!(items_alt[1].content, "Beta");
+        assert_eq!(items_alt[2].content, "Duplicate content");
+    }
+
+    #[test]
+    fn test_history_auto_pruning() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("prune.db");
+        let db = Database::open(&db_path, TEST_KEY).unwrap();
+
+        // Enforce max history of 3 items
+        db.set_max_history(3);
+        assert_eq!(db.max_history(), 3);
+
+        db.insert("Item 1").unwrap();
+        db.insert("Item 2").unwrap();
+        db.insert("Item 3").unwrap();
+        db.insert("Item 4").unwrap();
+        db.insert("Item 5").unwrap();
+
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 3, "Database must prune beyond max_history");
+        assert_eq!(items[0].content, "Item 5");
+        assert_eq!(items[1].content, "Item 4");
+        assert_eq!(items[2].content, "Item 3");
+
+        // Explicit manual prune to 2 items
+        let purged = db.prune_history(2).unwrap();
+        assert_eq!(purged, 1);
+        let items_pruned = db.get_recent(10, None).unwrap();
+        assert_eq!(items_pruned.len(), 2);
+        assert_eq!(items_pruned[0].content, "Item 5");
+        assert_eq!(items_pruned[1].content, "Item 4");
+
+        // Vacuum database test
+        db.vacuum().unwrap();
     }
 
     #[test]
