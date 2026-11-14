@@ -153,6 +153,7 @@ pub(crate) struct ClipboardApp {
     monitor_shutdown_tx: Sender<()>,
     recording_custom_hotkey: bool,
     pending_custom_hotkey: String,
+    is_quitting: bool,
 }
 
 impl ClipboardApp {
@@ -226,6 +227,7 @@ impl ClipboardApp {
             recording_custom_hotkey: false,
             pending_custom_hotkey: String::new(),
             monitor_shutdown_tx,
+            is_quitting: false,
         }
     }
 
@@ -839,8 +841,31 @@ impl ClipboardApp {
 
     fn handle_window_close_request(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) {
+            if self.is_quitting {
+                return;
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.hide_window(ctx, false, false);
+        }
+    }
+
+    fn quit(&mut self, ctx: &egui::Context) {
+        self.is_quitting = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    fn handle_quit_shortcut(&mut self, ctx: &egui::Context) {
+        let quit_pressed = ctx.input(|i| {
+            #[cfg(target_os = "macos")]
+            let modifier = i.modifiers.command;
+            #[cfg(not(target_os = "macos"))]
+            let modifier = i.modifiers.ctrl;
+
+            modifier && i.key_pressed(egui::Key::Q)
+        });
+
+        if quit_pressed {
+            self.quit(ctx);
         }
     }
 
@@ -980,6 +1005,19 @@ impl ClipboardApp {
                     self.hide_window(ctx, self.settings.restore_focus, false);
                 }
 
+                let quit_tooltip = if cfg!(target_os = "macos") {
+                    "Quit CipherClipboard (Cmd+Q)"
+                } else {
+                    "Quit CipherClipboard (Ctrl+Q)"
+                };
+                if ui
+                    .small_button(icons::POWER)
+                    .on_hover_text(quit_tooltip)
+                    .clicked()
+                {
+                    self.quit(ctx);
+                }
+
                 let settings_btn = match self.active_view {
                     ActiveView::Settings => ui
                         .small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
@@ -1000,7 +1038,7 @@ impl ClipboardApp {
                         .small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
                         .on_hover_text("Back to clipboard history"),
                     ActiveView::History | ActiveView::Settings => ui
-                        .small_button(format!("{} Password", icons::KEY))
+                        .small_button(icons::KEY)
                         .on_hover_text("Generate random password or passphrase"),
                 };
                 if gen_btn.clicked() {
@@ -2974,6 +3012,7 @@ impl eframe::App for ClipboardApp {
         }
 
         self.handle_window_close_request(ctx);
+        self.handle_quit_shortcut(ctx);
         self.handle_hotkey_toggle(ctx);
         self.handle_escape_key(ctx);
         self.handle_keyboard_navigation(ctx);
@@ -3018,6 +3057,7 @@ impl Drop for ClipboardApp {
 #[cfg(test)]
 mod tests {
     use super::ClipboardApp;
+    use eframe::egui;
 
     #[test]
     fn test_format_display_preview_strips_variation_selectors_and_truncates() {
@@ -3031,5 +3071,55 @@ mod tests {
         let truncated = ClipboardApp::format_display_preview(&long, 180);
         assert_eq!(truncated.chars().count(), 183);
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_quit_sets_is_quitting_flag() {
+        let ctx = egui::Context::default();
+        let (shutdown_tx, _shutdown_rx) = std::sync::mpsc::channel();
+        let (_notify_tx, notify_rx) = std::sync::mpsc::channel();
+        let (_hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("quit_test.db");
+        let db = crate::db::Database::open(
+            &db_path,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let mut app = ClipboardApp {
+            db,
+            search_query: String::new(),
+            content_filter: super::ContentFilter::All,
+            items: Vec::new(),
+            clipboard_writer: None,
+            toast: None,
+            last_query_cached: String::new(),
+            notify_rx,
+            hotkey_rx,
+            hotkey_service: None,
+            texture_cache: super::ImageTextureCache::new(),
+            is_visible: true,
+            has_been_focused: false,
+            was_inactive_since_hidden: false,
+            selected_index: 0,
+            focus_search_input: true,
+            last_toggle_instant: None,
+            settings: crate::settings::AppSettings::default(),
+            active_view: super::ActiveView::History,
+            password_gen: crate::password::PasswordGeneratorState::default(),
+            revealed_secrets: std::collections::HashSet::new(),
+            pending_clipboard_clear: None,
+            show_clear_confirm_dialog: false,
+            scroll_to_selected: false,
+            current_is_dark: None,
+            recording_custom_hotkey: false,
+            pending_custom_hotkey: String::new(),
+            monitor_shutdown_tx: shutdown_tx,
+            is_quitting: false,
+        };
+
+        assert!(!app.is_quitting);
+        app.quit(&ctx);
+        assert!(app.is_quitting);
     }
 }
