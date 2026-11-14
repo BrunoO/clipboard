@@ -2143,13 +2143,34 @@ impl ClipboardApp {
         action
     }
 
+    fn format_display_preview(content: &str, max_chars: usize) -> String {
+        let mut out = String::with_capacity(content.len().min(max_chars * 4));
+        let mut count = 0;
+        let mut truncated = false;
+        for ch in content.chars() {
+            // Strip invisible Unicode variation selectors and zero-width chars that
+            // egui's font rasterizer renders as missing-glyph tofu boxes (□).
+            if matches!(
+                ch,
+                '\u{FE0E}' | '\u{FE0F}' | '\u{200B}' | '\u{200D}' | '\u{FEFF}'
+            ) {
+                continue;
+            }
+            if count >= max_chars {
+                truncated = true;
+                break;
+            }
+            out.push(ch);
+            count += 1;
+        }
+        if truncated {
+            out.push_str("...");
+        }
+        out
+    }
+
     fn render_url_content(ui: &mut egui::Ui, content: &str, is_dark: bool) -> ItemAction {
-        let preview = if content.chars().count() > 180 {
-            let prefix: String = content.chars().take(180).collect();
-            format!("{prefix}...")
-        } else {
-            content.to_string()
-        };
+        let preview = Self::format_display_preview(content, 180);
 
         let link_color = crate::theme::link_color(is_dark);
 
@@ -2169,12 +2190,7 @@ impl ClipboardApp {
     }
 
     fn render_text_content(ui: &mut egui::Ui, content: &str, is_dark: bool) -> ItemAction {
-        let preview = if content.chars().count() > 180 {
-            let prefix: String = content.chars().take(180).collect();
-            format!("{prefix}...")
-        } else {
-            content.to_string()
-        };
+        let preview = Self::format_display_preview(content, 180);
 
         let label = ui.add(
             egui::Label::new(
@@ -2368,5 +2384,24 @@ impl eframe::App for ClipboardApp {
         }
 
         self.render_clear_confirm_modal(ctx, is_dark);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClipboardApp;
+
+    #[test]
+    fn test_format_display_preview_strips_variation_selectors_and_truncates() {
+        let raw = "⚠️ Failed to save";
+        assert_eq!(
+            ClipboardApp::format_display_preview(raw, 180),
+            "⚠ Failed to save"
+        );
+
+        let long = "a".repeat(200);
+        let truncated = ClipboardApp::format_display_preview(&long, 180);
+        assert_eq!(truncated.chars().count(), 183);
+        assert!(truncated.ends_with("..."));
     }
 }

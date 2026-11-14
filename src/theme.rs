@@ -107,7 +107,10 @@ pub(crate) fn setup_fonts(fonts: &mut FontDefinitions) {
                     .font_data
                     .insert(font_name.clone(), FontData::from_owned(bytes));
                 if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
-                    family.insert(0, font_name);
+                    family.insert(0, font_name.clone());
+                }
+                if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
+                    mono.push(font_name);
                 }
                 break;
             }
