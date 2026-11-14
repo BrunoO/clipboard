@@ -4,7 +4,7 @@ use arboard::Clipboard;
 use eframe::egui;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
@@ -39,8 +39,10 @@ pub(crate) fn start_clipboard_monitor(
     db: Database,
     ctx: egui::Context,
     notify_tx: Sender<()>,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
+) -> (thread::JoinHandle<()>, Sender<()>) {
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
+
+    let handle = thread::spawn(move || {
         let mut clipboard = match Clipboard::new() {
             Ok(cb) => cb,
             Err(e) => {
@@ -55,6 +57,12 @@ pub(crate) fn start_clipboard_monitor(
         println!("👀 Clipboard monitor active (polling every 200ms for text & images)...");
 
         loop {
+            // Check for shutdown signal
+            if shutdown_rx.try_recv().is_ok() {
+                println!("👀 Clipboard monitor shutting down...");
+                break;
+            }
+
             thread::sleep(POLL_INTERVAL);
 
             // Skip processing if marked as concealed/transient by password managers
@@ -142,5 +150,7 @@ pub(crate) fn start_clipboard_monitor(
                 }
             }
         }
-    })
+    });
+
+    (handle, shutdown_tx)
 }

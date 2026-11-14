@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
 
     // 8. Start GUI, global hotkeys, and background monitor
-    eframe::run_native(
+    let result = eframe::run_native(
         "CipherClipboard",
         native_options,
         Box::new(move |cc| {
@@ -128,7 +128,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Start background clipboard polling thread
             let monitor_db = db.clone();
             let monitor_ctx = cc.egui_ctx.clone();
-            monitor::start_clipboard_monitor(monitor_db, monitor_ctx, notify_tx);
+            let (_monitor_handle, monitor_shutdown_tx) =
+                monitor::start_clipboard_monitor(monitor_db, monitor_ctx, notify_tx);
 
             Ok(Box::new(ClipboardApp::new(
                 cc,
@@ -137,9 +138,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 hotkey_rx,
                 hotkey_service,
                 settings,
+                monitor_shutdown_tx,
             )))
         }),
-    )?;
+    );
+
+    // Cleanup on shutdown
+    platform::teardown_reopen_observer();
+
+    result?;
 
     Ok(())
 }

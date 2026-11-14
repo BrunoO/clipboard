@@ -738,6 +738,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "chrono",
+ "crossbeam-channel",
  "dirs",
  "eframe",
  "egui-phosphor",

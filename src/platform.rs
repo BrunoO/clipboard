@@ -111,6 +111,13 @@ pub(crate) fn setup_reopen_observer() {
     macos::setup_reopen_observer();
 }
 
+/// Removes the macOS reopen observer to prevent crashes on app termination.
+#[allow(clippy::missing_const_for_fn)]
+pub(crate) fn teardown_reopen_observer() {
+    #[cfg(target_os = "macos")]
+    macos::teardown_reopen_observer();
+}
+
 /// Captures the current frontmost application/window before `CipherClipboard` gains focus.
 #[allow(clippy::missing_const_for_fn)]
 pub(crate) fn capture_active_window() {
@@ -122,7 +129,7 @@ pub(crate) fn capture_active_window() {
 }
 
 /// Restores focus to the previous application and optionally simulates a paste keystroke.
-pub(crate) fn restore_focus_and_paste(restore_focus: bool, auto_paste: bool) {
+pub(crate) fn restore_focus_and_paste(restore_focus: bool, auto_paste: bool, auto_paste_delay_ms: u64) {
     if !restore_focus && !auto_paste {
         return;
     }
@@ -141,9 +148,9 @@ pub(crate) fn restore_focus_and_paste(restore_focus: bool, auto_paste: bool) {
         }
 
         if auto_paste {
-            // Give the OS window server 120ms to switch key focus
+            // Give the OS window server time to switch key focus
             // to the target application before dispatching keystrokes.
-            std::thread::sleep(Duration::from_millis(120));
+            std::thread::sleep(Duration::from_millis(auto_paste_delay_ms));
 
             #[cfg(target_os = "macos")]
             macos::simulate_paste();
@@ -257,6 +264,13 @@ mod macos {
         super::request_repaint();
     }
 
+    // Wrapper to allow storing raw pointer in static (only accessed from main thread)
+    struct ObserverPtr(*mut Object);
+    unsafe impl Send for ObserverPtr {}
+    unsafe impl Sync for ObserverPtr {}
+
+    static REOPEN_OBSERVER: std::sync::Mutex<Option<ObserverPtr>> = std::sync::Mutex::new(None);
+
     pub(super) fn setup_reopen_observer() {
         static INIT: std::sync::Once = std::sync::Once::new();
         INIT.call_once(|| unsafe {
@@ -307,7 +321,28 @@ mod macos {
                     object: nil_obj
                 ];
             }
+
+            // Store observer for later cleanup
+            if let Ok(mut lock) = REOPEN_OBSERVER.lock() {
+                *lock = Some(ObserverPtr(observer));
+            }
         });
+    }
+
+    pub(super) fn teardown_reopen_observer() {
+        let observer = if let Ok(mut lock) = REOPEN_OBSERVER.lock() {
+            lock.take()
+        } else {
+            None
+        };
+        if let Some(ObserverPtr(observer)) = observer {
+            unsafe {
+                let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
+                if !center.is_null() {
+                    let _: () = msg_send![center, removeObserver: observer];
+                }
+            }
+        }
     }
 
     #[link(name = "ApplicationServices", kind = "framework")]
@@ -755,7 +790,7 @@ mod tests {
     fn test_platform_capture_and_restore_no_panic() {
         // Calling capture and restore should never panic on any platform
         capture_active_window();
-        restore_focus_and_paste(false, false);
+        restore_focus_and_paste(false, false, 120);
         assert!(is_accessibility_trusted() || !is_accessibility_trusted());
         let _ = is_app_active();
         let _ = is_clipboard_concealed();

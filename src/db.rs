@@ -195,6 +195,14 @@ impl Database {
         })
     }
 
+    /// Acquires the transient text mutex, recovering from poison if a previous thread panicked.
+    fn lock_transient(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.transient_text.lock().unwrap_or_else(|poisoned| {
+            eprintln!("⚠️ Transient text mutex recovered from poison");
+            poisoned.into_inner()
+        })
+    }
+
     /// Sets the maximum history limit dynamically.
     pub(crate) fn set_max_history(&self, max: usize) {
         self.max_history.store(max, Ordering::Relaxed);
@@ -225,19 +233,17 @@ impl Database {
 
     /// Marks the given text to be ignored once by the background clipboard monitor.
     pub(crate) fn skip_next_capture(&self, text: &str) {
-        if let Ok(mut guard) = self.transient_text.lock() {
-            *guard = Some(text.to_string());
-        }
+        let mut guard = self.lock_transient();
+        *guard = Some(text.to_string());
     }
 
     /// Returns true (and clears the marker) if `text` matches a pending transient copy.
     #[must_use]
     pub(crate) fn take_if_skipped(&self, text: &str) -> bool {
-        if let Ok(mut guard) = self.transient_text.lock() {
-            if guard.as_deref() == Some(text) {
-                *guard = None;
-                return true;
-            }
+        let mut guard = self.lock_transient();
+        if guard.as_deref() == Some(text) {
+            *guard = None;
+            return true;
         }
         false
     }

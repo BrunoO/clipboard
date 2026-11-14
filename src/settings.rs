@@ -150,6 +150,8 @@ pub(crate) struct AppSettings {
     pub(crate) auto_detect_secrets: bool,
     #[serde(default = "default_auto_clear_secret_secs")]
     pub(crate) auto_clear_secret_secs: u64,
+    #[serde(default = "default_auto_paste_delay_ms")]
+    pub(crate) auto_paste_delay_ms: u64,
     #[serde(default)]
     pub(crate) password_config: PasswordConfig,
     #[serde(default = "default_generator_skip_history")]
@@ -182,6 +184,10 @@ const fn default_auto_clear_secret_secs() -> u64 {
     30
 }
 
+const fn default_auto_paste_delay_ms() -> u64 {
+    120
+}
+
 const fn default_generator_skip_history() -> bool {
     true
 }
@@ -200,6 +206,7 @@ impl Default for AppSettings {
             hide_on_blur: true,
             restore_focus: true,
             auto_paste: true,
+            auto_paste_delay_ms: 120,
             ignore_concealed: true,
             auto_detect_secrets: true,
             auto_clear_secret_secs: 30,
