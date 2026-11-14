@@ -106,6 +106,7 @@ pub(crate) struct Database {
     conn: Arc<Mutex<Connection>>,
     max_history: Arc<AtomicUsize>,
     ignore_concealed: Arc<AtomicBool>,
+    auto_detect_secrets: Arc<AtomicBool>,
     transient_text: Arc<Mutex<Option<String>>>,
 }
 
@@ -181,6 +182,7 @@ impl Database {
             conn: Arc::new(Mutex::new(conn)),
             max_history: Arc::new(AtomicUsize::new(100)),
             ignore_concealed: Arc::new(AtomicBool::new(true)),
+            auto_detect_secrets: Arc::new(AtomicBool::new(true)),
             transient_text: Arc::new(Mutex::new(None)),
         })
     }
@@ -206,6 +208,11 @@ impl Database {
     #[must_use]
     pub(crate) fn ignore_concealed(&self) -> bool {
         self.ignore_concealed.load(Ordering::Relaxed)
+    }
+
+    /// Sets whether to automatically classify likely secrets/API keys as `secret`.
+    pub(crate) fn set_auto_detect_secrets(&self, enabled: bool) {
+        self.auto_detect_secrets.store(enabled, Ordering::Relaxed);
     }
 
     /// Marks the given text to be ignored once by the background clipboard monitor.
@@ -271,7 +278,8 @@ impl Database {
             if (last_kind == "text"
                 || last_kind == "url"
                 || last_kind == "code"
-                || last_kind == "color")
+                || last_kind == "color"
+                || last_kind == "secret")
                 && last_content == content
             {
                 return Ok(None); // Exact consecutive duplicate, ignore
@@ -281,14 +289,21 @@ impl Database {
         // 2. Remove any older duplicate so the item moves to the top of history
         conn.execute(
             "DELETE FROM clipboard_history
-             WHERE content = ?1 AND kind IN ('text', 'url', 'code', 'color')",
+             WHERE content = ?1 AND kind IN ('text', 'url', 'code', 'color', 'secret')",
             params![content],
         )?;
 
-        let is_url = is_valid_url(content);
-        let is_color = !is_url && crate::color::parse_color(content).is_some();
-        let is_code = !is_url && !is_color && crate::code::detect_code_language(content).is_some();
-        let kind_str = if is_url {
+        let is_secret = self.auto_detect_secrets.load(Ordering::Relaxed)
+            && crate::secret::is_likely_secret(content);
+        let is_url = !is_secret && is_valid_url(content);
+        let is_color = !is_secret && !is_url && crate::color::parse_color(content).is_some();
+        let is_code = !is_secret
+            && !is_url
+            && !is_color
+            && crate::code::detect_code_language(content).is_some();
+        let kind_str = if is_secret {
+            "secret"
+        } else if is_url {
             "url"
         } else if is_color {
             "color"
@@ -868,5 +883,24 @@ mod tests {
         db.set_item_secret(id, true).unwrap();
         let items = db.get_recent(10, None).unwrap();
         assert_eq!(items[0].kind, ItemKind::Secret);
+    }
+
+    #[test]
+    fn test_auto_detect_secrets_on_insert() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("auto_detect_secret_test.db");
+        let db = Database::open(&db_path, TEST_KEY).unwrap();
+
+        let token = "ghp_1234567890abcdef1234567890abcdef1234";
+        db.insert(token).unwrap().expect("Should insert token");
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items[0].kind, ItemKind::Secret);
+
+        // When disabled, a newly inserted token is not classified as secret
+        db.set_auto_detect_secrets(false);
+        let token2 = "sk-proj-abcdefghijklmnopqrstuvwxyz123456";
+        db.insert(token2).unwrap().expect("Should insert token2");
+        let items = db.get_recent(10, None).unwrap();
+        assert_ne!(items[0].kind, ItemKind::Secret);
     }
 }

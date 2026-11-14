@@ -146,6 +146,8 @@ pub(crate) struct AppSettings {
     pub(crate) auto_paste: bool,
     #[serde(default = "default_ignore_concealed")]
     pub(crate) ignore_concealed: bool,
+    #[serde(default = "default_auto_detect_secrets")]
+    pub(crate) auto_detect_secrets: bool,
     #[serde(default = "default_auto_clear_secret_secs")]
     pub(crate) auto_clear_secret_secs: u64,
     #[serde(default)]
@@ -172,6 +174,10 @@ const fn default_ignore_concealed() -> bool {
     true
 }
 
+const fn default_auto_detect_secrets() -> bool {
+    true
+}
+
 const fn default_auto_clear_secret_secs() -> u64 {
     30
 }
@@ -195,6 +201,7 @@ impl Default for AppSettings {
             restore_focus: true,
             auto_paste: true,
             ignore_concealed: true,
+            auto_detect_secrets: true,
             auto_clear_secret_secs: 30,
             password_config: PasswordConfig::default(),
             generator_skip_history: true,

@@ -162,6 +162,7 @@ impl ClipboardApp {
     ) -> Self {
         db.set_max_history(settings.max_history);
         db.set_ignore_concealed(settings.ignore_concealed);
+        db.set_auto_detect_secrets(settings.auto_detect_secrets);
         let _ = db.prune_history(settings.max_history);
 
         let initial_items = db
@@ -1641,6 +1642,22 @@ impl ClipboardApp {
                 .changed()
             {
                 self.db.set_ignore_concealed(self.settings.ignore_concealed);
+                let _ = self.settings.save(&self.db);
+            }
+
+            ui.add_space(4.0);
+            if ui
+                .checkbox(
+                    &mut self.settings.auto_detect_secrets,
+                    "Automatically detect & mask API keys, tokens, and secrets",
+                )
+                .on_hover_text(
+                    "Automatically classifies copied API keys, JWTs, private keys, and high-entropy passwords as Secrets so they are masked by default.",
+                )
+                .changed()
+            {
+                self.db
+                    .set_auto_detect_secrets(self.settings.auto_detect_secrets);
                 let _ = self.settings.save(&self.db);
             }
 
