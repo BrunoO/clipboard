@@ -163,12 +163,29 @@ impl ClipboardApp {
         db.set_max_history(settings.max_history);
         db.set_ignore_concealed(settings.ignore_concealed);
         db.set_auto_detect_secrets(settings.auto_detect_secrets);
-        let _ = db.prune_history(settings.max_history);
+        if let Err(e) = db.prune_history(settings.max_history) {
+            eprintln!("⚠️ Failed to prune history at startup: {e}");
+        }
 
-        let initial_items = db
-            .get_recent(settings.max_history, None)
-            .unwrap_or_default();
-        let clipboard_writer = Clipboard::new().ok();
+        let mut startup_toast = None;
+        let initial_items = match db.get_recent(settings.max_history, None) {
+            Ok(items) => items,
+            Err(e) => {
+                eprintln!("⚠️ Failed to load clipboard history: {e}");
+                startup_toast = Some((
+                    format!("{} Failed to load history: {e}", icons::WARNING),
+                    Instant::now(),
+                ));
+                Vec::new()
+            }
+        };
+        let clipboard_writer = match Clipboard::new() {
+            Ok(cb) => Some(cb),
+            Err(e) => {
+                eprintln!("⚠️ Clipboard writer unavailable: {e}");
+                None
+            }
+        };
 
         let password_gen = crate::password::PasswordGeneratorState::from_preferences(
             settings.password_config.clone(),
@@ -181,7 +198,7 @@ impl ClipboardApp {
             content_filter: ContentFilter::All,
             items: initial_items,
             clipboard_writer,
-            toast: None,
+            toast: startup_toast,
             last_query_cached: String::new(),
             notify_rx,
             hotkey_rx,
@@ -287,12 +304,18 @@ impl ClipboardApp {
         if let Some(cb) = &mut self.clipboard_writer {
             if let Err(e) = cb.set_text(content.to_string()) {
                 eprintln!("Failed to write text to clipboard: {e}");
+                self.show_toast(&format!(
+                    "{} Failed to copy text to clipboard",
+                    icons::WARNING
+                ));
             } else {
                 self.show_toast(&format!("{} Copied text to clipboard!", icons::CHECK));
                 if self.settings.hide_on_copy {
                     self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
                 }
             }
+        } else {
+            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
         }
     }
 
@@ -301,6 +324,10 @@ impl ClipboardApp {
         if let Some(cb) = &mut self.clipboard_writer {
             if let Err(e) = cb.set_text(secret.to_string()) {
                 eprintln!("Failed to write secret to clipboard: {e}");
+                self.show_toast(&format!(
+                    "{} Failed to copy secret to clipboard",
+                    icons::WARNING
+                ));
             } else {
                 self.schedule_secret_clipboard_clear(secret);
                 let msg = if self.settings.auto_clear_secret_secs > 0 {
@@ -317,6 +344,8 @@ impl ClipboardApp {
                     self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
                 }
             }
+        } else {
+            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
         }
     }
 
@@ -331,13 +360,19 @@ impl ClipboardApp {
         if let Some(cb) = &mut self.clipboard_writer {
             if let Err(e) = cb.set_text(secret.clone()) {
                 eprintln!("Failed to write generated password to clipboard: {e}");
+                self.show_toast(&format!(
+                    "{} Failed to copy password to clipboard",
+                    icons::WARNING
+                ));
             } else {
                 self.schedule_secret_clipboard_clear(&secret);
                 if !self.password_gen.skip_history {
                     if let Err(e) = self.db.insert_secret(&secret) {
                         eprintln!("Failed to save generated password to database: {e}");
                     } else {
-                        let _ = self.db.prune_history(self.settings.max_history);
+                        if let Err(e) = self.db.prune_history(self.settings.max_history) {
+                            eprintln!("⚠️ Failed to prune history: {e}");
+                        }
                         self.refresh_items();
                     }
                 }
@@ -351,6 +386,8 @@ impl ClipboardApp {
                     self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
                 }
             }
+        } else {
+            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
         }
     }
 
@@ -365,6 +402,10 @@ impl ClipboardApp {
                     };
                     if let Err(e) = cb.set_image(img_data) {
                         eprintln!("Failed to write image to clipboard: {e}");
+                        self.show_toast(&format!(
+                            "{} Failed to copy image to clipboard",
+                            icons::WARNING
+                        ));
                     } else {
                         self.show_toast(&format!("{} Copied image to clipboard!", icons::CHECK));
                         if self.settings.hide_on_copy {
@@ -378,8 +419,14 @@ impl ClipboardApp {
                 }
                 Err(e) => {
                     eprintln!("Failed to decode PNG image for clipboard copy: {e}");
+                    self.show_toast(&format!(
+                        "{} Failed to decode image for clipboard",
+                        icons::WARNING
+                    ));
                 }
             }
+        } else {
+            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
         }
     }
 

@@ -164,19 +164,19 @@ impl Database {
         )?;
 
         // Graceful migration: ensure all columns exist if created with an older schema
-        let _ = conn.execute(
+        for sql in [
             "ALTER TABLE clipboard_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'",
-            [],
-        );
-        let _ = conn.execute(
             "ALTER TABLE clipboard_history ADD COLUMN image_data BLOB",
-            [],
-        );
-        let _ = conn.execute("ALTER TABLE clipboard_history ADD COLUMN width INTEGER", []);
-        let _ = conn.execute(
+            "ALTER TABLE clipboard_history ADD COLUMN width INTEGER",
             "ALTER TABLE clipboard_history ADD COLUMN height INTEGER",
-            [],
-        );
+        ] {
+            if let Err(e) = conn.execute(sql, []) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    eprintln!("⚠️ Schema migration failed for `{sql}`: {e}");
+                }
+            }
+        }
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -184,6 +184,14 @@ impl Database {
             ignore_concealed: Arc::new(AtomicBool::new(true)),
             auto_detect_secrets: Arc::new(AtomicBool::new(true)),
             transient_text: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Acquires the database mutex, recovering from poison if a previous thread panicked.
+    fn lock_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(|poisoned| {
+            eprintln!("⚠️ Database mutex recovered from poison");
+            poisoned.into_inner()
         })
     }
 
@@ -240,7 +248,7 @@ impl Database {
         if max_history == 0 {
             return Ok(0);
         }
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let limit_i64 = i64::try_from(max_history).unwrap_or(i64::MAX);
         let deleted = conn.execute(
             "DELETE FROM clipboard_history
@@ -255,7 +263,7 @@ impl Database {
     /// Compacts and defragments the encrypted database to reclaim free disk space.
     #[allow(dead_code)]
     pub(crate) fn vacuum(&self) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute_batch("VACUUM;")?;
         Ok(())
     }
@@ -266,7 +274,7 @@ impl Database {
     /// the item to the top with an updated timestamp.
     /// Also automatically enforces the `max_history` limit.
     pub(crate) fn insert(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
 
         // 1. Check if the most recent entry has the exact same content
         let mut stmt =
@@ -325,13 +333,15 @@ impl Database {
         let max_limit = self.max_history.load(Ordering::Relaxed);
         if max_limit > 0 {
             let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
-            let _ = conn.execute(
+            if let Err(e) = conn.execute(
                 "DELETE FROM clipboard_history
                  WHERE id NOT IN (
                      SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
                  )",
                 params![limit_i64],
-            );
+            ) {
+                eprintln!("⚠️ Failed to prune clipboard history: {e}");
+            }
         }
 
         Ok(Some(new_id))
@@ -340,7 +350,7 @@ impl Database {
     /// Inserts a secret/sensitive text entry (e.g., generated password), deduplicating against
     /// existing secret entries and enforcing the `max_history` limit.
     pub(crate) fn insert_secret(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
 
         let mut stmt =
             conn.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
@@ -369,13 +379,15 @@ impl Database {
         let max_limit = self.max_history.load(Ordering::Relaxed);
         if max_limit > 0 {
             let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
-            let _ = conn.execute(
+            if let Err(e) = conn.execute(
                 "DELETE FROM clipboard_history
                  WHERE id NOT IN (
                      SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
                  )",
                 params![limit_i64],
-            );
+            ) {
+                eprintln!("⚠️ Failed to prune clipboard history: {e}");
+            }
         }
 
         Ok(Some(new_id))
@@ -392,7 +404,7 @@ impl Database {
         height: u32,
         png_bytes: &[u8],
     ) -> Result<Option<i64>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
 
         // 1. Check if the most recent entry has the exact same image content
         let mut stmt = conn
@@ -430,13 +442,15 @@ impl Database {
         let max_limit = self.max_history.load(Ordering::Relaxed);
         if max_limit > 0 {
             let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
-            let _ = conn.execute(
+            if let Err(e) = conn.execute(
                 "DELETE FROM clipboard_history
                  WHERE id NOT IN (
                      SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
                  )",
                 params![limit_i64],
-            );
+            ) {
+                eprintln!("⚠️ Failed to prune clipboard history: {e}");
+            }
         }
 
         Ok(Some(new_id))
@@ -448,7 +462,7 @@ impl Database {
         limit: usize,
         filter: Option<&str>,
     ) -> Result<Vec<ClipboardItem>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut items = Vec::new();
         let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
 
@@ -513,7 +527,7 @@ impl Database {
 
     /// Toggles whether a non-image history entry is classified as `secret`.
     pub(crate) fn set_item_secret(&self, id: i64, is_secret: bool) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare("SELECT kind, content FROM clipboard_history WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         let Some(row) = rows.next()? else {
@@ -548,22 +562,24 @@ impl Database {
 
     /// Deletes a specific entry by its primary key ID.
     pub(crate) fn delete(&self, id: i64) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute("DELETE FROM clipboard_history WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     /// Clears all clipboard history and compacts the database to reclaim disk space.
     pub(crate) fn clear(&self) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute("DELETE FROM clipboard_history", [])?;
-        let _ = conn.execute_batch("VACUUM;");
+        if let Err(e) = conn.execute_batch("VACUUM;") {
+            eprintln!("⚠️ Failed to VACUUM database after clear: {e}");
+        }
         Ok(())
     }
 
     /// Fetches a setting value by key from the database.
     pub(crate) fn get_setting(&self, key: &str) -> Result<Option<String>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key = ?1")?;
         let mut rows = stmt.query([key])?;
         if let Some(row) = rows.next()? {
@@ -575,7 +591,7 @@ impl Database {
 
     /// Stores or updates a setting value by key.
     pub(crate) fn set_setting(&self, key: &str, value: &str) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",

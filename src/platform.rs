@@ -258,7 +258,8 @@ mod macos {
     }
 
     pub(super) fn setup_reopen_observer() {
-        unsafe {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| unsafe {
             let superclass = class!(NSObject);
             if let Some(mut decl) = ClassDecl::new("CipherReopenObserver", superclass) {
                 decl.add_method(
@@ -306,7 +307,7 @@ mod macos {
                     object: nil_obj
                 ];
             }
-        }
+        });
     }
 
     #[link(name = "ApplicationServices", kind = "framework")]
