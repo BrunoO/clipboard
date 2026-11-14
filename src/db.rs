@@ -125,6 +125,10 @@ impl Database {
         let _test: i64 =
             conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))?;
 
+        // Wait up to 5 seconds if SQLite encounters a transient lock (e.g., WAL checkpoint
+        // or another process briefly accessing the database).
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+
         // Enable WAL mode and normal synchronous writing for maximum responsiveness and concurrency
         let _: String = conn.query_row("PRAGMA journal_mode = WAL;", [], |r| r.get(0))?;
         conn.execute_batch(
