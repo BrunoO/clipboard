@@ -12,8 +12,10 @@
 |----------|-------|-------------|
 | 🔴 Critical | 1 | Mutex poisoning can crash entire application |
 | 🟠 High | 3 | Silent error suppression in DB operations & initialization |
-| 🟡 Medium | 7 | Race conditions, resource leaks, unsafe unwraps |
-| 🟢 Low-Medium | 5 | Fragile timing, stale state, graceful shutdown gaps |
+| 🟡 Medium | 2 | Resource leaks, unsafe unwraps (5 items resolved as false positives) |
+| 🟢 Low-Medium | 2 | Fragile timing, graceful shutdown gaps (3 items resolved as false positives) |
+
+> **Note**: Items #4, #6, #7, #8, #12 were reviewed and confirmed as **false positives** — see [Resolved / False Positives](#resolved--false-positives) section.
 
 ---
 
@@ -105,27 +107,9 @@ let initial_items = match db.get_recent(settings.max_history, None) {
 
 ## 🟡 Medium Severity
 
-### 4. Hotkey Debounce Race Condition
+### 4. ~~Hotkey Debounce Race Condition~~ — **FALSE POSITIVE**
 
-**File**: `src/app.rs:399–401`
-
-```rust
-if self.last_toggle_instant.is_some_and(|t| t.elapsed() < Duration::from_millis(200)) {
-    return;
-}
-self.last_toggle_instant = Some(Instant::now());  // NOT atomic with check
-```
-
-**Impact**: Multiple rapid hotkey events (from OS key repeat) can all pass the check before the first updates the timestamp.
-
-**Fix**: Use atomic compare-exchange or reverse order:
-```rust
-let now = Instant::now();
-if let Some(last) = self.last_toggle_instant {
-    if now.duration_since(last) < Duration::from_millis(200) { return; }
-}
-self.last_toggle_instant = Some(now);
-```
+**Reviewer verified**: `handle_hotkey_toggle` runs on the single-threaded UI loop (`&mut self`), drains `hotkey_rx` before checking `last_toggle_instant`. No race possible.
 
 ### 5. macOS Notification Observer Never Removed
 
@@ -155,62 +139,24 @@ if let Some(&observer) = REOPEN_OBSERVER.get() {
 }
 ```
 
-### 6. Transient Text Race Condition
+### 6. ~~Transient Text Race Condition~~ — **FALSE POSITIVE**
 
-**File**: `src/db.rs:212–228` (`skip_next_capture`, `take_if_skipped`)
+**Reviewer verified**: `take_if_skipped` holds the `MutexGuard` across both the comparison and `*guard = None`, making it atomic. The poisoning concern is valid but handled by fix in Issue #1.
 
-```rust
-pub fn skip_next_capture(&self, text: &str) {
-    if let Ok(mut guard) = self.transient_text.lock() {  // Poisoning → silent fail
-        *guard = Some(text.to_string());
-    }
-}
+### 7. ~~Unwrap/Expect in Production Paths~~ — **FALSE POSITIVE**
 
-pub fn take_if_skipped(&self, text: &str) -> bool {
-    if let Ok(mut guard) = self.transient_text.lock() {
-        if guard.as_deref() == Some(text) {
-            *guard = None;
-            return true;
-        }
-    }
-    false
-}
-```
-
-**Issues**:
-1. Mutex poisoning → silent failure (returns `false`)
-2. Check-then-act not atomic — another thread can modify between check and clear
-
-**Fix**: Use `Mutex::lock().unwrap_or_else(...)` + atomic compare-exchange pattern.
-
-### 7. Unwrap/Expect in Production Paths
-
-| Location | Code | Risk |
-|----------|------|------|
-| `src/db.rs:270` | `i64::try_from(max_limit).unwrap_or(i64::MAX)` | Panic on overflow if `max_limit > i64::MAX` |
-| `src/db.rs:438` | Same pattern | Same |
-| `src/monitor.rs:376–377` | `u32::try_from(width).unwrap_or(0)` | Loses large image dimensions silently |
-| `src/password.rs:474` | `String::from_utf8(chars).unwrap_or_default()` | Returns empty password on non-UTF8 |
-
-**Fix**: Use `saturating_cast`, `try_from` with proper error handling, or `String::from_utf8_lossy`.
+**Reviewer verified**: All three cases are safe:
+- `i64::try_from(max_limit).unwrap_or(i64::MAX)` — `unwrap_or` handles overflow
+- `u32::try_from(width).unwrap_or(0)` — bounded by `MAX_IMAGE_PIXELS` (40M ≤ u32::MAX)
+- `String::from_utf8(chars).unwrap_or_default()` — `chars` only from ASCII pools
 
 ---
 
 ## 🟢 Low-Medium Severity
 
-### 8. Single-Instance Lock Stale PID
+### 8. ~~Single-Instance Lock Stale PID~~ — **FALSE POSITIVE**
 
-**File**: `src/instance.rs:25–50`
-
-```rust
-let mut file = OpenOptions::new().create(true).open(lock_path)?;
-// File CREATED here, then try_lock()
-match file.try_lock() { ... }
-```
-
-**Impact**: If process crashes after `create(true)` but before `try_lock()`, stale PID remains in lock file.
-
-**Fix**: Write PID only after successful lock acquisition (already done in `Ok` branch), but use `create_new` or verify lock before writing.
+**Reviewer verified**: `SingleInstanceLock::acquire` uses OS kernel advisory locking (`File::try_lock()`), not PID-file existence. Stale PID after crash does not block new instance; overwritten on lock acquisition.
 
 ### 9. Background Threads Lack Graceful Shutdown
 
@@ -257,21 +203,13 @@ std::thread::sleep(Duration::from_millis(120));  // Hardcoded
 
 **Fix**: Make configurable, or poll for focus confirmation before pasting.
 
-### 12. VACUUM Not Properly Awaited
+### 12. ~~VACUUM Not Properly Awaited~~ — **FALSE POSITIVE**
 
-**File**: `src/db.rs:545`
-
-```rust
-let _ = conn.execute_batch("VACUUM;");
-```
-
-**Impact**: `execute_batch` may not wait for VACUUM completion; errors ignored.
-
-**Fix**: Use `conn.execute("VACUUM", [])?` for proper error handling.
+**Reviewer verified**: `rusqlite::Connection::execute_batch` is synchronous and waits for `VACUUM` to complete. The error is still silently ignored (valid concern covered by Issue #2).
 
 ---
 
-## Recommended Fix Priority
+## Recommended Fix Priority (Valid Issues Only)
 
 | Priority | Issue | Effort | Risk if Unfixed |
 |----------|-------|--------|-----------------|
@@ -279,12 +217,9 @@ let _ = conn.execute_batch("VACUUM;");
 | 2 | Error propagation in DB ops | Low | Silent data loss, unbounded history |
 | 3 | Startup DB error handling | Low | Silent empty history |
 | 4 | macOS observer cleanup | Medium | Crash on reopen/Dock click |
-| 5 | Hotkey debounce atomicity | Low | Double-toggle on key repeat |
-| 6 | Transient text atomicity | Low | Skip logic unreliable |
-| 7 | Production unwrap fixes | Low | Panics on edge cases |
-| 8 | Graceful thread shutdown | Medium | Resource leaks, hotkey conflicts |
-| 9 | Clipboard writer feedback | Low | Confusing UX |
-| 10 | Auto-paste timing | Low | Paste to wrong window |
+| 5 | Graceful thread shutdown | Medium | Resource leaks, hotkey conflicts |
+| 6 | Clipboard writer feedback | Low | Confusing UX |
+| 7 | Auto-paste timing | Low | Paste to wrong window |
 
 ---
 
@@ -299,10 +234,19 @@ sed -i 's/\.lock()\.unwrap()/.lock().unwrap_or_else(|e| e.into_inner())/g' src/d
 
 # 3. Fix unwrap_or_default in app.rs
 # Edit line 169: match db.get_recent(...) { Ok(v) => v, Err(e) => { log; Vec::new() } }
-
-# 4. Fix password.rs unwrap
-# String::from_utf8(chars).unwrap_or_else(|e| { eprintln!("..."); String::new() })
 ```
+
+---
+
+## Resolved / False Positives
+
+| Item | Original Claim | Resolution |
+|------|----------------|------------|
+| #4 | Hotkey debounce race | Runs on single-threaded UI loop; no race |
+| #6 | Transient text race | `MutexGuard` held across check+clear; atomic |
+| #7 | Production unwraps | All `unwrap_or`/`unwrap_or_default` handle error cases; inputs bounded |
+| #8 | Single-instance stale PID | Uses kernel advisory lock (`File::try_lock()`), not PID file |
+| #12 | VACUUM not awaited | `execute_batch` is synchronous, waits for completion |
 
 ---
 
@@ -315,4 +259,4 @@ sed -i 's/\.lock()\.unwrap()/.lock().unwrap_or_else(|e| e.into_inner())/g' src/d
 
 ---
 
-*Analysis based on codebase-memory-mcp graph queries, `search_code` scans, and `get_code_snippet` reviews. No runtime testing performed.*
+*Analysis based on codebase-memory-mcp graph queries, `search_code` scans, and `get_code_snippet` reviews. No runtime testing performed. False positives resolved via code review (2026-11-14).*
