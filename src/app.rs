@@ -248,17 +248,25 @@ impl ClipboardApp {
         if secret.is_empty() {
             return;
         }
-        if self.password_gen.skip_history {
-            self.db.skip_next_capture(&secret);
-        }
+        // Prevent the background monitor from redundantly re-capturing this copy 200ms later.
+        self.db.skip_next_capture(&secret);
+
         if let Some(cb) = &mut self.clipboard_writer {
-            if let Err(e) = cb.set_text(secret) {
+            if let Err(e) = cb.set_text(secret.clone()) {
                 eprintln!("Failed to write generated password to clipboard: {e}");
             } else {
+                if !self.password_gen.skip_history {
+                    if let Err(e) = self.db.insert(&secret) {
+                        eprintln!("Failed to save generated password to database: {e}");
+                    } else {
+                        let _ = self.db.prune_history(self.settings.max_history);
+                        self.refresh_items();
+                    }
+                }
                 let msg = if self.password_gen.skip_history {
                     format!("{} Copied password (not saved to history)", icons::CHECK)
                 } else {
-                    format!("{} Copied password to clipboard!", icons::CHECK)
+                    format!("{} Copied & saved password to history!", icons::CHECK)
                 };
                 self.show_toast(&msg);
                 if dismiss {
