@@ -92,6 +92,12 @@ On first launch:
 
 ---
 
+## Known Limitations
+
+* **Monochrome Emoji & Symbol Rendering:** `egui` (`0.29`) rasterizes font glyphs via `ab_glyph` using monochrome vector outlines and does not support color emoji tables (`sbix`, `COLR`/`CPAL`, or `CBDT`). As a result, emojis and symbols in copied text render in the active theme's monochrome text color rather than full color. Invisible Unicode variation selectors (`U+FE0E`, `U+FE0F`) and zero-width joiners are stripped from UI previews to avoid missing-glyph (`□`) boxes, while the original text is preserved intact when copied back to the clipboard.
+
+---
+
 ## Educational Next Steps to Practice Rust
 
 1. **Global Hotkey:** Add the [`global-hotkey`](https://crates.io/crates/global-hotkey) crate to summon/hide the window with a shortcut (e.g. `Cmd+Shift+V`).
