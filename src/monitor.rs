@@ -86,16 +86,7 @@ pub(crate) fn start_clipboard_monitor(
 
                     match db.insert(&text) {
                         Ok(Some(id)) => {
-                            let preview = if text.chars().count() > 40 {
-                                let truncated: String = text.chars().take(40).collect();
-                                format!("{truncated}...")
-                            } else {
-                                text.clone()
-                            };
-                            println!(
-                                "📋 Captured new text clipboard entry [id: {id}]: {preview:?}"
-                            );
-
+                            log_captured_text(id, &text);
                             let _ = notify_tx.send(());
                             ctx.request_repaint();
                         }
@@ -130,9 +121,12 @@ pub(crate) fn start_clipboard_monitor(
                                 let height_u32 = u32::try_from(height).unwrap_or(0);
                                 match db.insert_image(width_u32, height_u32, &png_bytes) {
                                     Ok(Some(id)) => {
+                                        #[cfg(debug_assertions)]
                                         println!(
                                             "🖼️ Captured new image clipboard entry [id: {id}] ({width}x{height})"
                                         );
+                                        #[cfg(not(debug_assertions))]
+                                        let _ = id;
                                         let _ = notify_tx.send(());
                                         ctx.request_repaint();
                                     }
@@ -154,3 +148,21 @@ pub(crate) fn start_clipboard_monitor(
 
     (handle, shutdown_tx)
 }
+
+#[cfg(debug_assertions)]
+fn log_captured_text(id: i64, text: &str) {
+    if crate::secret::is_likely_secret(text) {
+        println!("🔒 Captured new secret clipboard entry [id: {id}] (<redacted>)");
+    } else {
+        let preview = if text.chars().count() > 40 {
+            let truncated: String = text.chars().take(40).collect();
+            format!("{truncated}...")
+        } else {
+            text.to_string()
+        };
+        println!("📋 Captured new text clipboard entry [id: {id}]: {preview:?}");
+    }
+}
+
+#[cfg(not(debug_assertions))]
+const fn log_captured_text(_id: i64, _text: &str) {}

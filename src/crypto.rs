@@ -35,6 +35,7 @@ fn get_or_create_encryption_key_with_mode(
         // Debug mode: prefer local key file to avoid Keychain prompts on every recompile.
         if let Some(key) = read_key_file(&key_file)? {
             set_restricted_permissions(&key_file);
+            #[cfg(debug_assertions)]
             println!(
                 "🔐 Loaded encryption key from local key store: {}",
                 key_file.display()
@@ -43,19 +44,24 @@ fn get_or_create_encryption_key_with_mode(
         }
 
         if let Some((key, service)) = read_from_keyring() {
+            #[cfg(debug_assertions)]
             println!("🔐 Loaded encryption key from OS Keyring ({service}).");
+            #[cfg(not(debug_assertions))]
+            let _ = service;
             save_key_file(&key_file, &key)?;
             return Ok(key);
         }
     } else {
         // Release mode: prefer OS Keyring exclusively and clean up any plaintext key file.
         if let Some((key, service)) = read_from_keyring() {
+            #[cfg(debug_assertions)]
             println!("🔐 Loaded encryption key from OS Keyring ({service}).");
             if service != SERVICE_NAME {
                 let _ = write_to_keyring(&key);
             }
             if key_file.exists() {
                 remove_key_file(&key_file);
+                #[cfg(debug_assertions)]
                 println!("🧹 Removed legacy plaintext key file from disk.");
             }
             return Ok(key);
@@ -65,9 +71,11 @@ fn get_or_create_encryption_key_with_mode(
         if let Some(key) = read_key_file(&key_file)? {
             if write_to_keyring(&key).is_ok() {
                 remove_key_file(&key_file);
+                #[cfg(debug_assertions)]
                 println!("🔐 Migrated encryption key into OS Keyring and removed local key file.");
             } else {
                 set_restricted_permissions(&key_file);
+                #[cfg(debug_assertions)]
                 eprintln!(
                     "ℹ️ OS Keyring unavailable; continuing with restricted local key file: {}",
                     key_file.display()
@@ -91,23 +99,32 @@ fn get_or_create_encryption_key_with_mode(
 
     // Fresh setup: Generate a new random 256-bit key
     let new_key = generate_random_hex_key();
+    #[cfg(debug_assertions)]
     println!("🔑 Generating new 256-bit encryption key for first-time setup...");
 
     if allow_key_file_cache {
         save_key_file(&key_file, &new_key)?;
         if let Err(e) = write_to_keyring(&new_key) {
+            #[cfg(debug_assertions)]
             eprintln!(
                 "ℹ️ Could not write key to OS Keyring ({e}); using local secure file instead."
             );
+            #[cfg(not(debug_assertions))]
+            let _ = e;
         } else {
+            #[cfg(debug_assertions)]
             println!("🔑 Backed up encryption key to OS Keyring.");
         }
     } else if let Err(e) = write_to_keyring(&new_key) {
+        #[cfg(debug_assertions)]
         eprintln!(
             "ℹ️ Could not write key to OS Keyring ({e}); falling back to restricted local key file."
         );
+        #[cfg(not(debug_assertions))]
+        let _ = e;
         save_key_file(&key_file, &new_key)?;
     } else {
+        #[cfg(debug_assertions)]
         println!("🔑 Stored encryption key in OS Keyring (Keyring-only release mode).");
     }
 

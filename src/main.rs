@@ -31,6 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Resolve application data directory (cross-platform: macOS, Windows, Linux)
     let data_dir = get_app_data_dir();
     fs::create_dir_all(&data_dir)?;
+    #[cfg(debug_assertions)]
     println!("📁 Data directory: {}", data_dir.display());
 
     // 1b. Enforce single-instance execution so two monitors don't race on the database
@@ -58,6 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Open or initialize the SQLCipher encrypted database
     let db = Database::open(&db_path, &encryption_key)?;
+    #[cfg(debug_assertions)]
     println!("🛡️  Database opened & verified with SQLCipher.");
 
     // 5. Load persistent application settings
@@ -65,6 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     db.set_max_history(settings.max_history);
     db.set_ignore_concealed(settings.ignore_concealed);
     let _ = db.prune_history(settings.max_history);
+    #[cfg(debug_assertions)]
     println!("⚙️  Loaded settings: hotkey preset {:?}", settings.hotkey);
 
     // 6. Configure window options for eframe
