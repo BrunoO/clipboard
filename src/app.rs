@@ -87,6 +87,7 @@ pub(crate) enum ContentFilter {
     Links,
     Code,
     Colors,
+    Secrets,
     Image,
 }
 
@@ -101,11 +102,24 @@ pub(crate) enum ActiveView {
 enum ItemAction {
     None,
     CopyText(String),
+    CopySecret(String),
     CopyFormattedJson(String),
     CopyColor(String, String),
     CopyImage(Vec<u8>),
     OpenBrowser(String),
+    ToggleSecret(i64, bool),
+    ToggleRevealSecret(i64),
     Delete(i64),
+}
+
+#[derive(Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
+struct ItemRenderState {
+    is_selected: bool,
+    shortcut_num: Option<usize>,
+    should_scroll: bool,
+    is_revealed: bool,
+    is_dark: bool,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -130,6 +144,8 @@ pub(crate) struct ClipboardApp {
     settings: AppSettings,
     active_view: ActiveView,
     password_gen: crate::password::PasswordGeneratorState,
+    revealed_secrets: HashSet<i64>,
+    pending_clipboard_clear: Option<(String, Instant)>,
     show_clear_confirm_dialog: bool,
     scroll_to_selected: bool,
     current_is_dark: Option<bool>,
@@ -174,6 +190,8 @@ impl ClipboardApp {
             settings,
             active_view: ActiveView::History,
             password_gen: crate::password::PasswordGeneratorState::default(),
+            revealed_secrets: HashSet::new(),
+            pending_clipboard_clear: None,
             show_clear_confirm_dialog: false,
             scroll_to_selected: false,
             current_is_dark: None,
@@ -223,10 +241,39 @@ impl ClipboardApp {
         self.has_been_focused = false;
         self.was_inactive_since_hidden = false;
         self.show_clear_confirm_dialog = false;
+        self.revealed_secrets.clear();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         crate::platform::hide_application();
         if restore_focus || auto_paste {
             crate::platform::restore_focus_and_paste(restore_focus, auto_paste);
+        }
+    }
+
+    fn schedule_secret_clipboard_clear(&mut self, secret: &str) {
+        if self.settings.auto_clear_secret_secs > 0 {
+            let deadline =
+                Instant::now() + Duration::from_secs(self.settings.auto_clear_secret_secs);
+            self.pending_clipboard_clear = Some((secret.to_string(), deadline));
+        }
+    }
+
+    fn handle_clipboard_auto_clear(&mut self) {
+        let Some((_, deadline)) = &self.pending_clipboard_clear else {
+            return;
+        };
+        if Instant::now() < *deadline {
+            return;
+        }
+        let Some((expected_secret, _)) = self.pending_clipboard_clear.take() else {
+            return;
+        };
+        if let Some(cb) = &mut self.clipboard_writer {
+            if let Ok(current) = cb.get_text() {
+                if current == expected_secret {
+                    self.db.skip_next_capture("");
+                    let _ = cb.clear();
+                }
+            }
         }
     }
 
@@ -236,6 +283,30 @@ impl ClipboardApp {
                 eprintln!("Failed to write text to clipboard: {e}");
             } else {
                 self.show_toast(&format!("{} Copied text to clipboard!", icons::CHECK));
+                if self.settings.hide_on_copy {
+                    self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
+                }
+            }
+        }
+    }
+
+    fn copy_secret_to_clipboard(&mut self, secret: &str, ctx: &egui::Context) {
+        self.db.skip_next_capture(secret);
+        if let Some(cb) = &mut self.clipboard_writer {
+            if let Err(e) = cb.set_text(secret.to_string()) {
+                eprintln!("Failed to write secret to clipboard: {e}");
+            } else {
+                self.schedule_secret_clipboard_clear(secret);
+                let msg = if self.settings.auto_clear_secret_secs > 0 {
+                    format!(
+                        "{} Copied secret (auto-clears in {}s)",
+                        icons::LOCK,
+                        self.settings.auto_clear_secret_secs
+                    )
+                } else {
+                    format!("{} Copied secret to clipboard!", icons::LOCK)
+                };
+                self.show_toast(&msg);
                 if self.settings.hide_on_copy {
                     self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
                 }
@@ -255,8 +326,9 @@ impl ClipboardApp {
             if let Err(e) = cb.set_text(secret.clone()) {
                 eprintln!("Failed to write generated password to clipboard: {e}");
             } else {
+                self.schedule_secret_clipboard_clear(&secret);
                 if !self.password_gen.skip_history {
-                    if let Err(e) = self.db.insert(&secret) {
+                    if let Err(e) = self.db.insert_secret(&secret) {
                         eprintln!("Failed to save generated password to database: {e}");
                     } else {
                         let _ = self.db.prune_history(self.settings.max_history);
@@ -266,7 +338,7 @@ impl ClipboardApp {
                 let msg = if self.password_gen.skip_history {
                     format!("{} Copied password (not saved to history)", icons::CHECK)
                 } else {
-                    format!("{} Copied & saved password to history!", icons::CHECK)
+                    format!("{} Copied & saved password as Secret!", icons::LOCK)
                 };
                 self.show_toast(&msg);
                 if dismiss {
@@ -489,10 +561,12 @@ impl ClipboardApp {
         if let Some(&item_idx) = filtered_indices.get(slot) {
             let copy_action = self.items.get(item_idx).and_then(|item| match item.kind {
                 ItemKind::Image => item.image_data.clone().map(ItemAction::CopyImage),
+                ItemKind::Secret => Some(ItemAction::CopySecret(item.content.clone())),
                 _ => Some(ItemAction::CopyText(item.content.clone())),
             });
             match copy_action {
                 Some(ItemAction::CopyImage(png)) => self.copy_image_to_clipboard(&png, ctx),
+                Some(ItemAction::CopySecret(secret)) => self.copy_secret_to_clipboard(&secret, ctx),
                 Some(ItemAction::CopyText(text)) => self.copy_text_to_clipboard(&text, ctx),
                 _ => {}
             }
@@ -621,19 +695,25 @@ impl ClipboardApp {
             .iter()
             .filter(|i| i.kind == ItemKind::Color || !i.embedded_colors().is_empty())
             .count();
+        let secret_count = self
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Secret)
+            .count();
         let img_count = self
             .items
             .iter()
             .filter(|i| i.kind == ItemKind::Image)
             .count();
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let tabs = [
                 (ContentFilter::All, icons::STACK, "All", all_count),
                 (ContentFilter::Text, icons::FILE_TEXT, "Text", text_count),
                 (ContentFilter::Links, icons::LINK, "Links", link_count),
                 (ContentFilter::Code, icons::CODE, "Code", code_count),
                 (ContentFilter::Colors, icons::PALETTE, "Colors", color_count),
+                (ContentFilter::Secrets, icons::LOCK, "Secrets", secret_count),
                 (ContentFilter::Image, icons::IMAGE, "Images", img_count),
             ];
 
@@ -840,6 +920,7 @@ impl ClipboardApp {
                     ContentFilter::Colors => {
                         item.kind == ItemKind::Color || !item.embedded_colors().is_empty()
                     }
+                    ContentFilter::Secrets => item.kind == ItemKind::Secret,
                     ContentFilter::Image => item.kind == ItemKind::Image,
                 };
                 if matches {
@@ -870,6 +951,9 @@ impl ClipboardApp {
                         }
                         ContentFilter::Colors => {
                             (icons::PALETTE, "No colors found in clipboard history.")
+                        }
+                        ContentFilter::Secrets => {
+                            (icons::LOCK, "No secret entries found in clipboard history.")
                         }
                         ContentFilter::Image => (icons::IMAGE, "No image entries found."),
                     };
@@ -920,16 +1004,20 @@ impl ClipboardApp {
                         let is_selected = slot == self.selected_index;
                         let shortcut_num = if slot < 9 { Some(slot + 1) } else { None };
                         let should_scroll = is_selected && should_scroll_selected;
+                        let is_revealed = self.revealed_secrets.contains(&item.id);
 
                         let (item_action, clicked) = Self::render_clipboard_item(
                             ui,
                             item,
                             &mut self.texture_cache,
                             ctx,
-                            is_selected,
-                            shortcut_num,
-                            should_scroll,
-                            is_dark,
+                            ItemRenderState {
+                                is_selected,
+                                shortcut_num,
+                                should_scroll,
+                                is_revealed,
+                                is_dark,
+                            },
                         );
 
                         if clicked {
@@ -949,6 +1037,7 @@ impl ClipboardApp {
 
                 match action {
                     ItemAction::CopyText(content) => self.copy_text_to_clipboard(&content, ctx),
+                    ItemAction::CopySecret(secret) => self.copy_secret_to_clipboard(&secret, ctx),
                     ItemAction::CopyFormattedJson(formatted) => {
                         self.copy_text_to_clipboard(&formatted, ctx);
                         self.show_toast(&format!(
@@ -974,8 +1063,27 @@ impl ClipboardApp {
                             ));
                         }
                     }
+                    ItemAction::ToggleSecret(id, make_secret) => {
+                        let _ = self.db.set_item_secret(id, make_secret);
+                        if !make_secret {
+                            self.revealed_secrets.remove(&id);
+                        }
+                        self.refresh_items();
+                        let msg = if make_secret {
+                            format!("{} Marked entry as Secret.", icons::LOCK)
+                        } else {
+                            format!("{} Unmarked entry as Secret.", icons::LOCK_OPEN)
+                        };
+                        self.show_toast(&msg);
+                    }
+                    ItemAction::ToggleRevealSecret(id) => {
+                        if !self.revealed_secrets.remove(&id) {
+                            self.revealed_secrets.insert(id);
+                        }
+                    }
                     ItemAction::Delete(id) => {
                         let _ = self.db.delete(id);
+                        self.revealed_secrets.remove(&id);
                         self.texture_cache.remove(id);
                         self.refresh_items();
                         self.show_toast(&format!("{} Entry deleted.", icons::TRASH));
@@ -1516,6 +1624,32 @@ impl ClipboardApp {
                 let _ = self.settings.save(&self.db);
             }
 
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Auto-clear copied secrets after:");
+                let mut clear_secs = self.settings.auto_clear_secret_secs;
+                let selected_label = if clear_secs == 0 {
+                    "Off".to_string()
+                } else {
+                    format!("{clear_secs}s")
+                };
+                egui::ComboBox::from_id_salt("auto_clear_secret_combo")
+                    .selected_text(selected_label)
+                    .show_ui(ui, |ui| {
+                        for secs in [0_u64, 15, 30, 45, 60, 120] {
+                            let label = if secs == 0 {
+                                "Off".to_string()
+                            } else {
+                                format!("{secs}s")
+                            };
+                            if ui.selectable_value(&mut clear_secs, secs, label).clicked() {
+                                self.settings.auto_clear_secret_secs = secs;
+                                let _ = self.settings.save(&self.db);
+                            }
+                        }
+                    });
+            });
+
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui
@@ -1555,21 +1689,17 @@ impl ClipboardApp {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_clipboard_item(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
         texture_cache: &mut ImageTextureCache,
         ctx: &egui::Context,
-        is_selected: bool,
-        shortcut_num: Option<usize>,
-        should_scroll: bool,
-        is_dark: bool,
+        state: ItemRenderState,
     ) -> (ItemAction, bool) {
         let mut action = ItemAction::None;
 
-        let stroke = crate::theme::card_stroke(is_dark, is_selected);
-        let fill = crate::theme::card_fill(is_dark, is_selected);
+        let stroke = crate::theme::card_stroke(state.is_dark, state.is_selected);
+        let fill = crate::theme::card_fill(state.is_dark, state.is_selected);
         let rounding = crate::theme::card_rounding();
 
         let frame_resp = egui::Frame::group(ui.style())
@@ -1578,8 +1708,14 @@ impl ClipboardApp {
             .fill(fill)
             .inner_margin(8.0_f32)
             .show(ui, |ui| {
-                let header_action =
-                    Self::render_item_header(ui, item, shortcut_num, is_selected, is_dark);
+                let header_action = Self::render_item_header(
+                    ui,
+                    item,
+                    state.shortcut_num,
+                    state.is_selected,
+                    state.is_revealed,
+                    state.is_dark,
+                );
                 if !matches!(header_action, ItemAction::None) {
                     action = header_action;
                 }
@@ -1587,12 +1723,18 @@ impl ClipboardApp {
                 ui.add_space(2.0);
 
                 let content_action = match item.kind {
-                    ItemKind::Text => Self::render_text_content(ui, &item.content, is_dark),
-                    ItemKind::Url => Self::render_url_content(ui, &item.content, is_dark),
-                    ItemKind::Code => Self::render_code_content(ui, item, is_dark),
-                    ItemKind::Color => Self::render_color_content(ui, item, is_dark),
+                    ItemKind::Text => Self::render_text_content(ui, &item.content, state.is_dark),
+                    ItemKind::Url => Self::render_url_content(ui, &item.content, state.is_dark),
+                    ItemKind::Code => Self::render_code_content(ui, item, state.is_dark),
+                    ItemKind::Color => Self::render_color_content(ui, item, state.is_dark),
+                    ItemKind::Secret => Self::render_secret_content(
+                        ui,
+                        &item.content,
+                        state.is_revealed,
+                        state.is_dark,
+                    ),
                     ItemKind::Image => {
-                        Self::render_image_content(ui, item, texture_cache, ctx, is_dark)
+                        Self::render_image_content(ui, item, texture_cache, ctx, state.is_dark)
                     }
                 };
 
@@ -1604,7 +1746,8 @@ impl ClipboardApp {
                     let embedded = item.embedded_colors();
                     if !embedded.is_empty() {
                         ui.add_space(4.0);
-                        let color_action = Self::render_embedded_colors(ui, &embedded, is_dark);
+                        let color_action =
+                            Self::render_embedded_colors(ui, &embedded, state.is_dark);
                         if !matches!(color_action, ItemAction::None) {
                             action = color_action;
                         }
@@ -1612,7 +1755,7 @@ impl ClipboardApp {
                 }
             });
 
-        if should_scroll {
+        if state.should_scroll {
             frame_resp.response.scroll_to_me(Some(egui::Align::Center));
         }
 
@@ -1683,6 +1826,17 @@ impl ClipboardApp {
         );
     }
 
+    fn render_secret_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
+        let (text_c, bg_c, stroke_c) =
+            crate::theme::category_pill_colors(is_dark, ItemKind::Secret);
+        crate::theme::render_pill_tag(ui, icons::LOCK, "Secret", text_c, bg_c, stroke_c);
+        ui.label(
+            egui::RichText::new(format!("• {}", item.created_at))
+                .size(10.0_f32)
+                .color(crate::theme::text_secondary(is_dark)),
+        );
+    }
+
     fn render_image_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
         let dims = match (item.width, item.height) {
             (Some(w), Some(h)) => format!("Image ({w}x{h})"),
@@ -1703,15 +1857,18 @@ impl ClipboardApp {
             ItemKind::Url => Self::render_url_badge(ui, item, is_dark),
             ItemKind::Code => Self::render_code_badge(ui, item, is_dark),
             ItemKind::Color => Self::render_color_badge(ui, item, is_dark),
+            ItemKind::Secret => Self::render_secret_badge(ui, item, is_dark),
             ItemKind::Image => Self::render_image_badge(ui, item, is_dark),
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn render_item_header(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
         shortcut_num: Option<usize>,
         is_selected: bool,
+        is_revealed: bool,
         is_dark: bool,
     ) -> ItemAction {
         let mut action = ItemAction::None;
@@ -1751,6 +1908,40 @@ impl ClipboardApp {
                 {
                     action = ItemAction::Delete(item.id);
                 }
+
+                if item.kind != ItemKind::Image {
+                    let is_secret = item.kind == ItemKind::Secret;
+                    let lock_icon = if is_secret {
+                        icons::LOCK_OPEN
+                    } else {
+                        icons::LOCK
+                    };
+                    let lock_tip = if is_secret {
+                        "Unmark as Secret"
+                    } else {
+                        "Mark as Secret (mask content)"
+                    };
+                    if ui.small_button(lock_icon).on_hover_text(lock_tip).clicked() {
+                        action = ItemAction::ToggleSecret(item.id, !is_secret);
+                    }
+                }
+
+                if item.kind == ItemKind::Secret {
+                    let eye_icon = if is_revealed {
+                        icons::EYE_SLASH
+                    } else {
+                        icons::EYE
+                    };
+                    let eye_tip = if is_revealed {
+                        "Mask secret"
+                    } else {
+                        "Reveal secret"
+                    };
+                    if ui.small_button(eye_icon).on_hover_text(eye_tip).clicked() {
+                        action = ItemAction::ToggleRevealSecret(item.id);
+                    }
+                }
+
                 if ui
                     .small_button(format!("{} Copy", icons::COPY))
                     .on_hover_text("Copy back to clipboard (Enter)")
@@ -1759,6 +1950,9 @@ impl ClipboardApp {
                     match item.kind {
                         ItemKind::Text | ItemKind::Url | ItemKind::Code | ItemKind::Color => {
                             action = ItemAction::CopyText(item.content.clone());
+                        }
+                        ItemKind::Secret => {
+                            action = ItemAction::CopySecret(item.content.clone());
                         }
                         ItemKind::Image => {
                             if let Some(png_bytes) = &item.image_data {
@@ -1790,6 +1984,38 @@ impl ClipboardApp {
         });
 
         action
+    }
+
+    fn render_secret_content(
+        ui: &mut egui::Ui,
+        content: &str,
+        is_revealed: bool,
+        is_dark: bool,
+    ) -> ItemAction {
+        let display = if is_revealed {
+            Self::format_display_preview(content, 180)
+        } else {
+            let bullet_len = content.chars().count().clamp(8, 24);
+            "•".repeat(bullet_len)
+        };
+
+        let label = ui.add(
+            egui::Label::new(
+                egui::RichText::new(display)
+                    .monospace()
+                    .color(crate::theme::text_preview(is_dark)),
+            )
+            .sense(egui::Sense::click()),
+        );
+
+        if label.clicked() {
+            ItemAction::CopySecret(content.to_string())
+        } else {
+            if label.hovered() {
+                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+            }
+            ItemAction::None
+        }
     }
 
     fn render_code_content(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) -> ItemAction {
@@ -2373,6 +2599,7 @@ impl eframe::App for ClipboardApp {
         self.handle_keyboard_navigation(ctx);
         self.handle_app_activation(ctx);
         self.handle_monitor_updates();
+        self.handle_clipboard_auto_clear();
 
         if !self.is_visible {
             // Keep the event loop alive with a gentle 50ms tick while hidden.
@@ -2381,6 +2608,10 @@ impl eframe::App for ClipboardApp {
             // request_repaint() from the background hotkey thread to stall.
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
             return;
+        }
+
+        if self.pending_clipboard_clear.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
 
         self.render_top_panel(ctx, is_dark);

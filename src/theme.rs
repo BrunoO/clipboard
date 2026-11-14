@@ -667,6 +667,11 @@ pub(crate) const fn category_pill_colors(
                 Color32::from_rgb(20, 48, 30),
                 Color32::from_rgb(40, 110, 65),
             ),
+            crate::db::ItemKind::Secret => (
+                Color32::from_rgb(255, 200, 95),
+                Color32::from_rgb(56, 38, 12),
+                Color32::from_rgb(130, 88, 24),
+            ),
         }
     } else {
         match kind {
@@ -694,6 +699,11 @@ pub(crate) const fn category_pill_colors(
                 Color32::from_rgb(18, 115, 45),
                 Color32::from_rgb(230, 248, 235),
                 Color32::from_rgb(170, 230, 190),
+            ),
+            crate::db::ItemKind::Secret => (
+                Color32::from_rgb(145, 80, 0),
+                Color32::from_rgb(255, 244, 224),
+                Color32::from_rgb(235, 195, 130),
             ),
         }
     }

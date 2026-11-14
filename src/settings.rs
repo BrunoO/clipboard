@@ -145,6 +145,8 @@ pub(crate) struct AppSettings {
     pub(crate) auto_paste: bool,
     #[serde(default = "default_ignore_concealed")]
     pub(crate) ignore_concealed: bool,
+    #[serde(default = "default_auto_clear_secret_secs")]
+    pub(crate) auto_clear_secret_secs: u64,
 }
 
 const fn default_hide_on_blur() -> bool {
@@ -163,6 +165,10 @@ const fn default_ignore_concealed() -> bool {
     true
 }
 
+const fn default_auto_clear_secret_secs() -> u64 {
+    30
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -174,6 +180,7 @@ impl Default for AppSettings {
             restore_focus: true,
             auto_paste: true,
             ignore_concealed: true,
+            auto_clear_secret_secs: 30,
         }
     }
 }
@@ -224,6 +231,7 @@ mod tests {
         modified.hide_on_blur = false;
         modified.restore_focus = false;
         modified.auto_paste = false;
+        modified.auto_clear_secret_secs = 45;
         modified.max_history = 250;
         modified.save(&db).expect("Save should succeed");
 
@@ -234,6 +242,7 @@ mod tests {
         assert!(!reloaded.hide_on_blur);
         assert!(!reloaded.restore_focus);
         assert!(!reloaded.auto_paste);
+        assert_eq!(reloaded.auto_clear_secret_secs, 45);
         assert_eq!(reloaded.max_history, 250);
     }
 

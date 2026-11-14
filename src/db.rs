@@ -12,6 +12,7 @@ pub(crate) enum ItemKind {
     Url,
     Code,
     Color,
+    Secret,
 }
 
 /// Returns true if the string is a valid HTTP or HTTPS URL with a host.
@@ -40,7 +41,7 @@ pub(crate) struct ClipboardItem {
 impl ClipboardItem {
     /// Attempts to parse the item content as an HTTP/HTTPS URL.
     pub(crate) fn parsed_url(&self) -> Option<url::Url> {
-        if self.kind == ItemKind::Image {
+        if self.kind == ItemKind::Image || self.kind == ItemKind::Secret {
             return None;
         }
         let trimmed = self.content.trim();
@@ -65,6 +66,7 @@ impl ClipboardItem {
         if self.kind == ItemKind::Image
             || self.kind == ItemKind::Url
             || self.kind == ItemKind::Color
+            || self.kind == ItemKind::Secret
         {
             return None;
         }
@@ -73,7 +75,10 @@ impl ClipboardItem {
 
     /// Parses the item content as a color if recognized.
     pub(crate) fn parsed_color(&self) -> Option<crate::color::ParsedColor> {
-        if self.kind == ItemKind::Image || self.kind == ItemKind::Url {
+        if self.kind == ItemKind::Image
+            || self.kind == ItemKind::Url
+            || self.kind == ItemKind::Secret
+        {
             return None;
         }
         crate::color::parse_color(&self.content)
@@ -82,7 +87,10 @@ impl ClipboardItem {
     /// Extracts distinct colors embedded within the text or code content.
     #[must_use]
     pub(crate) fn embedded_colors(&self) -> Vec<crate::color::ParsedColor> {
-        if self.kind == ItemKind::Image || self.kind == ItemKind::Url {
+        if self.kind == ItemKind::Image
+            || self.kind == ItemKind::Url
+            || self.kind == ItemKind::Secret
+        {
             return Vec::new();
         }
         if self.kind == ItemKind::Color {
@@ -314,6 +322,50 @@ impl Database {
         Ok(Some(new_id))
     }
 
+    /// Inserts a secret/sensitive text entry (e.g., generated password), deduplicating against
+    /// existing secret entries and enforcing the `max_history` limit.
+    pub(crate) fn insert_secret(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt =
+            conn.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            let last_kind: String = row.get(0)?;
+            let last_content: String = row.get(1)?;
+            if last_kind == "secret" && last_content == content {
+                return Ok(None);
+            }
+        }
+
+        conn.execute(
+            "DELETE FROM clipboard_history WHERE content = ?1 AND kind = 'secret'",
+            params![content],
+        )?;
+
+        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        conn.execute(
+            "INSERT INTO clipboard_history (kind, content, created_at) VALUES ('secret', ?1, ?2)",
+            params![content, now],
+        )?;
+
+        let new_id = conn.last_insert_rowid();
+
+        let max_limit = self.max_history.load(Ordering::Relaxed);
+        if max_limit > 0 {
+            let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
+            let _ = conn.execute(
+                "DELETE FROM clipboard_history
+                 WHERE id NOT IN (
+                     SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
+                 )",
+                params![limit_i64],
+            );
+        }
+
+        Ok(Some(new_id))
+    }
+
     /// Inserts a new image clipboard entry, deduplicating against history.
     /// If an identical image was already the most recent, returns `Ok(None)`.
     /// If an identical image exists earlier in history, deletes the stale copy and
@@ -393,6 +445,7 @@ impl Database {
                 "url" => ItemKind::Url,
                 "code" => ItemKind::Code,
                 "color" => ItemKind::Color,
+                "secret" => ItemKind::Secret,
                 _ => {
                     if is_valid_url(&content) {
                         ItemKind::Url
@@ -441,6 +494,41 @@ impl Database {
         }
 
         Ok(items)
+    }
+
+    /// Toggles whether a non-image history entry is classified as `secret`.
+    pub(crate) fn set_item_secret(&self, id: i64, is_secret: bool) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT kind, content FROM clipboard_history WHERE id = ?1")?;
+        let mut rows = stmt.query(params![id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(());
+        };
+        let kind_str: String = row.get(0)?;
+        if kind_str == "image" {
+            return Ok(());
+        }
+        let content: String = row.get(1)?;
+        drop(rows);
+        drop(stmt);
+
+        let new_kind = if is_secret {
+            "secret"
+        } else if is_valid_url(&content) {
+            "url"
+        } else if crate::color::parse_color(&content).is_some() {
+            "color"
+        } else if crate::code::detect_code_language(&content).is_some() {
+            "code"
+        } else {
+            "text"
+        };
+
+        conn.execute(
+            "UPDATE clipboard_history SET kind = ?1 WHERE id = ?2",
+            params![new_kind, id],
+        )?;
+        Ok(())
     }
 
     /// Deletes a specific entry by its primary key ID.
@@ -752,5 +840,33 @@ mod tests {
             db.get_setting("hotkey").unwrap(),
             Some("AltSpace".to_string())
         );
+    }
+
+    #[test]
+    fn test_insert_secret_and_toggle_secret() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("secret_test.db");
+        let db = Database::open(&db_path, TEST_KEY).unwrap();
+
+        let id = db
+            .insert_secret("s3cr3t-p@ssw0rd!")
+            .unwrap()
+            .expect("Should insert secret");
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, ItemKind::Secret);
+
+        // Consecutive duplicate secret is ignored
+        assert_eq!(db.insert_secret("s3cr3t-p@ssw0rd!").unwrap(), None);
+
+        // Unmarking secret restores auto-detected kind (text)
+        db.set_item_secret(id, false).unwrap();
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items[0].kind, ItemKind::Text);
+
+        // Marking back as secret
+        db.set_item_secret(id, true).unwrap();
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items[0].kind, ItemKind::Secret);
     }
 }
