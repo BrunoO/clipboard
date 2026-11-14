@@ -665,28 +665,31 @@ impl ClipboardApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
 
-            let badge = self.settings.hotkey.badge();
-            ui.label(
-                egui::RichText::new(format!("({badge})"))
-                    .color(crate::theme::text_secondary(is_dark))
-                    .size(11.0_f32),
-            );
+            if ui.available_width() > 260.0 {
+                let badge = self.settings.hotkey.badge();
+                ui.label(
+                    egui::RichText::new(format!("({badge})"))
+                        .color(crate::theme::text_secondary(is_dark))
+                        .size(11.0_f32),
+                );
+            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .small_button(format!("{} Hide (Esc)", icons::X))
+                    .small_button(icons::X)
+                    .on_hover_text("Hide window (Esc)")
                     .clicked()
                 {
                     self.hide_window(ctx, self.settings.restore_focus, false);
                 }
 
                 let settings_btn = match self.active_view {
-                    ActiveView::Settings => {
-                        ui.small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
-                    }
-                    ActiveView::History | ActiveView::Generator => {
-                        ui.small_button(format!("{} Settings", icons::GEAR))
-                    }
+                    ActiveView::Settings => ui
+                        .small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
+                        .on_hover_text("Back to clipboard history"),
+                    ActiveView::History | ActiveView::Generator => ui
+                        .small_button(icons::GEAR)
+                        .on_hover_text("Preferences & Settings"),
                 };
                 if settings_btn.clicked() {
                     self.active_view = match self.active_view {
@@ -696,9 +699,9 @@ impl ClipboardApp {
                 }
 
                 let gen_btn = match self.active_view {
-                    ActiveView::Generator => {
-                        ui.small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
-                    }
+                    ActiveView::Generator => ui
+                        .small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
+                        .on_hover_text("Back to clipboard history"),
                     ActiveView::History | ActiveView::Settings => ui
                         .small_button(format!("{} Password", icons::KEY))
                         .on_hover_text("Generate random password or passphrase"),
@@ -712,7 +715,7 @@ impl ClipboardApp {
 
                 if self.active_view == ActiveView::History
                     && ui
-                        .small_button(format!("{} Clear", icons::TRASH))
+                        .small_button(icons::TRASH)
                         .on_hover_text("Clear clipboard history")
                         .clicked()
                 {
