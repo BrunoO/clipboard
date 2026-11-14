@@ -7,6 +7,7 @@ mod color;
 mod crypto;
 mod db;
 mod hotkey;
+mod instance;
 mod media;
 mod monitor;
 mod password;
@@ -18,6 +19,7 @@ use app::ClipboardApp;
 use db::Database;
 use eframe::egui;
 use hotkey::HotkeyService;
+use instance::{AcquireResult, SingleInstanceLock};
 use settings::AppSettings;
 use std::fs;
 use std::path::PathBuf;
@@ -29,6 +31,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = get_app_data_dir();
     fs::create_dir_all(&data_dir)?;
     println!("📁 Data directory: {}", data_dir.display());
+
+    // 1b. Enforce single-instance execution so two monitors don't race on the database
+    let lock_path = data_dir.join(".instance.lock");
+    let _instance_lock = match SingleInstanceLock::acquire(&lock_path)? {
+        AcquireResult::Acquired(lock) => lock,
+        AcquireResult::AlreadyRunning { pid } => {
+            if let Some(pid) = pid {
+                println!(
+                    "ℹ️ CipherClipboard is already running (PID {pid}). Exiting duplicate instance."
+                );
+            } else {
+                println!("ℹ️ CipherClipboard is already running. Exiting duplicate instance.");
+            }
+            return Ok(());
+        }
+    };
 
     // 2. Resolve database path and check if it already exists
     let db_path = data_dir.join("clipboard_history.db");
