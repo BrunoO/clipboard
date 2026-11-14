@@ -1,8 +1,9 @@
 use rand::seq::SliceRandom;
 use rand::RngExt;
+use serde::{Deserialize, Serialize};
 
 /// Generation mode for the password generator view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) enum GeneratorMode {
     #[default]
     Password,
@@ -10,7 +11,7 @@ pub(crate) enum GeneratorMode {
 }
 
 /// Word separator for Diceware-style passphrases.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) enum PassphraseSeparator {
     #[default]
     Dash,
@@ -69,7 +70,8 @@ impl StrengthLevel {
 
 /// Configuration options for generating passwords and passphrases.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct PasswordConfig {
     pub(crate) mode: GeneratorMode,
     // Password options
@@ -116,18 +118,26 @@ pub(crate) struct PasswordGeneratorState {
 
 impl Default for PasswordGeneratorState {
     fn default() -> Self {
-        let config = PasswordConfig::default();
-        let current_value = generate(&config);
-        Self {
-            config,
-            current_value,
-            reveal_value: true,
-            skip_history: true,
-        }
+        Self::from_preferences(PasswordConfig::default(), true, true)
     }
 }
 
 impl PasswordGeneratorState {
+    #[must_use]
+    pub(crate) fn from_preferences(
+        config: PasswordConfig,
+        skip_history: bool,
+        reveal_value: bool,
+    ) -> Self {
+        let current_value = generate(&config);
+        Self {
+            config,
+            current_value,
+            reveal_value,
+            skip_history,
+        }
+    }
+
     pub(crate) fn regenerate(&mut self) {
         self.current_value = generate(&self.config);
     }

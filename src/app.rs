@@ -169,6 +169,11 @@ impl ClipboardApp {
             .unwrap_or_default();
         let clipboard_writer = Clipboard::new().ok();
 
+        let password_gen = crate::password::PasswordGeneratorState::from_preferences(
+            settings.password_config.clone(),
+            settings.generator_skip_history,
+            settings.generator_reveal_value,
+        );
         Self {
             db,
             search_query: String::new(),
@@ -189,7 +194,7 @@ impl ClipboardApp {
             last_toggle_instant: None,
             settings,
             active_view: ActiveView::History,
-            password_gen: crate::password::PasswordGeneratorState::default(),
+            password_gen,
             revealed_secrets: HashSet::new(),
             pending_clipboard_clear: None,
             show_clear_confirm_dialog: false,
@@ -1093,6 +1098,13 @@ impl ClipboardApp {
             });
     }
 
+    fn save_generator_preferences(&mut self) {
+        self.settings.password_config = self.password_gen.config.clone();
+        self.settings.generator_skip_history = self.password_gen.skip_history;
+        self.settings.generator_reveal_value = self.password_gen.reveal_value;
+        let _ = self.settings.save(&self.db);
+    }
+
     fn render_generator_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1110,10 +1122,15 @@ impl ClipboardApp {
                 ui.add_space(10.0);
 
                 ui.group(|ui| {
-                    ui.checkbox(
-                        &mut self.password_gen.skip_history,
-                        "Don't save generated password to clipboard history",
-                    );
+                    if ui
+                        .checkbox(
+                            &mut self.password_gen.skip_history,
+                            "Don't save generated password to clipboard history",
+                        )
+                        .changed()
+                    {
+                        self.save_generator_preferences();
+                    }
                     ui.label(
                         egui::RichText::new(
                             "Press Enter to copy & dismiss immediately, or Esc to return to history.",
@@ -1207,6 +1224,7 @@ impl ClipboardApp {
                     .clicked()
                 {
                     self.password_gen.reveal_value = !self.password_gen.reveal_value;
+                    self.save_generator_preferences();
                 }
             });
         });
@@ -1267,6 +1285,7 @@ impl ClipboardApp {
                 );
                 if self.password_gen.config.mode != old_mode {
                     self.password_gen.regenerate();
+                    self.save_generator_preferences();
                 }
             });
 
@@ -1278,6 +1297,7 @@ impl ClipboardApp {
 
             if changed {
                 self.password_gen.regenerate();
+                self.save_generator_preferences();
             }
         });
     }

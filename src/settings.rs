@@ -1,4 +1,5 @@
 use crate::db::Database;
+use crate::password::PasswordConfig;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use serde::{Deserialize, Serialize};
 
@@ -147,6 +148,12 @@ pub(crate) struct AppSettings {
     pub(crate) ignore_concealed: bool,
     #[serde(default = "default_auto_clear_secret_secs")]
     pub(crate) auto_clear_secret_secs: u64,
+    #[serde(default)]
+    pub(crate) password_config: PasswordConfig,
+    #[serde(default = "default_generator_skip_history")]
+    pub(crate) generator_skip_history: bool,
+    #[serde(default = "default_generator_reveal_value")]
+    pub(crate) generator_reveal_value: bool,
 }
 
 const fn default_hide_on_blur() -> bool {
@@ -169,6 +176,14 @@ const fn default_auto_clear_secret_secs() -> u64 {
     30
 }
 
+const fn default_generator_skip_history() -> bool {
+    true
+}
+
+const fn default_generator_reveal_value() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -181,6 +196,9 @@ impl Default for AppSettings {
             auto_paste: true,
             ignore_concealed: true,
             auto_clear_secret_secs: 30,
+            password_config: PasswordConfig::default(),
+            generator_skip_history: true,
+            generator_reveal_value: true,
         }
     }
 }
@@ -233,6 +251,13 @@ mod tests {
         modified.auto_paste = false;
         modified.auto_clear_secret_secs = 45;
         modified.max_history = 250;
+        modified.generator_skip_history = false;
+        modified.generator_reveal_value = false;
+        modified.password_config.length = 32;
+        modified.password_config.exclude_ambiguous = true;
+        modified.password_config.mode = crate::password::GeneratorMode::Passphrase;
+        modified.password_config.word_count = 6;
+        modified.password_config.capitalize = true;
         modified.save(&db).expect("Save should succeed");
 
         // Reload
@@ -244,6 +269,16 @@ mod tests {
         assert!(!reloaded.auto_paste);
         assert_eq!(reloaded.auto_clear_secret_secs, 45);
         assert_eq!(reloaded.max_history, 250);
+        assert!(!reloaded.generator_skip_history);
+        assert!(!reloaded.generator_reveal_value);
+        assert_eq!(reloaded.password_config.length, 32);
+        assert!(reloaded.password_config.exclude_ambiguous);
+        assert_eq!(
+            reloaded.password_config.mode,
+            crate::password::GeneratorMode::Passphrase
+        );
+        assert_eq!(reloaded.password_config.word_count, 6);
+        assert!(reloaded.password_config.capitalize);
     }
 
     #[test]
