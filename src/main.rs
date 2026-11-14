@@ -9,6 +9,7 @@ mod db;
 mod hotkey;
 mod media;
 mod monitor;
+mod password;
 mod platform;
 mod settings;
 mod theme;

@@ -94,6 +94,7 @@ pub(crate) enum ContentFilter {
 pub(crate) enum ActiveView {
     #[default]
     History,
+    Generator,
     Settings,
 }
 
@@ -128,6 +129,7 @@ pub(crate) struct ClipboardApp {
     last_toggle_instant: Option<Instant>,
     settings: AppSettings,
     active_view: ActiveView,
+    password_gen: crate::password::PasswordGeneratorState,
     show_clear_confirm_dialog: bool,
     scroll_to_selected: bool,
     current_is_dark: Option<bool>,
@@ -171,6 +173,7 @@ impl ClipboardApp {
             last_toggle_instant: None,
             settings,
             active_view: ActiveView::History,
+            password_gen: crate::password::PasswordGeneratorState::default(),
             show_clear_confirm_dialog: false,
             scroll_to_selected: false,
             current_is_dark: None,
@@ -234,6 +237,31 @@ impl ClipboardApp {
             } else {
                 self.show_toast(&format!("{} Copied text to clipboard!", icons::CHECK));
                 if self.settings.hide_on_copy {
+                    self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
+                }
+            }
+        }
+    }
+
+    fn copy_generated_password(&mut self, ctx: &egui::Context, dismiss: bool) {
+        let secret = self.password_gen.current_value.clone();
+        if secret.is_empty() {
+            return;
+        }
+        if self.password_gen.skip_history {
+            self.db.skip_next_capture(&secret);
+        }
+        if let Some(cb) = &mut self.clipboard_writer {
+            if let Err(e) = cb.set_text(secret) {
+                eprintln!("Failed to write generated password to clipboard: {e}");
+            } else {
+                let msg = if self.password_gen.skip_history {
+                    format!("{} Copied password (not saved to history)", icons::CHECK)
+                } else {
+                    format!("{} Copied password to clipboard!", icons::CHECK)
+                };
+                self.show_toast(&msg);
+                if dismiss {
                     self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
                 }
             }
@@ -304,7 +332,7 @@ impl ClipboardApp {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             if self.show_clear_confirm_dialog {
                 self.show_clear_confirm_dialog = false;
-            } else if self.active_view == ActiveView::Settings {
+            } else if self.active_view != ActiveView::History {
                 self.active_view = ActiveView::History;
             } else {
                 self.hide_window(ctx, self.settings.restore_focus, false);
@@ -314,10 +342,18 @@ impl ClipboardApp {
 
     #[allow(clippy::too_many_lines)]
     fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
-        if self.show_clear_confirm_dialog
-            || self.active_view != ActiveView::History
-            || !self.is_visible
-        {
+        if self.show_clear_confirm_dialog || !self.is_visible {
+            return;
+        }
+
+        if self.active_view == ActiveView::Generator {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+                self.copy_generated_password(ctx, true);
+            }
+            return;
+        }
+
+        if self.active_view != ActiveView::History {
             return;
         }
 
@@ -648,12 +684,29 @@ impl ClipboardApp {
                     ActiveView::Settings => {
                         ui.small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
                     }
-                    ActiveView::History => ui.small_button(format!("{} Settings", icons::GEAR)),
+                    ActiveView::History | ActiveView::Generator => {
+                        ui.small_button(format!("{} Settings", icons::GEAR))
+                    }
                 };
                 if settings_btn.clicked() {
                     self.active_view = match self.active_view {
                         ActiveView::Settings => ActiveView::History,
-                        ActiveView::History => ActiveView::Settings,
+                        ActiveView::History | ActiveView::Generator => ActiveView::Settings,
+                    };
+                }
+
+                let gen_btn = match self.active_view {
+                    ActiveView::Generator => {
+                        ui.small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
+                    }
+                    ActiveView::History | ActiveView::Settings => ui
+                        .small_button(format!("{} Password", icons::KEY))
+                        .on_hover_text("Generate random password or passphrase"),
+                };
+                if gen_btn.clicked() {
+                    self.active_view = match self.active_view {
+                        ActiveView::Generator => ActiveView::History,
+                        ActiveView::History | ActiveView::Settings => ActiveView::Generator,
                     };
                 }
 
@@ -919,6 +972,273 @@ impl ClipboardApp {
                     ItemAction::None => {}
                 }
             });
+    }
+
+    fn render_generator_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.heading(
+                    egui::RichText::new(format!("{} Password Generator", icons::KEY))
+                        .color(crate::theme::text_primary(is_dark))
+                        .strong(),
+                );
+                ui.add_space(8.0);
+
+                self.render_generator_output_card(ui, ctx, is_dark);
+                ui.add_space(10.0);
+
+                self.render_generator_mode_and_options(ui, is_dark);
+                ui.add_space(10.0);
+
+                ui.group(|ui| {
+                    ui.checkbox(
+                        &mut self.password_gen.skip_history,
+                        "Don't save generated password to clipboard history",
+                    );
+                    ui.label(
+                        egui::RichText::new(
+                            "Press Enter to copy & dismiss immediately, or Esc to return to history.",
+                        )
+                        .color(crate::theme::text_secondary(is_dark))
+                        .size(11.0_f32),
+                    );
+                });
+
+                ui.add_space(12.0);
+                if ui
+                    .button(format!("{} Back to History", icons::ARROW_LEFT))
+                    .clicked()
+                {
+                    self.active_view = ActiveView::History;
+                }
+            });
+        });
+    }
+
+    fn render_generator_output_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        is_dark: bool,
+    ) {
+        ui.group(|ui| {
+            let display_text = if self.password_gen.reveal_value {
+                self.password_gen.current_value.clone()
+            } else {
+                "•".repeat(self.password_gen.current_value.chars().count().min(32))
+            };
+
+            egui::Frame::none()
+                .fill(crate::theme::search_bg(is_dark))
+                .stroke(crate::theme::card_stroke(is_dark, true))
+                .rounding(6.0_f32)
+                .inner_margin(egui::Margin::symmetric(10.0_f32, 10.0_f32))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(display_text)
+                                    .monospace()
+                                    .size(15.0_f32)
+                                    .color(crate::theme::text_primary(is_dark))
+                                    .strong(),
+                            )
+                            .wrap(),
+                        );
+                    });
+                });
+
+            ui.add_space(6.0);
+            Self::render_generator_entropy_bar(ui, &self.password_gen.config, is_dark);
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                let copy_label = if self.settings.auto_paste {
+                    format!("{} Copy & Paste", icons::COPY)
+                } else {
+                    format!("{} Copy & Dismiss", icons::COPY)
+                };
+                if ui.button(copy_label).clicked() {
+                    self.copy_generated_password(ctx, true);
+                }
+
+                if ui.button(format!("{} Copy", icons::COPY)).clicked() {
+                    self.copy_generated_password(ctx, false);
+                }
+
+                if ui
+                    .button(format!("{} Regenerate", icons::ARROWS_CLOCKWISE))
+                    .clicked()
+                {
+                    self.password_gen.regenerate();
+                }
+
+                let eye_icon = if self.password_gen.reveal_value {
+                    icons::EYE_SLASH
+                } else {
+                    icons::EYE
+                };
+                if ui
+                    .button(eye_icon)
+                    .on_hover_text(if self.password_gen.reveal_value {
+                        "Hide password"
+                    } else {
+                        "Reveal password"
+                    })
+                    .clicked()
+                {
+                    self.password_gen.reveal_value = !self.password_gen.reveal_value;
+                }
+            });
+        });
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn render_generator_entropy_bar(
+        ui: &mut egui::Ui,
+        config: &crate::password::PasswordConfig,
+        is_dark: bool,
+    ) {
+        use crate::password::{classify_strength, estimate_entropy_bits, StrengthLevel};
+
+        let bits = estimate_entropy_bits(config);
+        let level = classify_strength(bits);
+        let fraction = ((bits / 128.0) as f32).clamp(0.05, 1.0);
+        let bar_color = match level {
+            StrengthLevel::Weak => egui::Color32::from_rgb(220, 68, 55),
+            StrengthLevel::Fair => egui::Color32::from_rgb(230, 159, 0),
+            StrengthLevel::Strong => egui::Color32::from_rgb(46, 160, 67),
+            StrengthLevel::VeryStrong => egui::Color32::from_rgb(16, 185, 129),
+        };
+
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::ProgressBar::new(fraction)
+                    .desired_width(180.0)
+                    .fill(bar_color),
+            );
+            ui.label(
+                egui::RichText::new(format!("{} • {:.0} bits", level.label(), bits))
+                    .color(crate::theme::ensure_contrast(
+                        bar_color,
+                        crate::theme::panel_background(is_dark),
+                        4.5,
+                    ))
+                    .size(11.5_f32)
+                    .strong(),
+            );
+        });
+    }
+
+    fn render_generator_mode_and_options(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        use crate::password::GeneratorMode;
+
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                let old_mode = self.password_gen.config.mode;
+                ui.selectable_value(
+                    &mut self.password_gen.config.mode,
+                    GeneratorMode::Password,
+                    "Random Password",
+                );
+                ui.selectable_value(
+                    &mut self.password_gen.config.mode,
+                    GeneratorMode::Passphrase,
+                    "Memorable Passphrase",
+                );
+                if self.password_gen.config.mode != old_mode {
+                    self.password_gen.regenerate();
+                }
+            });
+
+            ui.add_space(6.0);
+            let changed = match self.password_gen.config.mode {
+                GeneratorMode::Password => self.render_generator_password_options(ui, is_dark),
+                GeneratorMode::Passphrase => self.render_generator_passphrase_options(ui, is_dark),
+            };
+
+            if changed {
+                self.password_gen.regenerate();
+            }
+        });
+    }
+
+    fn render_generator_password_options(&mut self, ui: &mut egui::Ui, is_dark: bool) -> bool {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Length:").color(crate::theme::text_primary(is_dark)));
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut self.password_gen.config.length, 8..=64)
+                        .suffix(" chars"),
+                )
+                .changed();
+        });
+        ui.add_space(4.0);
+        changed |= ui
+            .checkbox(&mut self.password_gen.config.uppercase, "Uppercase (A-Z)")
+            .changed();
+        changed |= ui
+            .checkbox(&mut self.password_gen.config.lowercase, "Lowercase (a-z)")
+            .changed();
+        changed |= ui
+            .checkbox(&mut self.password_gen.config.numbers, "Numbers (0-9)")
+            .changed();
+        changed |= ui
+            .checkbox(&mut self.password_gen.config.symbols, "Symbols (!@#$...)")
+            .changed();
+        changed |= ui
+            .checkbox(
+                &mut self.password_gen.config.exclude_ambiguous,
+                "Avoid ambiguous characters (0, O, o, 1, l, I)",
+            )
+            .changed();
+        changed
+    }
+
+    fn render_generator_passphrase_options(&mut self, ui: &mut egui::Ui, is_dark: bool) -> bool {
+        use crate::password::PassphraseSeparator;
+
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Words:").color(crate::theme::text_primary(is_dark)));
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut self.password_gen.config.word_count, 3..=8)
+                        .suffix(" words"),
+                )
+                .changed();
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Separator:");
+            egui::ComboBox::from_id_salt("passphrase_sep_combo")
+                .selected_text(self.password_gen.config.separator.label())
+                .show_ui(ui, |ui| {
+                    for &sep in PassphraseSeparator::all() {
+                        if ui
+                            .selectable_value(
+                                &mut self.password_gen.config.separator,
+                                sep,
+                                sep.label(),
+                            )
+                            .clicked()
+                        {
+                            changed = true;
+                        }
+                    }
+                });
+        });
+        changed |= ui
+            .checkbox(&mut self.password_gen.config.capitalize, "Capitalize words")
+            .changed();
+        changed |= ui
+            .checkbox(
+                &mut self.password_gen.config.include_number,
+                "Include a random number",
+            )
+            .changed();
+        changed
     }
 
     fn render_settings_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
@@ -2038,10 +2358,10 @@ impl eframe::App for ClipboardApp {
 
         self.render_top_panel(ctx, is_dark);
         self.render_bottom_panel(ctx, is_dark);
-        if self.active_view == ActiveView::Settings {
-            self.render_settings_panel(ctx, is_dark);
-        } else {
-            self.render_central_panel(ctx, is_dark);
+        match self.active_view {
+            ActiveView::History => self.render_central_panel(ctx, is_dark),
+            ActiveView::Generator => self.render_generator_panel(ctx, is_dark),
+            ActiveView::Settings => self.render_settings_panel(ctx, is_dark),
         }
 
         self.render_clear_confirm_modal(ctx, is_dark);

@@ -72,6 +72,10 @@ pub(crate) fn start_clipboard_monitor(
                     last_copied_text = Some(text.clone());
                     last_copied_image_hash = None;
 
+                    if db.take_if_skipped(&text) {
+                        continue;
+                    }
+
                     match db.insert(&text) {
                         Ok(Some(id)) => {
                             let preview = if text.chars().count() > 40 {

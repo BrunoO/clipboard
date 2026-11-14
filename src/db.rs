@@ -98,6 +98,7 @@ pub(crate) struct Database {
     conn: Arc<Mutex<Connection>>,
     max_history: Arc<AtomicUsize>,
     ignore_concealed: Arc<AtomicBool>,
+    transient_text: Arc<Mutex<Option<String>>>,
 }
 
 impl std::fmt::Debug for Database {
@@ -168,6 +169,7 @@ impl Database {
             conn: Arc::new(Mutex::new(conn)),
             max_history: Arc::new(AtomicUsize::new(100)),
             ignore_concealed: Arc::new(AtomicBool::new(true)),
+            transient_text: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -192,6 +194,25 @@ impl Database {
     #[must_use]
     pub(crate) fn ignore_concealed(&self) -> bool {
         self.ignore_concealed.load(Ordering::Relaxed)
+    }
+
+    /// Marks the given text to be ignored once by the background clipboard monitor.
+    pub(crate) fn skip_next_capture(&self, text: &str) {
+        if let Ok(mut guard) = self.transient_text.lock() {
+            *guard = Some(text.to_string());
+        }
+    }
+
+    /// Returns true (and clears the marker) if `text` matches a pending transient copy.
+    #[must_use]
+    pub(crate) fn take_if_skipped(&self, text: &str) -> bool {
+        if let Ok(mut guard) = self.transient_text.lock() {
+            if guard.as_deref() == Some(text) {
+                *guard = None;
+                return true;
+            }
+        }
+        false
     }
 
     /// Prunes older clipboard items exceeding the maximum history threshold.
