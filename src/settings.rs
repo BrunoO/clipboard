@@ -532,10 +532,6 @@ impl AppSettings {
         }
     }
 
-    /// Checks if the current hotkey configuration has a valid custom hotkey.
-    pub(crate) fn has_valid_custom_hotkey(&self) -> bool {
-        matches!(self.hotkey, HotkeyPreset::Custom) && ParsedHotkey::parse(&self.custom_hotkey).is_some()
-    }
 }
 
 #[cfg(test)]
