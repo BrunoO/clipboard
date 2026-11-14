@@ -1,3 +1,4 @@
+#[cfg(not(test))]
 use keyring::Entry;
 use rand::Rng;
 use std::fs;
@@ -144,6 +145,7 @@ fn read_key_file(path: &Path) -> Result<Option<String>, std::io::Error> {
     }
 }
 
+#[cfg(not(test))]
 fn read_from_keyring() -> Option<(String, &'static str)> {
     for service in [SERVICE_NAME, LEGACY_SERVICE_NAME] {
         if let Ok(entry) = Entry::new(service, KEY_NAME) {
@@ -158,9 +160,95 @@ fn read_from_keyring() -> Option<(String, &'static str)> {
     None
 }
 
+#[cfg(not(test))]
 fn write_to_keyring(key: &str) -> Result<(), keyring::Error> {
     let entry = Entry::new(SERVICE_NAME, KEY_NAME)?;
     entry.set_password(key)
+}
+
+#[cfg(test)]
+pub(crate) mod mock_keyring {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    pub(crate) struct MockKeyringState {
+        pub(crate) entries: HashMap<(String, String), String>,
+        pub(crate) fail_writes: bool,
+    }
+
+    pub(crate) static MOCK_KEYRING: Mutex<Option<MockKeyringState>> = Mutex::new(None);
+    pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    pub(crate) fn with_state<F, R>(f: F) -> R
+    where
+        F: FnOnce(&mut MockKeyringState) -> R,
+    {
+        let mut guard = MOCK_KEYRING.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(MockKeyringState::default());
+        }
+        f(guard.as_mut().unwrap())
+    }
+
+    pub(crate) fn reset() {
+        let mut guard = MOCK_KEYRING.lock().unwrap();
+        *guard = Some(MockKeyringState::default());
+    }
+
+    pub(crate) fn set_fail_writes(fail: bool) {
+        with_state(|s| s.fail_writes = fail);
+    }
+
+    pub(crate) fn insert(service: &str, key_name: &str, password: &str) {
+        with_state(|s| {
+            s.entries.insert(
+                (service.to_string(), key_name.to_string()),
+                password.to_string(),
+            );
+        });
+    }
+
+    pub(crate) fn get(service: &str, key_name: &str) -> Option<String> {
+        with_state(|s| {
+            s.entries
+                .get(&(service.to_string(), key_name.to_string()))
+                .cloned()
+        })
+    }
+}
+
+#[cfg(test)]
+fn read_from_keyring() -> Option<(String, &'static str)> {
+    for service in [SERVICE_NAME, LEGACY_SERVICE_NAME] {
+        if let Some(key) = mock_keyring::get(service, KEY_NAME) {
+            let trimmed = key.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some((trimmed, service));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+fn write_to_keyring(key: &str) -> Result<(), keyring::Error> {
+    mock_keyring::with_state(|s| {
+        if s.fail_writes {
+            Err(keyring::Error::NoStorageAccess(Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "mock keyring write failure",
+                ),
+            )))
+        } else {
+            s.entries.insert(
+                (SERVICE_NAME.to_string(), KEY_NAME.to_string()),
+                key.to_string(),
+            );
+            Ok(())
+        }
+    })
 }
 
 fn remove_key_file(path: &Path) {
@@ -234,6 +322,8 @@ mod tests {
 
     #[test]
     fn test_save_and_read_key_file() {
+        let _lock = mock_keyring::TEST_LOCK.lock().unwrap();
+        mock_keyring::reset();
         let dir = tempdir().unwrap();
         let key_file = dir.path().join(".encryption_key");
         let test_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -266,6 +356,8 @@ mod tests {
 
     #[test]
     fn test_existing_db_without_key_fails_loudly() {
+        let _lock = mock_keyring::TEST_LOCK.lock().unwrap();
+        mock_keyring::reset();
         let dir = tempdir().unwrap();
         let res = get_or_create_encryption_key_with_mode(dir.path(), true, true);
         assert!(res.is_err());
@@ -273,6 +365,9 @@ mod tests {
 
     #[test]
     fn test_release_mode_reads_legacy_key_file_when_keyring_unavailable() {
+        let _lock = mock_keyring::TEST_LOCK.lock().unwrap();
+        mock_keyring::reset();
+        mock_keyring::set_fail_writes(true);
         let dir = tempdir().unwrap();
         let key_file = dir.path().join(".encryption_key");
         let test_key = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
@@ -280,5 +375,57 @@ mod tests {
 
         let loaded = get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
         assert_eq!(loaded, test_key);
+        // Since write_to_keyring failed, the key_file should remain on disk
+        assert!(key_file.exists());
+    }
+
+    #[test]
+    fn test_release_mode_migrates_legacy_key_file_to_keyring() {
+        let _lock = mock_keyring::TEST_LOCK.lock().unwrap();
+        mock_keyring::reset();
+        let dir = tempdir().unwrap();
+        let key_file = dir.path().join(".encryption_key");
+        let test_key = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        save_key_file(&key_file, test_key).unwrap();
+
+        let loaded = get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
+        assert_eq!(loaded, test_key);
+        // Successful migration should remove the key file and persist into keyring
+        assert!(!key_file.exists());
+        assert_eq!(
+            mock_keyring::get(SERVICE_NAME, KEY_NAME),
+            Some(test_key.to_string())
+        );
+    }
+
+    #[test]
+    fn test_release_mode_migrates_legacy_service_key() {
+        let _lock = mock_keyring::TEST_LOCK.lock().unwrap();
+        mock_keyring::reset();
+        let legacy_key = "1111222233334444111122223333444411112222333344441111222233334444";
+        mock_keyring::insert(LEGACY_SERVICE_NAME, KEY_NAME, legacy_key);
+        let dir = tempdir().unwrap();
+
+        let loaded = get_or_create_encryption_key_with_mode(dir.path(), false, false).unwrap();
+        assert_eq!(loaded, legacy_key);
+        // Should have migrated into current SERVICE_NAME
+        assert_eq!(
+            mock_keyring::get(SERVICE_NAME, KEY_NAME),
+            Some(legacy_key.to_string())
+        );
+    }
+
+    #[test]
+    fn test_keyring_mock_isolation() {
+        let _lock = mock_keyring::TEST_LOCK.lock().unwrap();
+        mock_keyring::reset();
+        assert_eq!(read_from_keyring(), None);
+        write_to_keyring("abc123mockkey").unwrap();
+        assert_eq!(
+            read_from_keyring(),
+            Some(("abc123mockkey".to_string(), SERVICE_NAME))
+        );
+        mock_keyring::reset();
+        assert_eq!(read_from_keyring(), None);
     }
 }
