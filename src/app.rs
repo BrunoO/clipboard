@@ -488,136 +488,132 @@ impl ClipboardApp {
     }
 
     /// Handles key input during custom hotkey recording mode.
+    /// Uses raw events to reliably capture modifier+key combinations.
     #[allow(clippy::too_many_lines)]
     fn handle_custom_hotkey_recording(&mut self, ctx: &egui::Context) {
         ctx.input(|i| {
-            // Cancel on Escape
-            if i.key_pressed(egui::Key::Escape) {
-                self.recording_custom_hotkey = false;
-                self.pending_custom_hotkey.clear();
-                return;
-            }
+            // Process raw key events which include modifier state at time of event
+            for event in &i.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    repeat: false,
+                    ..
+                } = event
+                {
+                    // Cancel on Escape
+                    if *key == egui::Key::Escape {
+                        self.recording_custom_hotkey = false;
+                        self.pending_custom_hotkey.clear();
+                        return;
+                    }
 
-            // Clear on Backspace
-            if i.key_pressed(egui::Key::Backspace) {
-                self.pending_custom_hotkey.clear();
-                return;
-            }
+                    // Clear on Backspace
+                    if *key == egui::Key::Backspace {
+                        self.pending_custom_hotkey.clear();
+                        return;
+                    }
 
-            // Build hotkey string from modifiers + key
-            let mut parts = Vec::new();
-            if i.modifiers.ctrl {
-                parts.push("Ctrl");
-            }
-            if i.modifiers.alt {
-                parts.push("Alt");
-            }
-            if i.modifiers.shift {
-                parts.push("Shift");
-            }
-            if i.modifiers.mac_cmd || i.modifiers.command {
-                #[cfg(target_os = "macos")]
-                parts.push("Cmd");
-                #[cfg(not(target_os = "macos"))]
-                parts.push("Win");
-            }
+                    // Build hotkey string from event's modifiers + key
+                    let mut parts = Vec::new();
+                    if modifiers.ctrl {
+                        parts.push("Ctrl");
+                    }
+                    if modifiers.alt {
+                        parts.push("Alt");
+                    }
+                    if modifiers.shift {
+                        parts.push("Shift");
+                    }
+                    if modifiers.command {
+                        #[cfg(target_os = "macos")]
+                        parts.push("Cmd");
+                        #[cfg(not(target_os = "macos"))]
+                        parts.push("Win");
+                    }
 
-            // Check for non-modifier key press
-            for (key, name) in [
-                (egui::Key::Space, "Space"),
-                (egui::Key::Enter, "Enter"),
-                (egui::Key::Tab, "Tab"),
-                (egui::Key::Escape, "Esc"),
-                (egui::Key::Backspace, "Backspace"),
-                (egui::Key::Delete, "Delete"),
-                (egui::Key::Home, "Home"),
-                (egui::Key::End, "End"),
-                (egui::Key::PageUp, "PageUp"),
-                (egui::Key::PageDown, "PageDown"),
-                (egui::Key::ArrowUp, "Up"),
-                (egui::Key::ArrowDown, "Down"),
-                (egui::Key::ArrowLeft, "Left"),
-                (egui::Key::ArrowRight, "Right"),
-                (egui::Key::Insert, "Insert"),
-                (egui::Key::F1, "F1"),
-                (egui::Key::F2, "F2"),
-                (egui::Key::F3, "F3"),
-                (egui::Key::F4, "F4"),
-                (egui::Key::F5, "F5"),
-                (egui::Key::F6, "F6"),
-                (egui::Key::F7, "F7"),
-                (egui::Key::F8, "F8"),
-                (egui::Key::F9, "F9"),
-                (egui::Key::F10, "F10"),
-                (egui::Key::F11, "F11"),
-                (egui::Key::F12, "F12"),
-            ] {
-                if i.key_pressed(key) {
-                    parts.push(name);
-                    self.pending_custom_hotkey = parts.join("+");
-                    self.apply_custom_hotkey();
-                    return;
-                }
-            }
+                    // Map key to display name
+                    let key_name = match key {
+                        egui::Key::Space => "Space",
+                        egui::Key::Enter => "Enter",
+                        egui::Key::Tab => "Tab",
+                        egui::Key::Escape => "Esc",
+                        egui::Key::Backspace => "Backspace",
+                        egui::Key::Delete => "Delete",
+                        egui::Key::Home => "Home",
+                        egui::Key::End => "End",
+                        egui::Key::PageUp => "PageUp",
+                        egui::Key::PageDown => "PageDown",
+                        egui::Key::ArrowUp => "Up",
+                        egui::Key::ArrowDown => "Down",
+                        egui::Key::ArrowLeft => "Left",
+                        egui::Key::ArrowRight => "Right",
+                        egui::Key::Insert => "Insert",
+                        egui::Key::F1 => "F1",
+                        egui::Key::F2 => "F2",
+                        egui::Key::F3 => "F3",
+                        egui::Key::F4 => "F4",
+                        egui::Key::F5 => "F5",
+                        egui::Key::F6 => "F6",
+                        egui::Key::F7 => "F7",
+                        egui::Key::F8 => "F8",
+                        egui::Key::F9 => "F9",
+                        egui::Key::F10 => "F10",
+                        egui::Key::F11 => "F11",
+                        egui::Key::F12 => "F12",
+                        egui::Key::F13 => "F13",
+                        egui::Key::F14 => "F14",
+                        egui::Key::F15 => "F15",
+                        egui::Key::F16 => "F16",
+                        egui::Key::F17 => "F17",
+                        egui::Key::F18 => "F18",
+                        egui::Key::F19 => "F19",
+                        egui::Key::F20 => "F20",
+                        egui::Key::F21 => "F21",
+                        egui::Key::F22 => "F22",
+                        egui::Key::F23 => "F23",
+                        egui::Key::F24 => "F24",
+                        egui::Key::A => "A",
+                        egui::Key::B => "B",
+                        egui::Key::C => "C",
+                        egui::Key::D => "D",
+                        egui::Key::E => "E",
+                        egui::Key::F => "F",
+                        egui::Key::G => "G",
+                        egui::Key::H => "H",
+                        egui::Key::I => "I",
+                        egui::Key::J => "J",
+                        egui::Key::K => "K",
+                        egui::Key::L => "L",
+                        egui::Key::M => "M",
+                        egui::Key::N => "N",
+                        egui::Key::O => "O",
+                        egui::Key::P => "P",
+                        egui::Key::Q => "Q",
+                        egui::Key::R => "R",
+                        egui::Key::S => "S",
+                        egui::Key::T => "T",
+                        egui::Key::U => "U",
+                        egui::Key::V => "V",
+                        egui::Key::W => "W",
+                        egui::Key::X => "X",
+                        egui::Key::Y => "Y",
+                        egui::Key::Z => "Z",
+                        egui::Key::Num0 => "0",
+                        egui::Key::Num1 => "1",
+                        egui::Key::Num2 => "2",
+                        egui::Key::Num3 => "3",
+                        egui::Key::Num4 => "4",
+                        egui::Key::Num5 => "5",
+                        egui::Key::Num6 => "6",
+                        egui::Key::Num7 => "7",
+                        egui::Key::Num8 => "8",
+                        egui::Key::Num9 => "9",
+                        _ => continue, // Skip unhandled keys (modifiers, etc.)
+                    };
 
-            // Check for letter keys
-            for ch in 'A'..='Z' {
-                let key = match ch {
-                    'A' => egui::Key::A,
-                    'B' => egui::Key::B,
-                    'C' => egui::Key::C,
-                    'D' => egui::Key::D,
-                    'E' => egui::Key::E,
-                    'F' => egui::Key::F,
-                    'G' => egui::Key::G,
-                    'H' => egui::Key::H,
-                    'I' => egui::Key::I,
-                    'J' => egui::Key::J,
-                    'K' => egui::Key::K,
-                    'L' => egui::Key::L,
-                    'M' => egui::Key::M,
-                    'N' => egui::Key::N,
-                    'O' => egui::Key::O,
-                    'P' => egui::Key::P,
-                    'Q' => egui::Key::Q,
-                    'R' => egui::Key::R,
-                    'S' => egui::Key::S,
-                    'T' => egui::Key::T,
-                    'U' => egui::Key::U,
-                    'V' => egui::Key::V,
-                    'W' => egui::Key::W,
-                    'X' => egui::Key::X,
-                    'Y' => egui::Key::Y,
-                    'Z' => egui::Key::Z,
-                    _ => continue,
-                };
-                if i.key_pressed(key) {
-                    let key_str = ch.to_string();
-                    parts.push(&key_str);
-                    self.pending_custom_hotkey = parts.join("+");
-                    self.apply_custom_hotkey();
-                    return;
-                }
-            }
-
-            // Check for digit keys
-            for ch in '0'..='9' {
-                let key = match ch {
-                    '0' => egui::Key::Num0,
-                    '1' => egui::Key::Num1,
-                    '2' => egui::Key::Num2,
-                    '3' => egui::Key::Num3,
-                    '4' => egui::Key::Num4,
-                    '5' => egui::Key::Num5,
-                    '6' => egui::Key::Num6,
-                    '7' => egui::Key::Num7,
-                    '8' => egui::Key::Num8,
-                    '9' => egui::Key::Num9,
-                    _ => continue,
-                };
-                if i.key_pressed(key) {
-                    let key_str = ch.to_string();
-                    parts.push(&key_str);
+                    parts.push(key_name);
                     self.pending_custom_hotkey = parts.join("+");
                     self.apply_custom_hotkey();
                     return;
