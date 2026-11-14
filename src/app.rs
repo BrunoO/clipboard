@@ -488,6 +488,7 @@ impl ClipboardApp {
     }
 
     /// Handles key input during custom hotkey recording mode.
+    #[allow(clippy::too_many_lines)]
     fn handle_custom_hotkey_recording(&mut self, ctx: &egui::Context) {
         ctx.input(|i| {
             // Cancel on Escape
@@ -1710,6 +1711,7 @@ impl ClipboardApp {
         });
     }
 
+    #[allow(clippy::too_many_lines)]
     fn render_hotkey_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         ui.group(|ui| {
             ui.label(
@@ -1798,13 +1800,11 @@ impl ClipboardApp {
                                 self.apply_custom_hotkey();
                             }
                         }
-                        if !self.settings.custom_hotkey.is_empty() {
-                            if ui.button("Clear").clicked() {
-                                self.settings.custom_hotkey.clear();
-                                let _ = self.settings.save(&self.db);
-                                self.update_hotkeys_from_settings();
-                                self.pending_custom_hotkey.clear();
-                            }
+                        if !self.settings.custom_hotkey.is_empty() && ui.button("Clear").clicked() {
+                            self.settings.custom_hotkey.clear();
+                            let _ = self.settings.save(&self.db);
+                            self.update_hotkeys_from_settings();
+                            self.pending_custom_hotkey.clear();
                         }
                     });
                     if !self.settings.custom_hotkey.is_empty() {
@@ -1881,10 +1881,7 @@ impl ClipboardApp {
                 self.settings.custom_hotkey
             ));
         } else {
-            self.show_toast(&format!(
-                "{} Invalid hotkey format",
-                icons::WARNING
-            ));
+            self.show_toast(&format!("{} Invalid hotkey format", icons::WARNING));
         }
         self.recording_custom_hotkey = false;
         self.pending_custom_hotkey.clear();

@@ -76,7 +76,9 @@ impl HotkeyService {
                 };
 
                 let matches = {
-                    let lock = thread_ids.read().unwrap_or_else(|p| p.into_inner());
+                    let lock = thread_ids
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     lock.contains(&event.id)
                 };
                 if matches && event.state == HotKeyState::Pressed {
@@ -98,7 +100,10 @@ impl HotkeyService {
 
     /// Dynamically re-registers global hotkeys at runtime.
     /// Returns registration results for each hotkey.
-    pub(crate) fn update_hotkeys(&mut self, new_hotkeys: &[HotKey]) -> Vec<HotkeyRegistrationResult> {
+    pub(crate) fn update_hotkeys(
+        &mut self,
+        new_hotkeys: &[HotKey],
+    ) -> Vec<HotkeyRegistrationResult> {
         // Unregister all existing hotkeys
         for hk in &self.hotkeys {
             if let Err(e) = self.manager.unregister(*hk) {
@@ -140,7 +145,7 @@ impl HotkeyService {
 
         // Store results for UI
         if let Ok(mut results_lock) = self.last_registration_results.write() {
-            *results_lock = results.clone();
+            (*results_lock).clone_from(&results);
         }
 
         results
@@ -150,7 +155,7 @@ impl HotkeyService {
     pub(crate) fn registration_results(&self) -> Vec<HotkeyRegistrationResult> {
         self.last_registration_results
             .read()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
 

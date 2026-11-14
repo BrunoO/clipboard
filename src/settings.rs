@@ -154,6 +154,7 @@ pub(crate) struct ParsedHotkey {
 
 impl ParsedHotkey {
     /// Parses a string like "Ctrl+Shift+V" into modifiers and key code.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split('+').collect();
         if parts.is_empty() {
@@ -286,12 +287,13 @@ impl ParsedHotkey {
         Some(Self { modifiers, key })
     }
 
-    /// Converts to a HotKey with a new unique ID.
+    /// Converts to a `HotKey` with a new unique ID.
     fn to_hotkey(&self) -> HotKey {
         HotKey::new(Some(self.modifiers), self.key)
     }
 
     /// Formats back to a display string like "Ctrl+Shift+V".
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn format(&self) -> String {
         let mut parts = Vec::new();
         if self.modifiers.contains(Modifiers::CONTROL) {
@@ -521,17 +523,11 @@ impl AppSettings {
     /// Returns the effective hotkeys for the current preset, including custom hotkey resolution.
     pub(crate) fn effective_hotkeys(&self) -> Vec<HotKey> {
         match self.hotkey {
-            HotkeyPreset::Custom => {
-                if let Some(parsed) = ParsedHotkey::parse(&self.custom_hotkey) {
-                    vec![parsed.to_hotkey()]
-                } else {
-                    vec![]
-                }
-            }
+            HotkeyPreset::Custom => ParsedHotkey::parse(&self.custom_hotkey)
+                .map_or_else(Vec::new, |parsed| vec![parsed.to_hotkey()]),
             _ => self.hotkey.to_hotkeys(),
         }
     }
-
 }
 
 #[cfg(test)]
