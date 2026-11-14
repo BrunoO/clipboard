@@ -16,6 +16,10 @@ pub(crate) enum HotkeyPreset {
     AltSpace,
     /// Compact: Cmd+Space (macOS) / Ctrl+Space (Win/Linux)
     CtrlSpace,
+    /// No global shortcut
+    None,
+    /// User-defined custom shortcut (stored separately in settings)
+    Custom,
 }
 
 impl HotkeyPreset {
@@ -29,6 +33,8 @@ impl HotkeyPreset {
             Self::CtrlShiftC => "Cmd + Shift + C",
             Self::AltSpace => "Option + Space",
             Self::CtrlSpace => "Cmd + Space",
+            Self::None => "Disabled",
+            Self::Custom => "Custom…",
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -38,6 +44,8 @@ impl HotkeyPreset {
             Self::CtrlShiftC => "Ctrl + Shift + C",
             Self::AltSpace => "Alt + Space",
             Self::CtrlSpace => "Ctrl + Space",
+            Self::None => "Disabled",
+            Self::Custom => "Custom…",
         }
     }
 
@@ -51,6 +59,8 @@ impl HotkeyPreset {
             Self::CtrlShiftC => "Cmd+Shift+C",
             Self::AltSpace => "Option+Space",
             Self::CtrlSpace => "Cmd+Space",
+            Self::None => "Disabled",
+            Self::Custom => "Custom",
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -60,10 +70,13 @@ impl HotkeyPreset {
             Self::CtrlShiftC => "Ctrl+Shift+C",
             Self::AltSpace => "Alt+Space",
             Self::CtrlSpace => "Ctrl+Space",
+            Self::None => "Disabled",
+            Self::Custom => "Custom",
         }
     }
 
     /// Converts this preset into the corresponding `global_hotkey::hotkey::HotKey` objects.
+    /// Returns empty vec for `None` or `Custom` (custom hotkeys are resolved via settings).
     #[must_use]
     pub(crate) fn to_hotkeys(self) -> Vec<HotKey> {
         #[cfg(target_os = "macos")]
@@ -80,10 +93,11 @@ impl HotkeyPreset {
             Self::CtrlShiftC => vec![HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyC)],
             Self::AltSpace => vec![HotKey::new(Some(Modifiers::ALT), Code::Space)],
             Self::CtrlSpace => vec![HotKey::new(Some(base_mod), Code::Space)],
+            Self::None | Self::Custom => vec![],
         }
     }
 
-    /// All presets available in the selector.
+    /// All presets available in the selector (excludes None and Custom which are handled specially).
     #[must_use]
     pub(crate) const fn all_presets() -> &'static [Self] {
         &[
@@ -92,6 +106,8 @@ impl HotkeyPreset {
             Self::CtrlShiftC,
             Self::AltSpace,
             Self::CtrlSpace,
+            Self::None,
+            Self::Custom,
         ]
     }
 }
@@ -129,11 +145,274 @@ impl AppThemeMode {
     }
 }
 
+/// Parsed representation of a custom hotkey string (e.g., "Ctrl+Shift+X").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedHotkey {
+    modifiers: Modifiers,
+    key: Code,
+}
+
+impl ParsedHotkey {
+    /// Parses a string like "Ctrl+Shift+V" into modifiers and key code.
+    pub(crate) fn parse(s: &str) -> Option<Self> {
+        let parts: Vec<&str> = s.split('+').collect();
+        if parts.is_empty() {
+            return None;
+        }
+        let key_str = parts.last().copied()?.trim();
+        let mod_strs = &parts[..parts.len() - 1];
+
+        let mut modifiers = Modifiers::empty();
+        for m in mod_strs {
+            let m = m.trim().to_lowercase();
+            match m.as_str() {
+                "ctrl" | "control" => modifiers |= Modifiers::CONTROL,
+                "alt" | "option" => modifiers |= Modifiers::ALT,
+                "shift" => modifiers |= Modifiers::SHIFT,
+                "cmd" | "meta" | "super" | "win" => modifiers |= Modifiers::META,
+                _ => return None,
+            }
+        }
+
+        let key = match key_str.to_lowercase().as_str() {
+            "space" => Code::Space,
+            "enter" | "return" => Code::Enter,
+            "tab" => Code::Tab,
+            "esc" | "escape" => Code::Escape,
+            "backspace" => Code::Backspace,
+            "delete" => Code::Delete,
+            "home" => Code::Home,
+            "end" => Code::End,
+            "pageup" => Code::PageUp,
+            "pagedown" => Code::PageDown,
+            "up" => Code::ArrowUp,
+            "down" => Code::ArrowDown,
+            "left" => Code::ArrowLeft,
+            "right" => Code::ArrowRight,
+            "insert" => Code::Insert,
+            "f1" => Code::F1,
+            "f2" => Code::F2,
+            "f3" => Code::F3,
+            "f4" => Code::F4,
+            "f5" => Code::F5,
+            "f6" => Code::F6,
+            "f7" => Code::F7,
+            "f8" => Code::F8,
+            "f9" => Code::F9,
+            "f10" => Code::F10,
+            "f11" => Code::F11,
+            "f12" => Code::F12,
+            "f13" => Code::F13,
+            "f14" => Code::F14,
+            "f15" => Code::F15,
+            "f16" => Code::F16,
+            "f17" => Code::F17,
+            "f18" => Code::F18,
+            "f19" => Code::F19,
+            "f20" => Code::F20,
+            "f21" => Code::F21,
+            "f22" => Code::F22,
+            "f23" => Code::F23,
+            "f24" => Code::F24,
+            "quote" | "'" => Code::Quote,
+            "comma" | "," => Code::Comma,
+            "minus" | "-" => Code::Minus,
+            "period" | "." => Code::Period,
+            "slash" | "/" => Code::Slash,
+            "semicolon" | ";" => Code::Semicolon,
+            "backslash" | "\\" => Code::Backslash,
+            "bracketleft" | "[" => Code::BracketLeft,
+            "bracketright" | "]" => Code::BracketRight,
+            "grave" | "`" => Code::Backquote,
+            "capslock" => Code::CapsLock,
+            "scrolllock" => Code::ScrollLock,
+            "numlock" => Code::NumLock,
+            "printscreen" => Code::PrintScreen,
+            "pause" => Code::Pause,
+            s if s.len() == 1 => {
+                // Single character keys
+                let ch = s.chars().next()?;
+                if ch.is_ascii_alphabetic() {
+                    match ch.to_ascii_uppercase() {
+                        'A' => Code::KeyA,
+                        'B' => Code::KeyB,
+                        'C' => Code::KeyC,
+                        'D' => Code::KeyD,
+                        'E' => Code::KeyE,
+                        'F' => Code::KeyF,
+                        'G' => Code::KeyG,
+                        'H' => Code::KeyH,
+                        'I' => Code::KeyI,
+                        'J' => Code::KeyJ,
+                        'K' => Code::KeyK,
+                        'L' => Code::KeyL,
+                        'M' => Code::KeyM,
+                        'N' => Code::KeyN,
+                        'O' => Code::KeyO,
+                        'P' => Code::KeyP,
+                        'Q' => Code::KeyQ,
+                        'R' => Code::KeyR,
+                        'S' => Code::KeyS,
+                        'T' => Code::KeyT,
+                        'U' => Code::KeyU,
+                        'V' => Code::KeyV,
+                        'W' => Code::KeyW,
+                        'X' => Code::KeyX,
+                        'Y' => Code::KeyY,
+                        'Z' => Code::KeyZ,
+                        _ => return None,
+                    }
+                } else if ch.is_ascii_digit() {
+                    match ch {
+                        '0' => Code::Digit0,
+                        '1' => Code::Digit1,
+                        '2' => Code::Digit2,
+                        '3' => Code::Digit3,
+                        '4' => Code::Digit4,
+                        '5' => Code::Digit5,
+                        '6' => Code::Digit6,
+                        '7' => Code::Digit7,
+                        '8' => Code::Digit8,
+                        '9' => Code::Digit9,
+                        _ => return None,
+                    }
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+
+        Some(Self { modifiers, key })
+    }
+
+    /// Converts to a HotKey with a new unique ID.
+    fn to_hotkey(&self) -> HotKey {
+        HotKey::new(Some(self.modifiers), self.key)
+    }
+
+    /// Formats back to a display string like "Ctrl+Shift+V".
+    pub(crate) fn format(&self) -> String {
+        let mut parts = Vec::new();
+        if self.modifiers.contains(Modifiers::CONTROL) {
+            parts.push("Ctrl");
+        }
+        if self.modifiers.contains(Modifiers::ALT) {
+            parts.push("Alt");
+        }
+        if self.modifiers.contains(Modifiers::SHIFT) {
+            parts.push("Shift");
+        }
+        if self.modifiers.contains(Modifiers::META) {
+            #[cfg(target_os = "macos")]
+            parts.push("Cmd");
+            #[cfg(not(target_os = "macos"))]
+            parts.push("Win");
+        }
+        parts.push(match self.key {
+            Code::Space => "Space",
+            Code::Enter => "Enter",
+            Code::Tab => "Tab",
+            Code::Escape => "Esc",
+            Code::Backspace => "Backspace",
+            Code::Delete => "Delete",
+            Code::Home => "Home",
+            Code::End => "End",
+            Code::PageUp => "PageUp",
+            Code::PageDown => "PageDown",
+            Code::ArrowUp => "Up",
+            Code::ArrowDown => "Down",
+            Code::ArrowLeft => "Left",
+            Code::ArrowRight => "Right",
+            Code::Insert => "Insert",
+            Code::F1 => "F1",
+            Code::F2 => "F2",
+            Code::F3 => "F3",
+            Code::F4 => "F4",
+            Code::F5 => "F5",
+            Code::F6 => "F6",
+            Code::F7 => "F7",
+            Code::F8 => "F8",
+            Code::F9 => "F9",
+            Code::F10 => "F10",
+            Code::F11 => "F11",
+            Code::F12 => "F12",
+            Code::F13 => "F13",
+            Code::F14 => "F14",
+            Code::F15 => "F15",
+            Code::F16 => "F16",
+            Code::F17 => "F17",
+            Code::F18 => "F18",
+            Code::F19 => "F19",
+            Code::F20 => "F20",
+            Code::F21 => "F21",
+            Code::F22 => "F22",
+            Code::F23 => "F23",
+            Code::F24 => "F24",
+            Code::Quote => "Quote",
+            Code::Comma => "Comma",
+            Code::Minus => "Minus",
+            Code::Period => "Period",
+            Code::Slash => "Slash",
+            Code::Semicolon => "Semicolon",
+            Code::Backslash => "Backslash",
+            Code::BracketLeft => "BracketLeft",
+            Code::BracketRight => "BracketRight",
+            Code::Backquote => "Grave",
+            Code::CapsLock => "CapsLock",
+            Code::ScrollLock => "ScrollLock",
+            Code::NumLock => "NumLock",
+            Code::PrintScreen => "PrintScreen",
+            Code::Pause => "Pause",
+            Code::KeyA => "A",
+            Code::KeyB => "B",
+            Code::KeyC => "C",
+            Code::KeyD => "D",
+            Code::KeyE => "E",
+            Code::KeyF => "F",
+            Code::KeyG => "G",
+            Code::KeyH => "H",
+            Code::KeyI => "I",
+            Code::KeyJ => "J",
+            Code::KeyK => "K",
+            Code::KeyL => "L",
+            Code::KeyM => "M",
+            Code::KeyN => "N",
+            Code::KeyO => "O",
+            Code::KeyP => "P",
+            Code::KeyQ => "Q",
+            Code::KeyR => "R",
+            Code::KeyS => "S",
+            Code::KeyT => "T",
+            Code::KeyU => "U",
+            Code::KeyV => "V",
+            Code::KeyW => "W",
+            Code::KeyX => "X",
+            Code::KeyY => "Y",
+            Code::KeyZ => "Z",
+            Code::Digit0 => "0",
+            Code::Digit1 => "1",
+            Code::Digit2 => "2",
+            Code::Digit3 => "3",
+            Code::Digit4 => "4",
+            Code::Digit5 => "5",
+            Code::Digit6 => "6",
+            Code::Digit7 => "7",
+            Code::Digit8 => "8",
+            Code::Digit9 => "9",
+            _ => "?",
+        });
+        parts.join("+")
+    }
+}
+
 /// Persistent user configuration for the clipboard manager.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AppSettings {
     pub(crate) hotkey: HotkeyPreset,
+    #[serde(default)]
+    pub(crate) custom_hotkey: String, // Stores custom hotkey string like "Ctrl+Shift+X"
     #[serde(default)]
     pub(crate) theme: AppThemeMode,
     pub(crate) hide_on_copy: bool,
@@ -200,6 +479,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             hotkey: HotkeyPreset::Universal,
+            custom_hotkey: String::new(),
             theme: AppThemeMode::System,
             hide_on_copy: true,
             max_history: 100,
@@ -236,6 +516,25 @@ impl AppSettings {
         let json = serde_json::to_string(self)?;
         db.set_setting(Self::SETTINGS_KEY, &json)?;
         Ok(())
+    }
+
+    /// Returns the effective hotkeys for the current preset, including custom hotkey resolution.
+    pub(crate) fn effective_hotkeys(&self) -> Vec<HotKey> {
+        match self.hotkey {
+            HotkeyPreset::Custom => {
+                if let Some(parsed) = ParsedHotkey::parse(&self.custom_hotkey) {
+                    vec![parsed.to_hotkey()]
+                } else {
+                    vec![]
+                }
+            }
+            _ => self.hotkey.to_hotkeys(),
+        }
+    }
+
+    /// Checks if the current hotkey configuration has a valid custom hotkey.
+    pub(crate) fn has_valid_custom_hotkey(&self) -> bool {
+        matches!(self.hotkey, HotkeyPreset::Custom) && ParsedHotkey::parse(&self.custom_hotkey).is_some()
     }
 }
 
@@ -299,13 +598,47 @@ mod tests {
     fn test_hotkey_preset_conversions() {
         for preset in HotkeyPreset::all_presets() {
             let hotkeys = preset.to_hotkeys();
-            assert!(
-                !hotkeys.is_empty(),
-                "Preset must generate at least 1 hotkey"
-            );
+            if *preset != HotkeyPreset::None && *preset != HotkeyPreset::Custom {
+                assert!(
+                    !hotkeys.is_empty(),
+                    "Preset must generate at least 1 hotkey"
+                );
+            }
             assert_ne!(preset.display_name(), "");
             assert_ne!(preset.badge(), "");
         }
+    }
+
+    #[test]
+    fn test_custom_hotkey_parsing() {
+        // Test basic parsing
+        let parsed = ParsedHotkey::parse("Ctrl+Shift+V").unwrap();
+        assert!(parsed.modifiers.contains(Modifiers::CONTROL));
+        assert!(parsed.modifiers.contains(Modifiers::SHIFT));
+        assert_eq!(parsed.key, Code::KeyV);
+        assert_eq!(parsed.format(), "Ctrl+Shift+V");
+
+        // Test Alt+Space
+        let parsed = ParsedHotkey::parse("Alt+Space").unwrap();
+        assert!(parsed.modifiers.contains(Modifiers::ALT));
+        assert_eq!(parsed.key, Code::Space);
+
+        // Test Cmd+Option+Shift+X (macOS)
+        let parsed = ParsedHotkey::parse("Cmd+Option+Shift+X").unwrap();
+        assert!(parsed.modifiers.contains(Modifiers::META));
+        assert!(parsed.modifiers.contains(Modifiers::ALT));
+        assert!(parsed.modifiers.contains(Modifiers::SHIFT));
+        assert_eq!(parsed.key, Code::KeyX);
+
+        // Test single key
+        let parsed = ParsedHotkey::parse("F1").unwrap();
+        assert_eq!(parsed.key, Code::F1);
+        assert_eq!(parsed.modifiers, Modifiers::empty());
+
+        // Test invalid
+        assert!(ParsedHotkey::parse("").is_none());
+        assert!(ParsedHotkey::parse("InvalidKey").is_none());
+        assert!(ParsedHotkey::parse("Ctrl+InvalidMod+V").is_none());
     }
 
     #[test]

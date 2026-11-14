@@ -151,6 +151,8 @@ pub(crate) struct ClipboardApp {
     scroll_to_selected: bool,
     current_is_dark: Option<bool>,
     monitor_shutdown_tx: Sender<()>,
+    recording_custom_hotkey: bool,
+    pending_custom_hotkey: String,
 }
 
 impl ClipboardApp {
@@ -221,6 +223,8 @@ impl ClipboardApp {
             show_clear_confirm_dialog: false,
             scroll_to_selected: false,
             current_is_dark: None,
+            recording_custom_hotkey: false,
+            pending_custom_hotkey: String::new(),
             monitor_shutdown_tx,
         }
     }
@@ -481,8 +485,152 @@ impl ClipboardApp {
         }
     }
 
+    /// Handles key input during custom hotkey recording mode.
+    fn handle_custom_hotkey_recording(&mut self, ctx: &egui::Context) {
+        ctx.input(|i| {
+            // Cancel on Escape
+            if i.key_pressed(egui::Key::Escape) {
+                self.recording_custom_hotkey = false;
+                self.pending_custom_hotkey.clear();
+                return;
+            }
+
+            // Clear on Backspace
+            if i.key_pressed(egui::Key::Backspace) {
+                self.pending_custom_hotkey.clear();
+                return;
+            }
+
+            // Build hotkey string from modifiers + key
+            let mut parts = Vec::new();
+            if i.modifiers.ctrl {
+                parts.push("Ctrl");
+            }
+            if i.modifiers.alt {
+                parts.push("Alt");
+            }
+            if i.modifiers.shift {
+                parts.push("Shift");
+            }
+            if i.modifiers.mac_cmd || i.modifiers.command {
+                #[cfg(target_os = "macos")]
+                parts.push("Cmd");
+                #[cfg(not(target_os = "macos"))]
+                parts.push("Win");
+            }
+
+            // Check for non-modifier key press
+            for (key, name) in [
+                (egui::Key::Space, "Space"),
+                (egui::Key::Enter, "Enter"),
+                (egui::Key::Tab, "Tab"),
+                (egui::Key::Escape, "Esc"),
+                (egui::Key::Backspace, "Backspace"),
+                (egui::Key::Delete, "Delete"),
+                (egui::Key::Home, "Home"),
+                (egui::Key::End, "End"),
+                (egui::Key::PageUp, "PageUp"),
+                (egui::Key::PageDown, "PageDown"),
+                (egui::Key::ArrowUp, "Up"),
+                (egui::Key::ArrowDown, "Down"),
+                (egui::Key::ArrowLeft, "Left"),
+                (egui::Key::ArrowRight, "Right"),
+                (egui::Key::Insert, "Insert"),
+                (egui::Key::F1, "F1"),
+                (egui::Key::F2, "F2"),
+                (egui::Key::F3, "F3"),
+                (egui::Key::F4, "F4"),
+                (egui::Key::F5, "F5"),
+                (egui::Key::F6, "F6"),
+                (egui::Key::F7, "F7"),
+                (egui::Key::F8, "F8"),
+                (egui::Key::F9, "F9"),
+                (egui::Key::F10, "F10"),
+                (egui::Key::F11, "F11"),
+                (egui::Key::F12, "F12"),
+            ] {
+                if i.key_pressed(key) {
+                    parts.push(name);
+                    self.pending_custom_hotkey = parts.join("+");
+                    self.apply_custom_hotkey();
+                    return;
+                }
+            }
+
+            // Check for letter keys
+            for ch in 'A'..='Z' {
+                let key = match ch {
+                    'A' => egui::Key::A,
+                    'B' => egui::Key::B,
+                    'C' => egui::Key::C,
+                    'D' => egui::Key::D,
+                    'E' => egui::Key::E,
+                    'F' => egui::Key::F,
+                    'G' => egui::Key::G,
+                    'H' => egui::Key::H,
+                    'I' => egui::Key::I,
+                    'J' => egui::Key::J,
+                    'K' => egui::Key::K,
+                    'L' => egui::Key::L,
+                    'M' => egui::Key::M,
+                    'N' => egui::Key::N,
+                    'O' => egui::Key::O,
+                    'P' => egui::Key::P,
+                    'Q' => egui::Key::Q,
+                    'R' => egui::Key::R,
+                    'S' => egui::Key::S,
+                    'T' => egui::Key::T,
+                    'U' => egui::Key::U,
+                    'V' => egui::Key::V,
+                    'W' => egui::Key::W,
+                    'X' => egui::Key::X,
+                    'Y' => egui::Key::Y,
+                    'Z' => egui::Key::Z,
+                    _ => continue,
+                };
+                if i.key_pressed(key) {
+                    let key_str = ch.to_string();
+                    parts.push(&key_str);
+                    self.pending_custom_hotkey = parts.join("+");
+                    self.apply_custom_hotkey();
+                    return;
+                }
+            }
+
+            // Check for digit keys
+            for ch in '0'..='9' {
+                let key = match ch {
+                    '0' => egui::Key::Num0,
+                    '1' => egui::Key::Num1,
+                    '2' => egui::Key::Num2,
+                    '3' => egui::Key::Num3,
+                    '4' => egui::Key::Num4,
+                    '5' => egui::Key::Num5,
+                    '6' => egui::Key::Num6,
+                    '7' => egui::Key::Num7,
+                    '8' => egui::Key::Num8,
+                    '9' => egui::Key::Num9,
+                    _ => continue,
+                };
+                if i.key_pressed(key) {
+                    let key_str = ch.to_string();
+                    parts.push(&key_str);
+                    self.pending_custom_hotkey = parts.join("+");
+                    self.apply_custom_hotkey();
+                    return;
+                }
+            }
+        });
+    }
+
     #[allow(clippy::too_many_lines)]
     fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
+        // Handle custom hotkey recording
+        if self.recording_custom_hotkey {
+            self.handle_custom_hotkey_recording(ctx);
+            return;
+        }
+
         if self.show_clear_confirm_dialog || !self.is_visible {
             return;
         }
@@ -1551,9 +1699,7 @@ impl ClipboardApp {
                     if let Err(e) = self.settings.save(&self.db) {
                         eprintln!("Failed to save settings: {e}");
                     }
-                    if let Some(service) = &mut self.hotkey_service {
-                        service.update_hotkeys(&preset.to_hotkeys());
-                    }
+                    self.update_hotkeys_from_settings();
                     self.show_toast(&format!(
                         "{} Shortcut set to {}",
                         icons::CHECK,
@@ -1561,7 +1707,149 @@ impl ClipboardApp {
                     ));
                 }
             }
+
+            // Custom hotkey recorder
+            if self.settings.hotkey == HotkeyPreset::Custom {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                if self.recording_custom_hotkey {
+                    // Recording mode
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Press desired key combination…")
+                                .color(crate::theme::accent_color(is_dark))
+                                .strong(),
+                        );
+                        if ui.button("Cancel").clicked() {
+                            self.recording_custom_hotkey = false;
+                            self.pending_custom_hotkey.clear();
+                        }
+                    });
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("Press Esc to cancel, or Backspace to clear")
+                            .color(crate::theme::text_secondary(is_dark))
+                            .size(10.0),
+                    );
+                } else {
+                    // Display/edit mode
+                    ui.horizontal(|ui| {
+                        let current = if self.settings.custom_hotkey.is_empty() {
+                            "(not set)".to_string()
+                        } else {
+                            self.settings.custom_hotkey.clone()
+                        };
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut self.pending_custom_hotkey)
+                                .hint_text(current)
+                                .desired_width(200.0),
+                        );
+                        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            self.apply_custom_hotkey();
+                        }
+                        if ui.button(if self.pending_custom_hotkey.is_empty() {
+                            "Record"
+                        } else {
+                            "Apply"
+                        }).clicked() {
+                            if self.pending_custom_hotkey.is_empty() {
+                                self.start_recording_custom_hotkey();
+                            } else {
+                                self.apply_custom_hotkey();
+                            }
+                        }
+                        if !self.settings.custom_hotkey.is_empty() {
+                            if ui.button("Clear").clicked() {
+                                self.settings.custom_hotkey.clear();
+                                let _ = self.settings.save(&self.db);
+                                self.update_hotkeys_from_settings();
+                                self.pending_custom_hotkey.clear();
+                            }
+                        }
+                    });
+                    if !self.settings.custom_hotkey.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!("Current: {}", self.settings.custom_hotkey))
+                                .color(crate::theme::text_secondary(is_dark))
+                                .size(10.0),
+                        );
+                    }
+                }
+            }
+
+            // Registration status
+            if let Some(service) = &self.hotkey_service {
+                let results = service.registration_results();
+                if !results.is_empty() {
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("Registration Status:")
+                            .color(crate::theme::text_primary(is_dark))
+                            .strong(),
+                    );
+                    for result in results {
+                        ui.horizontal(|ui| {
+                            let (icon, color) = if result.success {
+                                (icons::CHECK, crate::theme::text_secondary(is_dark))
+                            } else {
+                                (icons::WARNING, crate::theme::warning_color(is_dark))
+                            };
+                            ui.label(egui::RichText::new(icon).color(color));
+                            let display = format!("{}", result.hotkey);
+                            ui.label(egui::RichText::new(display).color(color));
+                            if let Some(err) = &result.error {
+                                ui.label(
+                                    egui::RichText::new(format!("({err})"))
+                                        .color(crate::theme::text_secondary(is_dark))
+                                        .size(10.0),
+                                    );
+                            }
+                        });
+                    }
+                }
+            }
         });
+    }
+
+    /// Updates hotkeys from current settings (handles Custom preset).
+    fn update_hotkeys_from_settings(&mut self) {
+        if let Some(service) = &mut self.hotkey_service {
+            let hotkeys = self.settings.effective_hotkeys();
+            service.update_hotkeys(&hotkeys);
+        }
+    }
+
+    /// Starts recording a custom hotkey.
+    fn start_recording_custom_hotkey(&mut self) {
+        self.recording_custom_hotkey = true;
+        self.pending_custom_hotkey.clear();
+    }
+
+    /// Applies the pending custom hotkey.
+    fn apply_custom_hotkey(&mut self) {
+        if let Some(parsed) = crate::settings::ParsedHotkey::parse(&self.pending_custom_hotkey) {
+            self.settings.custom_hotkey = parsed.format();
+            if let Err(e) = self.settings.save(&self.db) {
+                eprintln!("Failed to save settings: {e}");
+            }
+            self.update_hotkeys_from_settings();
+            self.show_toast(&format!(
+                "{} Custom shortcut set to {}",
+                icons::CHECK,
+                self.settings.custom_hotkey
+            ));
+        } else {
+            self.show_toast(&format!(
+                "{} Invalid hotkey format",
+                icons::WARNING
+            ));
+        }
+        self.recording_custom_hotkey = false;
+        self.pending_custom_hotkey.clear();
     }
 
     fn render_behavior_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {

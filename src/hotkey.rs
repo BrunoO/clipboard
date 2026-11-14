@@ -4,12 +4,21 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use std::sync::{Arc, RwLock};
 use std::thread;
 
+/// Result of a hotkey registration attempt.
+#[derive(Debug, Clone)]
+pub(crate) struct HotkeyRegistrationResult {
+    pub(crate) hotkey: HotKey,
+    pub(crate) success: bool,
+    pub(crate) error: Option<String>,
+}
+
 /// Manages system-wide global hotkey registration and event delivery.
 pub(crate) struct HotkeyService {
     manager: GlobalHotKeyManager,
     hotkeys: Vec<HotKey>,
     target_ids: Arc<RwLock<Vec<u32>>>,
     shutdown_tx: Option<std::sync::mpsc::Sender<()>>,
+    last_registration_results: Arc<RwLock<Vec<HotkeyRegistrationResult>>>,
 }
 
 impl HotkeyService {
@@ -21,19 +30,34 @@ impl HotkeyService {
         let manager = GlobalHotKeyManager::new()?;
         let mut registered = Vec::new();
         let mut ids = Vec::new();
+        let mut results = Vec::new();
 
         for hk in initial_hotkeys {
-            if let Err(e) = manager.register(hk) {
-                eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
-            } else {
-                ids.push(hk.id());
-                registered.push(hk);
+            match manager.register(hk) {
+                Ok(()) => {
+                    ids.push(hk.id());
+                    registered.push(hk);
+                    results.push(HotkeyRegistrationResult {
+                        hotkey: hk,
+                        success: true,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
+                    results.push(HotkeyRegistrationResult {
+                        hotkey: hk,
+                        success: false,
+                        error: Some(e.to_string()),
+                    });
+                }
             }
         }
 
         let target_ids = Arc::new(RwLock::new(ids));
         let thread_ids = Arc::clone(&target_ids);
         let receiver = GlobalHotKeyEvent::receiver();
+        let results_arc = Arc::new(RwLock::new(results));
 
         // Background thread listens for OS hotkey events and wakes up egui
         let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
@@ -52,9 +76,7 @@ impl HotkeyService {
                 };
 
                 let matches = {
-                    let lock = thread_ids
-                        .read()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let lock = thread_ids.read().unwrap_or_else(|p| p.into_inner());
                     lock.contains(&event.id)
                 };
                 if matches && event.state == HotKeyState::Pressed {
@@ -70,11 +92,14 @@ impl HotkeyService {
             hotkeys: registered,
             target_ids,
             shutdown_tx: Some(shutdown_tx),
+            last_registration_results: results_arc,
         })
     }
 
     /// Dynamically re-registers global hotkeys at runtime.
-    pub(crate) fn update_hotkeys(&mut self, new_hotkeys: &[HotKey]) {
+    /// Returns registration results for each hotkey.
+    pub(crate) fn update_hotkeys(&mut self, new_hotkeys: &[HotKey]) -> Vec<HotkeyRegistrationResult> {
+        // Unregister all existing hotkeys
         for hk in &self.hotkeys {
             if let Err(e) = self.manager.unregister(*hk) {
                 eprintln!("⚠️ Could not unregister hotkey {hk:?}: {e}");
@@ -83,12 +108,27 @@ impl HotkeyService {
         self.hotkeys.clear();
 
         let mut new_ids = Vec::new();
+        let mut results = Vec::new();
+
         for &hk in new_hotkeys {
-            if let Err(e) = self.manager.register(hk) {
-                eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
-            } else {
-                new_ids.push(hk.id());
-                self.hotkeys.push(hk);
+            match self.manager.register(hk) {
+                Ok(()) => {
+                    new_ids.push(hk.id());
+                    self.hotkeys.push(hk);
+                    results.push(HotkeyRegistrationResult {
+                        hotkey: hk,
+                        success: true,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
+                    results.push(HotkeyRegistrationResult {
+                        hotkey: hk,
+                        success: false,
+                        error: Some(e.to_string()),
+                    });
+                }
             }
         }
 
@@ -97,6 +137,21 @@ impl HotkeyService {
             p.into_inner()
         });
         *lock = new_ids;
+
+        // Store results for UI
+        if let Ok(mut results_lock) = self.last_registration_results.write() {
+            *results_lock = results.clone();
+        }
+
+        results
+    }
+
+    /// Returns the last registration results for UI display.
+    pub(crate) fn registration_results(&self) -> Vec<HotkeyRegistrationResult> {
+        self.last_registration_results
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     /// Signals the background hotkey listener thread to shut down.
