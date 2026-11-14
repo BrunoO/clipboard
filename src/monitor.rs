@@ -4,7 +4,7 @@ use arboard::Clipboard;
 use eframe::egui;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 

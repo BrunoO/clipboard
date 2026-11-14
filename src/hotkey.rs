@@ -52,7 +52,9 @@ impl HotkeyService {
                 };
 
                 let matches = {
-                    let lock = thread_ids.read().unwrap_or_else(|p| p.into_inner());
+                    let lock = thread_ids
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     lock.contains(&event.id)
                 };
                 if matches && event.state == HotKeyState::Pressed {
@@ -90,12 +92,11 @@ impl HotkeyService {
             }
         }
 
-        if let Ok(mut lock) = self.target_ids.write() {
-            *lock = new_ids;
-        } else if let Err(p) = self.target_ids.write() {
+        let mut lock = self.target_ids.write().unwrap_or_else(|p| {
             eprintln!("⚠️ Hotkey target_ids mutex recovered from poison");
-            *p.into_inner() = new_ids;
-        }
+            p.into_inner()
+        });
+        *lock = new_ids;
     }
 
     /// Signals the background hotkey listener thread to shut down.

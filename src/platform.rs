@@ -129,7 +129,11 @@ pub(crate) fn capture_active_window() {
 }
 
 /// Restores focus to the previous application and optionally simulates a paste keystroke.
-pub(crate) fn restore_focus_and_paste(restore_focus: bool, auto_paste: bool, auto_paste_delay_ms: u64) {
+pub(crate) fn restore_focus_and_paste(
+    restore_focus: bool,
+    auto_paste: bool,
+    auto_paste_delay_ms: u64,
+) {
     if !restore_focus && !auto_paste {
         return;
     }

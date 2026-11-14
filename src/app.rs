@@ -150,7 +150,7 @@ pub(crate) struct ClipboardApp {
     show_clear_confirm_dialog: bool,
     scroll_to_selected: bool,
     current_is_dark: Option<bool>,
-    _monitor_shutdown_tx: Sender<()>,
+    monitor_shutdown_tx: Sender<()>,
 }
 
 impl ClipboardApp {
@@ -162,7 +162,6 @@ impl ClipboardApp {
         hotkey_service: Option<HotkeyService>,
         settings: AppSettings,
         monitor_shutdown_tx: Sender<()>,
-
     ) -> Self {
         db.set_max_history(settings.max_history);
         db.set_ignore_concealed(settings.ignore_concealed);
@@ -222,8 +221,7 @@ impl ClipboardApp {
             show_clear_confirm_dialog: false,
             scroll_to_selected: false,
             current_is_dark: None,
-            _monitor_shutdown_tx: monitor_shutdown_tx,
-
+            monitor_shutdown_tx,
         }
     }
 
@@ -274,7 +272,11 @@ impl ClipboardApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         crate::platform::hide_application();
         if restore_focus || auto_paste {
-            platform::restore_focus_and_paste(restore_focus, auto_paste, self.settings.auto_paste_delay_ms);
+            platform::restore_focus_and_paste(
+                restore_focus,
+                auto_paste,
+                self.settings.auto_paste_delay_ms,
+            );
         }
     }
 
@@ -2710,7 +2712,6 @@ impl eframe::App for ClipboardApp {
             ActiveView::History => self.render_central_panel(ctx, is_dark),
             ActiveView::Generator => self.render_generator_panel(ctx, is_dark),
             ActiveView::Settings => self.render_settings_panel(ctx, is_dark),
-
         }
 
         self.render_clear_confirm_modal(ctx, is_dark);
@@ -2722,7 +2723,7 @@ impl Drop for ClipboardApp {
         if let Some(hotkey) = self.hotkey_service.as_mut() {
             hotkey.shutdown();
         }
-        let _ = self._monitor_shutdown_tx.send(());
+        let _ = self.monitor_shutdown_tx.send(());
     }
 }
 
