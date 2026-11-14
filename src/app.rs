@@ -890,7 +890,7 @@ impl ClipboardApp {
                         .small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
                         .on_hover_text("Back to clipboard history"),
                     ActiveView::History | ActiveView::Settings => ui
-                        .small_button(format!("{} Password", icons::KEY))
+                        .small_button(icons::KEY)
                         .on_hover_text("Generate random password or passphrase"),
                 };
                 if gen_btn.clicked() {
