@@ -117,6 +117,83 @@ jobs:
             dist/*.exe
             dist/*.zip
             dist/*.sha256
+
+  release-linux:
+    name: Build & Package Linux (x64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxcb1-dev libdbus-1-dev
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+
+      - name: Resolve release version and tag
+        shell: bash
+        run: |
+          input_tag="${{ inputs.tag_name }}"
+          if [ -n "$input_tag" ]; then
+            tag="$input_tag"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            version=$(grep -m1 '^version' Cargo.toml | sed -E 's/version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')
+            tag="v$version"
+          fi
+          version="${tag#v}"
+          echo "Resolved Version: $version"
+          echo "Resolved Tag: $tag"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG_NAME=$tag" >> "$GITHUB_ENV"
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Verify release executable exists
+        run: |
+          if [ ! -f "target/release/CipherClipboard" ]; then
+            echo "target/release/CipherClipboard was not found after compilation!"
+            exit 1
+          fi
+          echo "CipherClipboard built successfully."
+
+      - name: Package tarball
+        run: |
+          set -e
+          package_dir="dist/CipherClipboard-${VERSION}-linux-x64"
+          mkdir -p "$package_dir"
+          cp "target/release/CipherClipboard" "$package_dir/"
+          chmod +x "$package_dir/CipherClipboard"
+          cp "assets/icon.png" "$package_dir/"
+          cp "README.md" "$package_dir/"
+          cp "LICENSE" "$package_dir/"
+          tar -czf "dist/CipherClipboard-${VERSION}-linux-x64.tar.gz" -C dist "CipherClipboard-${VERSION}-linux-x64"
+          rm -rf "$package_dir"
+
+      - name: Compute SHA-256 checksums
+        run: |
+          set -e
+          cd dist
+          for file in *.tar.gz; do
+            sha256sum "$file" > "$file.sha256"
+          done
+          sha256sum *.tar.gz > SHA256SUMS-linux-x64.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: CipherClipboard ${{ env.TAG_NAME }}
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
             dist/SHA256SUMS-windows-x64.txt
           generate_release_notes: true
           draft: false
