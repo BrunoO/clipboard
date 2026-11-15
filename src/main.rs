@@ -118,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             platform::setup_reopen_observer();
 
             // Initialize OS global hotkey service with user's configured hotkey
-            let initial_hotkeys = settings.hotkey.to_hotkeys();
+            let initial_hotkeys = settings.effective_hotkeys();
             let hotkey_service =
                 match HotkeyService::new(initial_hotkeys, hotkey_tx, cc.egui_ctx.clone()) {
                     Ok(service) => Some(service),

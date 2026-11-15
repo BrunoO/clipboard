@@ -756,6 +756,7 @@ dependencies = [
  "url",
  "webbrowser",
  "winres",
+ "x11rb",
 ]
 
 [[package]]

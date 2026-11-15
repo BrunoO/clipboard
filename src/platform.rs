@@ -40,20 +40,33 @@ pub(super) fn request_repaint() {
 }
 
 /// Returns true if the application currently has OS focus/activation.
-#[allow(clippy::missing_const_for_fn)]
+#[allow(dead_code, clippy::missing_const_for_fn)]
 #[must_use]
 pub(crate) fn is_app_active() -> bool {
+    is_app_active_state().unwrap_or(false)
+}
+
+/// Returns `Some(true)` if this application is currently active at the OS/WM level,
+/// `Some(false)` if another application is active, or `None` if the platform/session
+/// cannot determine active-window ownership (e.g. pure Wayland without X11).
+#[allow(clippy::missing_const_for_fn)]
+#[must_use]
+pub(crate) fn is_app_active_state() -> Option<bool> {
     #[cfg(target_os = "macos")]
     {
-        macos::is_active()
+        Some(macos::is_active())
     }
     #[cfg(target_os = "windows")]
     {
-        windows::is_active()
+        Some(windows::is_active())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
     {
-        false
+        linux::is_active()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        None
     }
 }
 
@@ -126,6 +139,9 @@ pub(crate) fn capture_active_window() {
 
     #[cfg(target_os = "windows")]
     windows::capture_frontmost();
+
+    #[cfg(target_os = "linux")]
+    linux::capture_frontmost();
 }
 
 /// Restores focus to the previous application and optionally simulates a paste keystroke.
@@ -149,6 +165,9 @@ pub(crate) fn restore_focus_and_paste(
 
             #[cfg(target_os = "windows")]
             windows::restore_focus();
+
+            #[cfg(target_os = "linux")]
+            linux::restore_focus();
         }
 
         if auto_paste {
@@ -161,6 +180,9 @@ pub(crate) fn restore_focus_and_paste(
 
             #[cfg(target_os = "windows")]
             windows::simulate_paste();
+
+            #[cfg(target_os = "linux")]
+            linux::simulate_paste();
         }
     });
 }
@@ -783,6 +805,167 @@ mod windows {
         }
 
         false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Linux Implementation (X11 / EWMH + XTest)
+// ---------------------------------------------------------------------------
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{
+        AtomEnum, ClientMessageEvent, ConnectionExt, EventMask, InputFocus, Window,
+        CLIENT_MESSAGE_EVENT,
+    };
+    use x11rb::protocol::xtest::ConnectionExt as XTestConnectionExt;
+
+    static PREVIOUS_X11_WINDOW: AtomicU32 = AtomicU32::new(0);
+
+    fn active_window_and_pid() -> Option<(Window, Option<u32>)> {
+        let (conn, screen_num) = x11rb::connect(None).ok()?;
+        let root = conn.setup().roots.get(screen_num)?.root;
+
+        let active_atom = conn
+            .intern_atom(true, b"_NET_ACTIVE_WINDOW")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        if active_atom == 0 {
+            return None;
+        }
+
+        let active_reply = conn
+            .get_property(false, root, active_atom, AtomEnum::WINDOW, 0, 1)
+            .ok()?
+            .reply()
+            .ok()?;
+        let win = active_reply.value32()?.next()?;
+        if win == 0 {
+            return None;
+        }
+
+        let pid_atom = conn
+            .intern_atom(true, b"_NET_WM_PID")
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map_or(0, |r| r.atom);
+
+        let pid = if pid_atom == 0 {
+            None
+        } else {
+            conn.get_property(false, win, pid_atom, AtomEnum::CARDINAL, 0, 1)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .and_then(|r| r.value32()?.next())
+        };
+
+        Some((win, pid))
+    }
+
+    pub(super) fn is_active() -> Option<bool> {
+        let (_win, pid) = active_window_and_pid()?;
+        pid.map(|p| p == std::process::id())
+    }
+
+    pub(super) fn capture_frontmost() {
+        if let Some((win, pid)) = active_window_and_pid() {
+            if pid != Some(std::process::id()) {
+                PREVIOUS_X11_WINDOW.store(win, Ordering::SeqCst);
+            }
+        }
+    }
+
+    pub(super) fn restore_focus() {
+        let win = PREVIOUS_X11_WINDOW.load(Ordering::SeqCst);
+        if win == 0 {
+            return;
+        }
+
+        let Ok((conn, screen_num)) = x11rb::connect(None) else {
+            return;
+        };
+        let Some(root) = conn.setup().roots.get(screen_num).map(|s| s.root) else {
+            return;
+        };
+
+        if let Ok(cookie) = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW") {
+            if let Ok(reply) = cookie.reply() {
+                if reply.atom != 0 {
+                    let event = ClientMessageEvent {
+                        response_type: CLIENT_MESSAGE_EVENT,
+                        format: 32,
+                        sequence: 0,
+                        window: win,
+                        type_: reply.atom,
+                        data: [1, x11rb::CURRENT_TIME, 0, 0, 0].into(),
+                    };
+                    let _ = conn.send_event(
+                        false,
+                        root,
+                        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                        event,
+                    );
+                }
+            }
+        }
+
+        let _ = conn.set_input_focus(InputFocus::PARENT, win, x11rb::CURRENT_TIME);
+        let _ = conn.flush();
+    }
+
+    fn find_keycode<C: Connection>(conn: &C, target_keysym: u32) -> Option<u8> {
+        let min_kc = conn.setup().min_keycode;
+        let max_kc = conn.setup().max_keycode;
+        let count = max_kc.checked_sub(min_kc)?.saturating_add(1);
+        let mapping = conn
+            .get_keyboard_mapping(min_kc, count)
+            .ok()?
+            .reply()
+            .ok()?;
+        let per_kc = usize::from(mapping.keysyms_per_keycode);
+        if per_kc == 0 {
+            return None;
+        }
+        for (idx, chunk) in mapping.keysyms.chunks(per_kc).enumerate() {
+            if chunk.contains(&target_keysym) {
+                let offset = u8::try_from(idx).ok()?;
+                return min_kc.checked_add(offset);
+            }
+        }
+        None
+    }
+
+    pub(super) fn simulate_paste() {
+        const XK_CONTROL_L: u32 = 0xffe3;
+        const XK_V_LOWER: u32 = 0x0076;
+        const KEY_PRESS: u8 = 2;
+        const KEY_RELEASE: u8 = 3;
+
+        let Ok((conn, screen_num)) = x11rb::connect(None) else {
+            return;
+        };
+        let Some(root) = conn.setup().roots.get(screen_num).map(|s| s.root) else {
+            return;
+        };
+        let Some(ctrl_kc) = find_keycode(&conn, XK_CONTROL_L) else {
+            return;
+        };
+        let Some(v_kc) = find_keycode(&conn, XK_V_LOWER) else {
+            return;
+        };
+
+        let _ = conn.xtest_fake_input(KEY_PRESS, ctrl_kc, 0, root, 0, 0, 0);
+        let _ = conn.xtest_fake_input(KEY_PRESS, v_kc, 0, root, 0, 0, 0);
+        let _ = conn.flush();
+
+        std::thread::sleep(std::time::Duration::from_millis(15));
+
+        let _ = conn.xtest_fake_input(KEY_RELEASE, v_kc, 0, root, 0, 0, 0);
+        let _ = conn.xtest_fake_input(KEY_RELEASE, ctrl_kc, 0, root, 0, 0, 0);
+        let _ = conn.flush();
     }
 }
 

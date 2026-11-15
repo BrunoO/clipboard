@@ -155,6 +155,8 @@ pub(crate) struct ClipboardApp {
     pending_custom_hotkey: String,
     is_quitting: bool,
     show_keyring_explanation: bool,
+    last_drag_or_move_instant: Option<Instant>,
+    last_outer_rect: Option<egui::Rect>,
 }
 
 impl ClipboardApp {
@@ -230,6 +232,8 @@ impl ClipboardApp {
             monitor_shutdown_tx,
             is_quitting: false,
             show_keyring_explanation: false,
+            last_drag_or_move_instant: None,
+            last_outer_rect: None,
         }
     }
 
@@ -478,6 +482,9 @@ impl ClipboardApp {
     }
 
     fn handle_escape_key(&mut self, ctx: &egui::Context) {
+        if self.recording_custom_hotkey {
+            return;
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             if self.show_clear_confirm_dialog {
                 self.show_clear_confirm_dialog = false;
@@ -517,7 +524,9 @@ impl ClipboardApp {
                         return;
                     }
 
-                    // Build hotkey string from event's modifiers + key
+                    // Build hotkey string from event's modifiers + key.
+                    // Note: in egui, `modifiers.command` aliases `ctrl` on Linux/Windows,
+                    // so only treat `mac_cmd` / `command` as Cmd on macOS.
                     let mut parts = Vec::new();
                     if modifiers.ctrl {
                         parts.push("Ctrl");
@@ -528,11 +537,9 @@ impl ClipboardApp {
                     if modifiers.shift {
                         parts.push("Shift");
                     }
-                    if modifiers.command {
-                        #[cfg(target_os = "macos")]
+                    #[cfg(target_os = "macos")]
+                    if modifiers.mac_cmd || modifiers.command {
                         parts.push("Cmd");
-                        #[cfg(not(target_os = "macos"))]
-                        parts.push("Win");
                     }
 
                     // Map key to display name
@@ -802,26 +809,44 @@ impl ClipboardApp {
     }
 
     fn handle_app_activation(&mut self, ctx: &egui::Context) {
-        let is_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
-        let is_active = crate::platform::is_app_active();
+        let (is_focused, outer_rect, pointer_down) = ctx.input(|i| {
+            (
+                i.viewport().focused.unwrap_or(false),
+                i.viewport().outer_rect,
+                i.pointer.any_down(),
+            )
+        });
+        if let Some(rect) = outer_rect {
+            if self.last_outer_rect.is_some_and(|prev| prev != rect) {
+                self.last_drag_or_move_instant = Some(Instant::now());
+            }
+            self.last_outer_rect = Some(rect);
+        }
+
+        let active_state = crate::platform::is_app_active_state();
+        let is_active = active_state.unwrap_or(false);
         let reopen_requested = crate::platform::take_reopen_requested();
 
         if self.is_visible {
             if is_focused {
                 self.has_been_focused = true;
             } else if self.has_been_focused && self.settings.hide_on_blur {
-                // On macOS and Windows, only dismiss when the user actually switches away to
-                // another application (!is_active). Interacting with the system menu bar,
-                // the standard "About" dialog, or auxiliary panels belongs to this application
-                // and must not cause the window to disappear.
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                let is_outside = !is_active;
+                let is_dragging_or_moving = pointer_down
+                    || self
+                        .last_drag_or_move_instant
+                        .is_some_and(|t| t.elapsed() < Duration::from_millis(350));
 
-                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                let is_outside = !is_focused;
+                if !is_dragging_or_moving {
+                    // On macOS, Windows, and X11 Linux, only dismiss when another application
+                    // actually becomes active (active_state == Some(false)). Titlebar drags,
+                    // StartDrag grabs, and WM move/resize grabs keep our app active.
+                    // If the session cannot report active-window ownership (e.g. pure Wayland),
+                    // fall back to `!is_focused`.
+                    let is_outside = active_state.map_or(!is_focused, |active| !active);
 
-                if is_outside {
-                    self.hide_window(ctx, false, false);
+                    if is_outside {
+                        self.hide_window(ctx, false, false);
+                    }
                 }
             }
         } else {
@@ -982,12 +1007,19 @@ impl ClipboardApp {
                     .color(crate::theme::text_primary(is_dark))
                     .strong(),
             );
-            if title_resp.interact(egui::Sense::drag()).dragged() {
+            if title_resp.interact(egui::Sense::drag()).drag_started() {
+                self.last_drag_or_move_instant = Some(Instant::now());
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
 
             if ui.available_width() > 260.0 {
-                let badge = self.settings.hotkey.badge();
+                let badge = if self.settings.hotkey == HotkeyPreset::Custom
+                    && !self.settings.custom_hotkey.is_empty()
+                {
+                    self.settings.custom_hotkey.as_str()
+                } else {
+                    self.settings.hotkey.badge()
+                };
                 ui.label(
                     egui::RichText::new(format!("({badge})"))
                         .color(crate::theme::text_secondary(is_dark))
@@ -1737,12 +1769,19 @@ impl ClipboardApp {
                     if let Err(e) = self.settings.save(&self.db) {
                         eprintln!("Failed to save settings: {e}");
                     }
-                    self.update_hotkeys_from_settings();
-                    self.show_toast(&format!(
-                        "{} Shortcut set to {}",
-                        icons::CHECK,
-                        preset.badge()
-                    ));
+                    if self.update_hotkeys_from_settings() {
+                        self.show_toast(&format!(
+                            "{} Shortcut set to {}",
+                            icons::CHECK,
+                            preset.badge()
+                        ));
+                    } else {
+                        self.show_toast(&format!(
+                            "{} Could not register {} (may be in use by OS)",
+                            icons::WARNING,
+                            preset.badge()
+                        ));
+                    }
                 }
             }
 
@@ -1852,10 +1891,14 @@ impl ClipboardApp {
     }
 
     /// Updates hotkeys from current settings (handles Custom preset).
-    fn update_hotkeys_from_settings(&mut self) {
+    /// Returns `true` if all requested hotkeys registered successfully (or none were requested).
+    fn update_hotkeys_from_settings(&mut self) -> bool {
         if let Some(service) = &mut self.hotkey_service {
             let hotkeys = self.settings.effective_hotkeys();
-            service.update_hotkeys(&hotkeys);
+            let results = service.update_hotkeys(&hotkeys);
+            results.iter().all(|r| r.success)
+        } else {
+            false
         }
     }
 
@@ -1872,12 +1915,19 @@ impl ClipboardApp {
             if let Err(e) = self.settings.save(&self.db) {
                 eprintln!("Failed to save settings: {e}");
             }
-            self.update_hotkeys_from_settings();
-            self.show_toast(&format!(
-                "{} Custom shortcut set to {}",
-                icons::CHECK,
-                self.settings.custom_hotkey
-            ));
+            if self.update_hotkeys_from_settings() {
+                self.show_toast(&format!(
+                    "{} Custom shortcut set to {}",
+                    icons::CHECK,
+                    self.settings.custom_hotkey
+                ));
+            } else {
+                self.show_toast(&format!(
+                    "{} Could not register {} (may be in use by OS)",
+                    icons::WARNING,
+                    self.settings.custom_hotkey
+                ));
+            }
         } else {
             self.show_toast(&format!("{} Invalid hotkey format", icons::WARNING));
         }
@@ -3224,6 +3274,8 @@ mod tests {
             monitor_shutdown_tx: shutdown_tx,
             is_quitting: false,
             show_keyring_explanation: false,
+            last_drag_or_move_instant: None,
+            last_outer_rect: None,
         };
 
         assert!(!app.is_quitting);
