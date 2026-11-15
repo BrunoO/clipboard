@@ -180,9 +180,12 @@ jobs:
 
       - name: Build Windows 7 release binary
         shell: pwsh
-        env:
-          RUSTFLAGS: "-C link-arg=${{ env.YY_THUNKS_OBJ }} -C link-arg=/SUBSYSTEM:WINDOWS,6.01 -C link-arg=/DELAYLOAD:combase.dll -C link-arg=delayimp.lib"
-        run: cargo build --release --locked
+        run: |
+          cargo rustc --release --locked --bin CipherClipboard -- `
+            -C "link-arg=$env:YY_THUNKS_OBJ" `
+            -C "link-arg=/SUBSYSTEM:WINDOWS,6.01" `
+            -C "link-arg=/DELAYLOAD:combase.dll" `
+            -C "link-arg=delayimp.lib"
 
       - name: Verify release executable exists
         shell: pwsh
