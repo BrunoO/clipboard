@@ -439,6 +439,8 @@ pub(crate) struct AppSettings {
     pub(crate) generator_skip_history: bool,
     #[serde(default = "default_generator_reveal_value")]
     pub(crate) generator_reveal_value: bool,
+    #[serde(default = "default_keyring_explanation_shown")]
+    pub(crate) keyring_explanation_shown: bool,
 }
 
 const fn default_hide_on_blur() -> bool {
@@ -477,6 +479,10 @@ const fn default_generator_reveal_value() -> bool {
     true
 }
 
+const fn default_keyring_explanation_shown() -> bool {
+    false
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -495,6 +501,7 @@ impl Default for AppSettings {
             password_config: PasswordConfig::default(),
             generator_skip_history: true,
             generator_reveal_value: true,
+            keyring_explanation_shown: false,
         }
     }
 }

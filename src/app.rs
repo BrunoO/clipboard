@@ -154,6 +154,7 @@ pub(crate) struct ClipboardApp {
     recording_custom_hotkey: bool,
     pending_custom_hotkey: String,
     is_quitting: bool,
+    show_keyring_explanation: bool,
 }
 
 impl ClipboardApp {
@@ -228,6 +229,7 @@ impl ClipboardApp {
             pending_custom_hotkey: String::new(),
             monitor_shutdown_tx,
             is_quitting: false,
+            show_keyring_explanation: false,
         }
     }
 
@@ -2070,6 +2072,17 @@ impl ClipboardApp {
                     self.show_clear_confirm_dialog = true;
                 }
             });
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .button(format!("{} Keyring Info", icons::SHIELD_CHECK))
+                    .clicked()
+                {
+                    self.settings.keyring_explanation_shown = false;
+                    self.show_keyring_explanation = true;
+                }
+            });
         });
     }
 
@@ -2994,6 +3007,101 @@ impl ClipboardApp {
             self.show_clear_confirm_dialog = false;
         }
     }
+
+    fn render_keyring_explanation_modal(&mut self, ctx: &egui::Context, is_dark: bool) {
+        if !self.show_keyring_explanation {
+            return;
+        }
+
+        let screen_rect = ctx.screen_rect();
+        egui::Area::new(egui::Id::new("keyring_explanation_backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen_rect.min)
+            .show(ctx, |ui| {
+                let response = ui.allocate_response(screen_rect.size(), egui::Sense::click());
+                ui.painter().rect_filled(
+                    screen_rect,
+                    0.0_f32,
+                    egui::Color32::from_black_alpha(150),
+                );
+                if response.clicked() {
+                    // Allow dismissing by clicking the backdrop.
+                    self.show_keyring_explanation = false;
+                    self.settings.keyring_explanation_shown = true;
+                    let _ = self.settings.save(&self.db);
+                }
+            });
+
+        let mut open = self.show_keyring_explanation;
+        egui::Window::new(format!("{} Secure Key Storage", icons::SHIELD_CHECK))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .movable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0_f32, 0.0_f32))
+            .order(egui::Order::Foreground)
+            .default_width(360.0_f32)
+            .max_width(400.0_f32)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .inner_margin(egui::Margin::symmetric(16.0_f32, 14.0_f32))
+                    .rounding(crate::theme::card_rounding())
+                    .stroke(crate::theme::card_stroke(is_dark, false)),
+            )
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(4.0_f32);
+                    ui.label(
+                        egui::RichText::new("CipherClipboard uses your OS keyring")
+                            .color(crate::theme::text_primary(is_dark))
+                            .strong()
+                            .size(15.0_f32),
+                    );
+                    ui.add_space(8.0_f32);
+                    ui.label(
+                        egui::RichText::new(
+                            "To keep your clipboard history encrypted, CipherClipboard stores a \
+                             256-bit encryption key in your operating system's secure credential \
+                             store (macOS Keychain, Windows Credential Manager, or Linux Secret \
+                             Service). You may see an OS permission prompt the first time this \
+                             happens. This prompt will not appear again unless you reinstall or \
+                             reset the app.",
+                        )
+                        .size(12.0_f32)
+                        .color(crate::theme::text_secondary(is_dark)),
+                    );
+                    ui.add_space(16.0_f32);
+
+                    ui.horizontal(|ui| {
+                        let btn_width = 120.0_f32;
+                        let btn_height = 28.0_f32;
+                        let available_width = ui.available_width();
+                        let spacing =
+                            btn_width.mul_add(-1.0_f32, available_width).max(0.0_f32) / 2.0_f32;
+                        ui.add_space(spacing);
+
+                        if ui
+                            .add_sized(
+                                [btn_width, btn_height],
+                                egui::Button::new(format!("{} Got it", icons::CHECK)),
+                            )
+                            .clicked()
+                        {
+                            self.show_keyring_explanation = false;
+                            self.settings.keyring_explanation_shown = true;
+                            let _ = self.settings.save(&self.db);
+                        }
+                    });
+                    ui.add_space(4.0_f32);
+                });
+            });
+
+        if !open {
+            self.show_keyring_explanation = false;
+            self.settings.keyring_explanation_shown = true;
+            let _ = self.settings.save(&self.db);
+        }
+    }
 }
 
 impl eframe::App for ClipboardApp {
@@ -3012,6 +3120,11 @@ impl eframe::App for ClipboardApp {
         self.handle_app_activation(ctx);
         self.handle_monitor_updates();
         self.handle_clipboard_auto_clear();
+
+        // Show keyring explanation dialog on first run (informational)
+        if !self.settings.keyring_explanation_shown && !self.show_keyring_explanation {
+            self.show_keyring_explanation = true;
+        }
 
         if !self.is_visible {
             // Keep the event loop alive with a gentle 50ms tick while hidden.
@@ -3035,6 +3148,7 @@ impl eframe::App for ClipboardApp {
         }
 
         self.render_clear_confirm_modal(ctx, is_dark);
+        self.render_keyring_explanation_modal(ctx, is_dark);
     }
 }
 
@@ -3109,6 +3223,7 @@ mod tests {
             pending_custom_hotkey: String::new(),
             monitor_shutdown_tx: shutdown_tx,
             is_quitting: false,
+            show_keyring_explanation: false,
         };
 
         assert!(!app.is_quitting);
