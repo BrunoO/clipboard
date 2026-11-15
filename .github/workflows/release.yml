@@ -124,6 +124,119 @@ jobs:
             dist/*.zip
             dist/*.sha256
 
+  release-windows-win7:
+    name: Build & Package Windows 7 Experimental (x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Resolve release version and tag
+        shell: pwsh
+        run: |
+          $inputTag = "${{ inputs.tag_name }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($inputTag)) {
+            $tag = $inputTag
+          } elseif ($env:GITHUB_REF -like "refs/tags/*") {
+            $tag = $env:GITHUB_REF -replace '^refs/tags/', ''
+          } else {
+            $cargoToml = Get-Content Cargo.toml -Raw
+            if ($cargoToml -match 'version\s*=\s*"([^"]+)"') {
+              $tag = "v$($matches[1])"
+            } else {
+              $tag = "v0.1.0"
+            }
+          }
+          $version = $tag.TrimStart('v')
+          Write-Host "Resolved Version: $version"
+          Write-Host "Resolved Tag: $tag"
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "TAG_NAME=$tag" >> $env:GITHUB_ENV
+
+      - name: Install Windows OpenSSL dependencies
+        run: |
+          choco install openssl -y --no-progress
+          Get-ChildItem -Path "C:\Program Files\OpenSSL\lib" -Filter "*.lib" -Recurse | Copy-Item -Destination "C:\Program Files\OpenSSL\lib" -Force
+          echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
+
+      - name: Download YY-Thunks for Windows 7
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:\yy-thunks"
+          $zipPath = "C:\yy-thunks\YY-Thunks-Objs.zip"
+          Invoke-WebRequest -Uri "https://github.com/Chuyu-Team/YY-Thunks/releases/latest/download/YY-Thunks-Objs.zip" -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath "C:\yy-thunks" -Force
+          $thunkObj = Get-ChildItem -Path "C:\yy-thunks" -Filter "YY_Thunks_for_Win7.obj" -Recurse | Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
+          if (-not $thunkObj) {
+            throw "YY_Thunks_for_Win7.obj (x64) not found in archive!"
+          }
+          Write-Host "Found YY-Thunks object: $($thunkObj.FullName)"
+          "YY_THUNKS_OBJ=$($thunkObj.FullName)" >> $env:GITHUB_ENV
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          cache: false
+
+      - name: Build Windows 7 release binary
+        shell: pwsh
+        env:
+          RUSTFLAGS: "-C link-arg=${{ env.YY_THUNKS_OBJ }} -C link-arg=/SUBSYSTEM:WINDOWS,6.01 -C link-arg=/DELAYLOAD:combase.dll -C link-arg=delayimp.lib"
+        run: cargo build --release --locked
+
+      - name: Verify release executable exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "target\release\CipherClipboard.exe")) {
+            throw "target\release\CipherClipboard.exe was not found after compilation!"
+          }
+          $openSslDlls = Get-ChildItem -Path "C:\Program Files\OpenSSL" -Filter "libcrypto-*.dll" -Recurse -File
+          foreach ($dll in $openSslDlls) {
+            Copy-Item $dll.FullName -Destination "target\release\" -Force
+            Write-Host "Staged OpenSSL runtime DLL: $($dll.Name)"
+          }
+          Write-Host "CipherClipboard.exe (Win7 experimental) built successfully."
+
+      - name: Package Windows 7 portable ZIP archive
+        shell: pwsh
+        run: |
+          $portableDir = "dist\CipherClipboard-$env:VERSION-windows7-x64-portable"
+          New-Item -ItemType Directory -Force -Path $portableDir
+          Copy-Item "target\release\CipherClipboard.exe" -Destination $portableDir
+          Get-ChildItem -Path "target\release" -Filter "libcrypto-*.dll" -File | Copy-Item -Destination $portableDir
+          Copy-Item "assets\icon.ico" -Destination $portableDir
+          Copy-Item "assets\icon.png" -Destination $portableDir
+          Copy-Item "README.md" -Destination $portableDir
+          Copy-Item "LICENSE" -Destination $portableDir
+          Compress-Archive -Path "$portableDir\*" -DestinationPath "dist\CipherClipboard-$env:VERSION-windows7-x64-portable.zip" -Force
+          Remove-Item -Recurse -Force $portableDir
+
+      - name: Compute SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path "dist" -Include "*.zip" -File
+          $sums = @()
+          foreach ($file in $files) {
+            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLower()
+            $entry = "$hash *$($file.Name)"
+            $sums += $entry
+            $entry | Set-Content -Path "$($file.FullName).sha256" -Encoding ascii
+            Write-Host "File: $($file.Name) | SHA256: $hash"
+          }
+          $sums | Set-Content -Path "dist\SHA256SUMS-windows7-x64.txt" -Encoding ascii
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: CipherClipboard ${{ env.TAG_NAME }}
+          files: |
+            dist/*.zip
+            dist/*.sha256
+            dist/SHA256SUMS-windows7-x64.txt
+
   release-linux:
     name: Build & Package Linux (x64)
     runs-on: ubuntu-22.04
