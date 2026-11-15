@@ -23,9 +23,7 @@ category = "Utility"
 short_description = "Encrypted Clipboard Manager"
 
 [package.metadata.bundle.macos]
-info-plist = { 
-    NSKeychainUsageDescription = "CipherClipboard stores your database encryption key securely in macOS Keychain so your clipboard history remains encrypted and accessible only to you."
-}
+info-plist = { NSKeychainUsageDescription = "CipherClipboard stores your database encryption key securely in macOS Keychain so your clipboard history remains encrypted and accessible only to you." }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
