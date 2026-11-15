@@ -66,10 +66,13 @@ xcode-select --install
 ```
 
 ### 2. Linux (Debian / Ubuntu / Fedora)
-On Linux, `arboard` and `keyring` require X11/Wayland and DBus libraries:
+On Linux, `arboard` and `keyring` require X11/Wayland and DBus libraries, and the bundled `sqlcipher` build requires OpenSSL development headers:
 ```bash
 # Debian / Ubuntu:
-sudo apt-get install libx11-dev libxcb1-dev libdbus-1-dev
+sudo apt-get install libx11-dev libxcb1-dev libdbus-1-dev libssl-dev pkg-config
+
+# Fedora:
+sudo dnf install libX11-devel libxcb-devel dbus-devel openssl-devel pkgconf-pkg-config
 ```
 
 ### 3. Windows
