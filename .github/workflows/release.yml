@@ -120,23 +120,18 @@ jobs:
 
   release-linux:
     name: Build & Package Linux (x64)
-    runs-on: ubuntu-latest
-    container: ubuntu:20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         run: |
-          apt-get update
-          apt-get install -y build-essential pkg-config libx11-dev libxcb1-dev libdbus-1-dev curl ca-certificates
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxcb1-dev libdbus-1-dev
 
       - name: Set up Rust toolchain
-        run: |
-          if ! command -v cargo >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        uses: actions-rust-lang/setup-rust-toolchain@v2
 
       - name: Resolve release version and tag
         shell: bash
