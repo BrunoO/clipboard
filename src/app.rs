@@ -157,6 +157,7 @@ pub(crate) struct ClipboardApp {
     show_keyring_explanation: bool,
     last_drag_or_move_instant: Option<Instant>,
     last_outer_rect: Option<egui::Rect>,
+    last_hide_instant: Option<Instant>,
 }
 
 impl ClipboardApp {
@@ -234,6 +235,7 @@ impl ClipboardApp {
             show_keyring_explanation: false,
             last_drag_or_move_instant: None,
             last_outer_rect: None,
+            last_hide_instant: None,
         }
     }
 
@@ -279,6 +281,7 @@ impl ClipboardApp {
         self.is_visible = false;
         self.has_been_focused = false;
         self.was_inactive_since_hidden = false;
+        self.last_hide_instant = Some(Instant::now());
         self.show_clear_confirm_dialog = false;
         self.revealed_secrets.clear();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -619,6 +622,17 @@ impl ClipboardApp {
                         egui::Key::Num7 => "7",
                         egui::Key::Num8 => "8",
                         egui::Key::Num9 => "9",
+                        egui::Key::Quote => "Quote",
+                        egui::Key::Comma => "Comma",
+                        egui::Key::Minus => "Minus",
+                        egui::Key::Equals | egui::Key::Plus => "Equal",
+                        egui::Key::Period => "Period",
+                        egui::Key::Slash | egui::Key::Questionmark => "Slash",
+                        egui::Key::Semicolon | egui::Key::Colon => "Semicolon",
+                        egui::Key::Backslash | egui::Key::Pipe => "Backslash",
+                        egui::Key::OpenBracket => "BracketLeft",
+                        egui::Key::CloseBracket => "BracketRight",
+                        egui::Key::Backtick => "Grave",
                         _ => continue, // Skip unhandled keys (modifiers, etc.)
                     };
 
@@ -854,10 +868,14 @@ impl ClipboardApp {
                 self.was_inactive_since_hidden = true;
             }
 
+            let allow_focus_reopen = self.was_inactive_since_hidden
+                && self
+                    .last_hide_instant
+                    .is_none_or(|t| t.elapsed() >= Duration::from_millis(350));
+
             // Reveal window if OS reopen was requested (Dock icon click),
-            // or if the app was activated after being hidden (Cmd+Tab),
-            // or if viewport focus was gained.
-            if reopen_requested || (is_active && self.was_inactive_since_hidden) || is_focused {
+            // or if the app regained activation/focus after being hidden and inactive.
+            if reopen_requested || (allow_focus_reopen && (is_active || is_focused)) {
                 self.show_window(ctx);
             }
         }
@@ -3276,6 +3294,7 @@ mod tests {
             show_keyring_explanation: false,
             last_drag_or_move_instant: None,
             last_outer_rect: None,
+            last_hide_instant: None,
         };
 
         assert!(!app.is_quitting);
