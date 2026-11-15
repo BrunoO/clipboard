@@ -128,10 +128,12 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxcb1-dev libdbus-1-dev
+          sudo apt-get install -y libx11-dev libxcb1-dev libdbus-1-dev libssl-dev pkg-config
 
       - name: Set up Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          cache: false
 
       - name: Resolve release version and tag
         shell: bash
@@ -194,7 +196,7 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.sha256
-            dist/SHA256SUMS-windows-x64.txt
+            dist/SHA256SUMS-linux-x64.txt
           generate_release_notes: true
           draft: false
           prerelease: false
