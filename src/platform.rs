@@ -101,6 +101,9 @@ pub(crate) fn hide_application() {
 pub(crate) fn order_front_main_window() {
     #[cfg(target_os = "macos")]
     macos::order_front_main_window();
+
+    #[cfg(target_os = "windows")]
+    windows::order_front_main_window();
 }
 
 /// Checks and clears any pending reopen requests triggered by OS events (e.g. Dock icon click).
@@ -558,10 +561,68 @@ mod windows {
         fn GetForegroundWindow() -> HWND;
         fn SetForegroundWindow(hwnd: HWND) -> i32;
         fn BringWindowToTop(hwnd: HWND) -> i32;
+        fn ShowWindow(hwnd: HWND, nCmdShow: i32) -> i32;
+        fn IsIconic(hwnd: HWND) -> i32;
         fn GetCurrentProcessId() -> u32;
         fn GetCurrentThreadId() -> u32;
         fn GetWindowThreadProcessId(hwnd: HWND, lpdwProcessId: *mut u32) -> u32;
         fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
+        fn EnumWindows(
+            lpEnumFunc: unsafe extern "system" fn(HWND, isize) -> i32,
+            lParam: isize,
+        ) -> i32;
+        fn GetWindowTextLengthW(hwnd: HWND) -> i32;
+    }
+
+    pub(super) fn order_front_main_window() {
+        unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: isize) -> i32 {
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid == GetCurrentProcessId() && GetWindowTextLengthW(hwnd) > 0 {
+                let out = lparam as *mut HWND;
+                if !out.is_null() {
+                    *out = hwnd;
+                }
+                return 0; // stop enumeration
+            }
+            1
+        }
+
+        const SW_SHOW: i32 = 5;
+        const SW_RESTORE: i32 = 9;
+
+        unsafe {
+            let mut target_hwnd: HWND = std::ptr::null_mut();
+            EnumWindows(enum_proc, (&mut target_hwnd as *mut HWND) as isize);
+            if target_hwnd.is_null() {
+                return;
+            }
+
+            if IsIconic(target_hwnd) != 0 {
+                ShowWindow(target_hwnd, SW_RESTORE);
+            } else {
+                ShowWindow(target_hwnd, SW_SHOW);
+            }
+
+            let fg_hwnd = GetForegroundWindow();
+            let cur_thread = GetCurrentThreadId();
+            let fg_thread = if fg_hwnd.is_null() {
+                0
+            } else {
+                let mut fg_pid: u32 = 0;
+                GetWindowThreadProcessId(fg_hwnd, &mut fg_pid)
+            };
+
+            if fg_thread != 0 && fg_thread != cur_thread {
+                AttachThreadInput(cur_thread, fg_thread, 1);
+                BringWindowToTop(target_hwnd);
+                SetForegroundWindow(target_hwnd);
+                AttachThreadInput(cur_thread, fg_thread, 0);
+            } else {
+                BringWindowToTop(target_hwnd);
+                SetForegroundWindow(target_hwnd);
+            }
+        }
     }
 
     pub(super) fn is_active() -> bool {
@@ -622,13 +683,21 @@ mod windows {
             dwExtraInfo: usize,
         }
 
+        // Win32 INPUT union is sized to MOUSEINPUT (32 bytes on x64, 24 bytes on x86),
+        // making sizeof(INPUT) == 40 bytes on x64 (4 + 4 align + 24 KEYBDINPUT + 8 pad)
+        // and 28 bytes on x86 (4 + 16 KEYBDINPUT + 8 pad).
         #[allow(non_snake_case, non_camel_case_types)]
         #[repr(C)]
         struct INPUT {
             r#type: u32,
             u: KEYBDINPUT,
-            _pad: [u8; 16],
+            _pad: [u8; 8],
         }
+
+        const _: () = assert!(
+            (cfg!(target_pointer_width = "64") && std::mem::size_of::<INPUT>() == 40)
+                || (cfg!(target_pointer_width = "32") && std::mem::size_of::<INPUT>() == 28)
+        );
 
         extern "system" {
             fn SendInput(cInputs: u32, pInputs: *const INPUT, cbSize: i32) -> u32;
@@ -651,7 +720,7 @@ mod windows {
                         time: 0,
                         dwExtraInfo: 0,
                     },
-                    _pad: [0; 16],
+                    _pad: [0; 8],
                 },
                 // V Down
                 INPUT {
@@ -663,7 +732,7 @@ mod windows {
                         time: 0,
                         dwExtraInfo: 0,
                     },
-                    _pad: [0; 16],
+                    _pad: [0; 8],
                 },
                 // V Up
                 INPUT {
@@ -675,7 +744,7 @@ mod windows {
                         time: 0,
                         dwExtraInfo: 0,
                     },
-                    _pad: [0; 16],
+                    _pad: [0; 8],
                 },
                 // Ctrl Up
                 INPUT {
@@ -687,7 +756,7 @@ mod windows {
                         time: 0,
                         dwExtraInfo: 0,
                     },
-                    _pad: [0; 16],
+                    _pad: [0; 8],
                 },
             ];
 

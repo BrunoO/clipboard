@@ -284,7 +284,10 @@ fn set_restricted_permissions(path: &Path) {
 
 #[cfg(windows)]
 fn set_restricted_permissions(path: &Path) {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     let Some(path_str) = path.to_str() else {
         return;
@@ -300,6 +303,7 @@ fn set_restricted_permissions(path: &Path) {
 
     let _ = Command::new("icacls")
         .args([path_str, "/inheritance:r", "/grant:r", &grant])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
 }
 
