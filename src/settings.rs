@@ -446,7 +446,14 @@ pub(crate) struct AppSettings {
 }
 
 const fn default_hide_on_blur() -> bool {
-    true
+    #[cfg(target_os = "windows")]
+    {
+        false
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        true
+    }
 }
 
 const fn default_restore_focus() -> bool {
@@ -493,7 +500,7 @@ impl Default for AppSettings {
             theme: AppThemeMode::System,
             hide_on_copy: true,
             max_history: 100,
-            hide_on_blur: true,
+            hide_on_blur: default_hide_on_blur(),
             restore_focus: true,
             auto_paste: true,
             auto_paste_delay_ms: 120,

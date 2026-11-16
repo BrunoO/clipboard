@@ -284,8 +284,20 @@ impl ClipboardApp {
         self.last_hide_instant = Some(Instant::now());
         self.show_clear_confirm_dialog = false;
         self.revealed_secrets.clear();
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        crate::platform::hide_application();
+
+        #[cfg(target_os = "windows")]
+        {
+            // On Windows, minimizing keeps the application in the Taskbar and Alt+Tab
+            // so users are never locked out of returning to the window.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            crate::platform::hide_application();
+        }
+
         if restore_focus || auto_paste {
             platform::restore_focus_and_paste(
                 restore_focus,

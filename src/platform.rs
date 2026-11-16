@@ -106,6 +106,12 @@ pub(crate) fn order_front_main_window() {
     windows::order_front_main_window();
 }
 
+/// On Windows, activates and brings to front any existing running instance window.
+#[cfg(target_os = "windows")]
+pub(crate) fn activate_existing_instance() -> bool {
+    windows::activate_existing_instance()
+}
+
 /// Checks and clears any pending reopen requests triggered by OS events (e.g. Dock icon click).
 #[allow(clippy::missing_const_for_fn)]
 #[must_use]
@@ -668,6 +674,37 @@ mod windows {
                     BringWindowToTop(target_hwnd);
                     SetForegroundWindow(target_hwnd);
                 }
+            }
+        }
+    }
+
+    pub(super) fn activate_existing_instance() -> bool {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let title_wide: Vec<u16> = OsStr::new("CipherClipboard")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        extern "system" {
+            fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> HWND;
+            fn ShowWindow(hwnd: HWND, nCmdShow: i32) -> i32;
+        }
+
+        const SW_RESTORE: i32 = 9;
+        const SW_SHOW: i32 = 5;
+
+        unsafe {
+            let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+            if !hwnd.is_null() {
+                ShowWindow(hwnd, SW_RESTORE);
+                ShowWindow(hwnd, SW_SHOW);
+                BringWindowToTop(hwnd);
+                SetForegroundWindow(hwnd);
+                true
+            } else {
+                false
             }
         }
     }

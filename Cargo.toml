@@ -1,6 +1,6 @@
 [package]
 name = "cipherclipboard"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "A simple, encrypted cross-platform clipboard manager in Rust"
 authors = ["BrunoO"]
@@ -17,7 +17,7 @@ path = "src/main.rs"
 name = "CipherClipboard"
 identifier = "com.cipherclipboard.app"
 icon = ["assets/icon.icns"]
-version = "0.1.4"
+version = "0.1.5"
 copyright = "Copyright (c) 2026 BrunoO"
 category = "Utility"
 short_description = "Encrypted Clipboard Manager"
@@ -35,7 +35,7 @@ objc = "0.2"
 x11rb = { version = "0.13", features = ["xtest"] }
 
 [dependencies]
-eframe = "0.29"
+eframe = { version = "0.29", features = ["wgpu"] }
 egui_extras = { version = "0.29", features = ["syntect"] }
 egui-phosphor = "0.7.3"
 
