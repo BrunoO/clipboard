@@ -90,7 +90,7 @@ pub(crate) fn is_clipboard_concealed() -> bool {
 }
 
 /// Hides the entire application at the OS level (macOS `[NSApp hide:]`).
-#[allow(clippy::missing_const_for_fn)]
+#[allow(dead_code, clippy::missing_const_for_fn)]
 pub(crate) fn hide_application() {
     #[cfg(target_os = "macos")]
     macos::hide_app();
@@ -110,6 +110,12 @@ pub(crate) fn order_front_main_window() {
 #[cfg(target_os = "windows")]
 pub(crate) fn activate_existing_instance() -> bool {
     windows::activate_existing_instance()
+}
+
+/// Displays a native modal error dialog on Windows before terminating.
+#[cfg(target_os = "windows")]
+pub(crate) fn show_error_dialog(message: &str) {
+    windows::show_error_dialog(message);
 }
 
 /// Checks and clears any pending reopen requests triggered by OS events (e.g. Dock icon click).
@@ -706,6 +712,41 @@ mod windows {
             } else {
                 false
             }
+        }
+    }
+
+    pub(super) fn show_error_dialog(message: &str) {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let msg_wide: Vec<u16> = OsStr::new(message)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let title_wide: Vec<u16> = OsStr::new("CipherClipboard Error")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        extern "system" {
+            fn MessageBoxW(
+                hwnd: HWND,
+                lpText: *const u16,
+                lpCaption: *const u16,
+                uType: u32,
+            ) -> i32;
+        }
+
+        const MB_OK: u32 = 0x0000_0000;
+        const MB_ICONERROR: u32 = 0x0000_0010;
+
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                msg_wide.as_ptr(),
+                title_wide.as_ptr(),
+                MB_OK | MB_ICONERROR,
+            );
         }
     }
 

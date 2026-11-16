@@ -29,7 +29,7 @@ fn main() {
     if let Err(e) = run() {
         eprintln!("Error: {e}");
         #[cfg(target_os = "windows")]
-        show_error_dialog(&format!("CipherClipboard failed to start:\n\n{e}"));
+        platform::show_error_dialog(&format!("CipherClipboard failed to start:\n\n{e}"));
         std::process::exit(1);
     }
 }
@@ -185,40 +185,4 @@ fn get_app_data_dir() -> PathBuf {
             }
         },
     )
-}
-
-#[cfg(target_os = "windows")]
-fn show_error_dialog(message: &str) {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-
-    let msg_wide: Vec<u16> = OsStr::new(message)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let title_wide: Vec<u16> = OsStr::new("CipherClipboard Error")
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-
-    extern "system" {
-        fn MessageBoxW(
-            hwnd: *mut std::ffi::c_void,
-            lpText: *const u16,
-            lpCaption: *const u16,
-            uType: u32,
-        ) -> i32;
-    }
-
-    const MB_OK: u32 = 0x0000_0000;
-    const MB_ICONERROR: u32 = 0x0000_0010;
-
-    unsafe {
-        MessageBoxW(
-            std::ptr::null_mut(),
-            msg_wide.as_ptr(),
-            title_wide.as_ptr(),
-            MB_OK | MB_ICONERROR,
-        );
-    }
 }
