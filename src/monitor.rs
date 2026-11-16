@@ -43,11 +43,20 @@ pub(crate) fn start_clipboard_monitor(
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
     let handle = thread::spawn(move || {
-        let mut clipboard = match Clipboard::new() {
-            Ok(cb) => cb,
-            Err(e) => {
-                eprintln!("⚠️ Failed to initialize clipboard monitor: {e}");
-                return;
+        // On Windows the clipboard can be briefly unavailable (e.g. at session
+        // logon with auto-start, while disconnected from an RDP session, or
+        // during session switches). Retry instead of silently disabling
+        // clipboard capture until the app is restarted.
+        let mut clipboard = loop {
+            match Clipboard::new() {
+                Ok(cb) => break cb,
+                Err(e) => {
+                    eprintln!("⚠️ Failed to initialize clipboard monitor: {e}");
+                    if shutdown_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
+                        println!("👀 Clipboard monitor shutting down...");
+                        return;
+                    }
+                }
             }
         };
 

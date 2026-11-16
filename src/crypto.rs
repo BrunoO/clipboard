@@ -295,11 +295,22 @@ fn set_restricted_permissions(path: &Path) {
 
     // Best-effort hardening: remove inherited ACLs and grant only the current user full control.
     // This reduces exposure compared to inheriting broad folder ACLs in %LOCALAPPDATA%.
-    let username = match std::env::var("USERNAME") {
-        Ok(u) if !u.trim().is_empty() => u,
-        _ => return,
+    //
+    // Prefer the unambiguous `USERDOMAIN\\USERNAME` form: a bare user name can be ambiguous
+    // (a local and a domain account sharing the same name) or fail to resolve on domain-joined
+    // and Microsoft Entra (Azure AD) machines, in which case icacls errors out and the broad
+    // inherited ACLs would silently remain in place.
+    let username = std::env::var("USERNAME").unwrap_or_default();
+    if username.trim().is_empty() {
+        return;
+    }
+    let user = match std::env::var("USERDOMAIN") {
+        Ok(domain) if !domain.trim().is_empty() && !username.contains('\\') => {
+            format!("{domain}\\{username}")
+        }
+        _ => username,
     };
-    let grant = format!("{username}:(F)");
+    let grant = format!("{user}:(F)");
 
     let _ = Command::new("icacls")
         .args([path_str, "/inheritance:r", "/grant:r", &grant])

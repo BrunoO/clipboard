@@ -222,13 +222,7 @@ fn is_high_entropy_secret(text: &str) -> bool {
     if crate::db::is_valid_url(text) || crate::color::parse_color(text).is_some() {
         return false;
     }
-    if text.starts_with('/')
-        || text.starts_with("./")
-        || text.starts_with("../")
-        || text.starts_with("~/")
-        || (text.len() >= 3 && text.as_bytes()[1] == b':' && text.as_bytes()[2] == b'\\')
-        || is_uuid(text)
-    {
+    if looks_like_path(text) || is_uuid(text) {
         return false;
     }
 
@@ -265,6 +259,52 @@ fn is_high_entropy_secret(text: &str) -> bool {
     (class_count == 4 && entropy >= 3.3)
         || (has_symbol && class_count >= 3 && entropy >= 3.5)
         || (char_count >= 24 && class_count >= 3 && entropy >= 3.8 && !text.contains('/'))
+}
+
+/// Returns true if the text looks like a filesystem path rather than a secret.
+///
+/// Covers Unix paths (`/usr/bin`, `./src`, `~/notes.txt`) as well as the Windows
+/// spellings that are common in clipboard traffic: drive-letter absolute paths with
+/// either separator (`C:\\Users`, `C:/Users`), UNC shares (`\\\\server\\share\\file`),
+/// and backslash-separated relative paths (`src\\lib\\main.rs`). Backslash-relative
+/// paths require a plausible `name.ext` last segment or at least two separators, so
+/// passwords that merely contain a single backslash are still detected.
+fn looks_like_path(text: &str) -> bool {
+    if text.contains(char::is_whitespace) {
+        return false;
+    }
+    if text.starts_with('/')
+        || text.starts_with("./")
+        || text.starts_with("../")
+        || text.starts_with("~/")
+        || text.starts_with("\\\\")
+    {
+        return true;
+    }
+    let bytes = text.as_bytes();
+    // Windows drive-letter absolute paths: `C:\...` and `C:/...`
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return true;
+    }
+    // Windows relative paths using backslash separators (e.g. `src\\app\\main.rs`,
+    // `dir\\sub1\\file.txt`).
+    if text.contains('\\') {
+        let has_extension = text.rsplit_once('\\').is_some_and(|(_, last)| {
+            last.rsplit_once('.').is_some_and(|(_, ext)| {
+                !ext.is_empty()
+                    && ext.len() <= 5
+                    && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+            })
+        });
+        if has_extension || text.matches('\\').count() >= 2 {
+            return true;
+        }
+    }
+    false
 }
 
 fn is_uuid(text: &str) -> bool {
@@ -366,5 +406,27 @@ mod tests {
         ));
         assert!(!is_likely_secret("API_KEY=<your-api-key>"));
         assert!(!is_likely_secret("fn main() { println!(\"hello\"); }"));
+    }
+
+    #[test]
+    fn test_avoids_flagging_windows_paths() {
+        // Windows paths in all common spellings must not be classified as secrets.
+        assert!(!is_likely_secret(r"C:\Users\bruno\Documents\notes.txt"));
+        assert!(!is_likely_secret(r"C:\Windows\System32\drivers\etc\hosts"));
+        assert!(!is_likely_secret("C:/Users/bruno/AppData/Local/Temp/x7k2"));
+        assert!(!is_likely_secret("C:/Temp/x7k2/config.json"));
+        assert!(!is_likely_secret(r"\\fileserver\share\reports\q3.xlsx"));
+        assert!(!is_likely_secret(r"src\lib\main.rs"));
+        assert!(!is_likely_secret(r"dir\sub1\file.txt"));
+        assert!(!is_likely_secret(r"dir\file1.txt"));
+        assert!(!is_likely_secret(r"C:/Users/bruno\Documents/mixed.txt"));
+    }
+
+    #[test]
+    fn test_still_detects_backslash_containing_passwords() {
+        // A high-entropy password that merely contains a backslash (and no
+        // path-like name.ext tail) must still be classified as a secret.
+        let pw = "K9#mP2$vL8@qR4!x\\Yw7Zn";
+        assert!(is_likely_secret(pw));
     }
 }

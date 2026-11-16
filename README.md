@@ -77,6 +77,16 @@ sudo dnf install libX11-devel libxcb-devel dbus-devel openssl-devel pkgconf-pkg-
 
 ### 3. Windows
 * Install the **C++ Build Tools** via the Visual Studio Installer (needed for MSVC C compiler for SQLCipher).
+* Install **OpenSSL** (required by the bundled SQLCipher build, which links against `libcrypto`):
+  ```powershell
+  choco install openssl
+  ```
+  Then set `OPENSSL_DIR` to the install location before building:
+  ```powershell
+  $env:OPENSSL_DIR = "C:\Program Files\OpenSSL-Win64"
+  cargo build
+  ```
+  (Alternatively, use vcpkg and set `OPENSSL_DIR` to its installed directory.)
 
 ---
 
