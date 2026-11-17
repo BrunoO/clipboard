@@ -1,14 +1,18 @@
 # CipherClipboard 📋🔒
 
-A lightweight, encrypted cross-platform clipboard manager written in Rust.
+A fast, encrypted cross-platform clipboard manager written in Rust.
 
-Designed as a clean, idiomatic project for learning Rust, featuring:
-* **Immediate-mode GUI** using [`eframe`](https://github.com/emilk/egui) / [`egui`](https://github.com/emilk/egui).
-* **Cross-platform clipboard access** for both text and images via [`arboard`](https://github.com/1Password/arboard).
-* **Global OS hotkey summoning** (`Cmd+Shift+V` / `Ctrl+Shift+V`) via [`global-hotkey`](https://github.com/tauri-apps/global-hotkey).
-* **Full-database encryption** at rest using **SQLCipher** (via [`rusqlite`](https://github.com/rusqlite/rusqlite) with `bundled-sqlcipher`).
-* **Secure key storage** via OS Keyring ([`keyring`](https://github.com/hwchen/keyring-rs): macOS Keychain, Windows Credential Manager, Linux Secret Service).
-* **Lossless PNG compression** for clipboard images via [`image`](https://crates.io/crates/image).
+CipherClipboard runs quietly in the background, instantly captures copied text and images, and stores everything in an AES-256 encrypted database secured by your operating system's native keyring.
+
+### Key Features
+* **Full-Database Encryption at Rest:** Zero-knowledge 256-bit AES encryption powered by **SQLCipher** (`rusqlite` bundled build).
+* **Native Keyring Security:** Automatic key generation and storage in macOS Keychain, Windows Credential Manager, or Linux Secret Service via [`keyring`](https://github.com/hwchen/keyring-rs).
+* **Smart Secret Detection & Masking:** Automatically detects and masks API tokens, private keys, JWTs, database URLs, and high-entropy passwords with toggleable visibility.
+* **Transient & Password Manager Protection:** Automatically respects conceal flags from password managers (1Password, Bitwarden, KeePass, Apple Keychain).
+* **Cross-Platform Immediate-Mode GUI:** Responsive interface built with [`egui`](https://github.com/emilk/egui) / [`eframe`](https://github.com/emilk/egui) with Direct3D 12 / WGPU acceleration on Windows and high WCAG contrast themes (Dark, Light, System).
+* **Developer Utilities:** In-line syntax highlighting for 7+ languages, interactive CSS/Hex/RGB/HSL color palette extraction, and built-in cryptographically secure password & passphrase generator.
+* **Global Hotkey & Fast Recall:** Configurable global summon shortcut (`Ctrl+Shift+V` / `Cmd+Shift+V`) with single-instance window restoration and optional auto-paste.
+* **Lossless Image Compression:** Efficient PNG compression for clipboard images via [`image`](https://crates.io/crates/image).
 
 ---
 
@@ -44,14 +48,24 @@ Designed as a clean, idiomatic project for learning Rust, featuring:
 ```
 cipherclipboard/
 ├── Cargo.toml            # Project manifest & dependencies
+├── deny.toml             # Supply-chain security & license policy
+├── scripts/              # Local CI pre-flight guardrails & release packaging
 ├── src/
-│   ├── main.rs           # App setup, directory discovery, eframe launcher
-│   ├── app.rs            # egui UI layout, search, item rendering
-│   ├── db.rs             # rusqlite + SQLCipher encrypted database wrapper
-│   ├── crypto.rs         # OS Keyring integration & key generation
-│   ├── hotkey.rs         # Global OS shortcut listener (Cmd+Shift+V / Ctrl+Shift+V)
+│   ├── main.rs           # Entry point, single-instance coordination & eframe launcher
+│   ├── app.rs            # egui UI layout, search, filters & state management
+│   ├── db.rs             # rusqlite + SQLCipher encrypted database wrapper & migrations
+│   ├── crypto.rs         # OS Keyring integration & cryptographic key generation
+│   ├── hotkey.rs         # Global shortcut registration & listener thread
+│   ├── secret.rs         # Heuristic detection & masking for credentials and API keys
+│   ├── code.rs           # Multi-language syntax detection & highlighting sections
+│   ├── color.rs          # Hex/RGB/HSL color parsing & swatch previews
+│   ├── password.rs       # Cryptographically secure password and passphrase generator
+│   ├── platform.rs       # OS-level window focus capture, restoration & auto-paste
 │   ├── media.rs          # Image encoding/decoding (RGBA <-> PNG)
-│   └── monitor.rs        # Background thread monitoring OS clipboard
+│   ├── monitor.rs        # Background clipboard polling & change detection
+│   ├── settings.rs       # Persistent user preferences & keybinding configuration
+│   ├── theme.rs          # Dark/Light palettes & WCAG-compliant styling
+│   └── instance.rs       # Cross-platform single-instance mutex & named pipe lock
 └── README.md
 ```
 
@@ -128,8 +142,6 @@ To ensure all contributions satisfy continuous integration standards (formatting
 
 ---
 
-## Educational Next Steps to Practice Rust
+## License
 
-1. **Global Hotkey:** Add the [`global-hotkey`](https://crates.io/crates/global-hotkey) crate to summon/hide the window with a shortcut (e.g. `Cmd+Shift+V`).
-2. **Password Manager Filter:** Inspect clipboard metadata (or regex patterns) to ignore entries marked as passwords.
-3. **Data Expiration:** Add a TTL (Time-To-Live) feature that automatically purges clipboard items older than $N$ hours.
+This project is licensed under the [MIT License](LICENSE).
