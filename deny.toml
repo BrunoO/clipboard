@@ -16,6 +16,8 @@ ignore = [
     { id = "RUSTSEC-2026-0195", reason = "Transitive dependency through eframe/accesskit" },
     # sqlcipher-src pinned by libsqlite3-sys =0.39.1 via rusqlite bundled-sqlcipher
     { id = "RUSTSEC-2026-0502", reason = "Transitive dependency through rusqlite bundled-sqlcipher" },
+    # chrono unmaintained advisory RUSTSEC-2026-0543
+    { id = "RUSTSEC-2026-0543", reason = "Used only for local timestamp string formatting in db.rs" },
 ]
 
 [licenses]
