@@ -86,6 +86,16 @@ impl HotkeyPreset {
 
         match self {
             Self::Universal => vec![HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyV)],
+            #[cfg(target_os = "windows")]
+            Self::AzertyQuote => vec![
+                // On Windows French/Belgian AZERTY layouts, the physical 'ù' key produces VK_OEM_3 (0xC0),
+                // whereas global-hotkey maps Code::Quote to VK_OEM_7 (0xDE, the '²' key) because
+                // global-hotkey's static table assumes a US QWERTY layout.
+                // In global-hotkey, Code::Backquote maps to VK_OEM_3, which directly corresponds to 'ù' on Windows AZERTY.
+                HotKey::new(Some(base_mod), Code::Backquote),
+                HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Backquote),
+            ],
+            #[cfg(not(target_os = "windows"))]
             Self::AzertyQuote => vec![
                 HotKey::new(Some(base_mod), Code::Quote),
                 HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Quote),
@@ -215,7 +225,13 @@ impl ParsedHotkey {
             "f22" => Code::F22,
             "f23" => Code::F23,
             "f24" => Code::F24,
-            "quote" | "'" | "ù" => Code::Quote,
+            #[cfg(target_os = "windows")]
+            "ù" => Code::Backquote,
+            #[cfg(target_os = "windows")]
+            "²" => Code::Quote,
+            #[cfg(not(target_os = "windows"))]
+            "ù" => Code::Quote,
+            "quote" | "'" => Code::Quote,
             "comma" | "," => Code::Comma,
             "minus" | "-" => Code::Minus,
             "equal" | "equals" | "=" | "plus" | "+" => Code::Equal,
@@ -362,6 +378,9 @@ impl ParsedHotkey {
             Code::Backslash => "Backslash",
             Code::BracketLeft => "BracketLeft",
             Code::BracketRight => "BracketRight",
+            #[cfg(target_os = "windows")]
+            Code::Backquote => "ù",
+            #[cfg(not(target_os = "windows"))]
             Code::Backquote => "Grave",
             Code::CapsLock => "CapsLock",
             Code::ScrollLock => "ScrollLock",
@@ -642,6 +661,19 @@ mod tests {
         let parsed = ParsedHotkey::parse("F1").unwrap();
         assert_eq!(parsed.key, Code::F1);
         assert_eq!(parsed.modifiers, Modifiers::empty());
+
+        // Test Ctrl+ù (AZERTY Quote / Backquote)
+        let parsed = ParsedHotkey::parse("Ctrl+ù").unwrap();
+        assert!(parsed.modifiers.contains(Modifiers::CONTROL));
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(parsed.key, Code::Backquote);
+            assert_eq!(parsed.format(), "Ctrl+ù");
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(parsed.key, Code::Quote);
+        }
 
         // Test invalid
         assert!(ParsedHotkey::parse("").is_none());

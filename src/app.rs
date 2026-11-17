@@ -633,7 +633,9 @@ impl ClipboardApp {
                         egui::Key::Num6 => "6",
                         egui::Key::Num7 => "7",
                         egui::Key::Num8 => "8",
-                        egui::Key::Num9 => "9",
+                        #[cfg(target_os = "windows")]
+                        egui::Key::Quote => "ù",
+                        #[cfg(not(target_os = "windows"))]
                         egui::Key::Quote => "Quote",
                         egui::Key::Comma => "Comma",
                         egui::Key::Minus => "Minus",
