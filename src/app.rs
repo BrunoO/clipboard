@@ -273,6 +273,7 @@ impl ClipboardApp {
     }
 
     fn show_window(&mut self, ctx: &egui::Context) {
+        crate::platform::log_message("INFO", "show_window called");
         self.is_visible = true;
         self.has_been_focused = false;
         self.was_inactive_since_hidden = false;
@@ -945,6 +946,7 @@ impl ClipboardApp {
     fn handle_tray_events(&mut self, ctx: &egui::Context) {
         let mut latest_action = None;
         while let Ok(action) = self.tray_rx.try_recv() {
+            crate::platform::log_message("INFO", &format!("tray event received: {:?}", action));
             latest_action = Some(action);
         }
         if let Some(action) = latest_action {
@@ -3296,6 +3298,12 @@ impl eframe::App for ClipboardApp {
             // request_repaint() from the background hotkey thread to stall.
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
             return;
+        }
+
+        // Keep polling tray/hotkey events while minimized, since request_repaint()
+        // from background threads may not wake a minimized window on Windows.
+        if ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
 
         if self.pending_clipboard_clear.is_some() {
