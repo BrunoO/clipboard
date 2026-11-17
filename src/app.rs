@@ -648,10 +648,13 @@ impl ClipboardApp {
                         egui::Key::Num6 => "6",
                         egui::Key::Num7 => "7",
                         egui::Key::Num8 => "8",
-                        #[cfg(target_os = "windows")]
-                        egui::Key::Quote => "ù",
-                        #[cfg(not(target_os = "windows"))]
-                        egui::Key::Quote => "Quote",
+                        egui::Key::Quote => {
+                            if crate::platform::windows_quote_key_is_ugrave() {
+                                "ù"
+                            } else {
+                                "Quote"
+                            }
+                        }
                         egui::Key::Comma => "Comma",
                         egui::Key::Minus => "Minus",
                         egui::Key::Equals | egui::Key::Plus => "Equal",

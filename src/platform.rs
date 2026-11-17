@@ -70,6 +70,21 @@ pub(crate) fn is_app_active_state() -> Option<bool> {
     }
 }
 
+/// Returns `true` on Windows when the current keyboard layout produces `ù` for the
+/// physical key in the US `Quote` position (French/Belgian AZERTY layouts).
+#[allow(dead_code, clippy::missing_const_for_fn)]
+#[must_use]
+pub(crate) fn windows_quote_key_is_ugrave() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows::quote_key_is_ugrave()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
 /// Checks if the current clipboard content is marked as concealed or transient
 /// by password managers (e.g. 1Password, Bitwarden, `KeePass`, macOS Keychain).
 #[allow(clippy::missing_const_for_fn)]
@@ -959,6 +974,45 @@ mod windows {
         }
 
         false
+    }
+
+    /// Returns `true` when the current Windows keyboard layout produces `ù` for the
+    /// physical key in the US `Quote` position (French/Belgian AZERTY layouts).
+    pub(super) fn quote_key_is_ugrave() -> bool {
+        extern "system" {
+            fn GetKeyboardLayout(idThread: u32) -> *mut std::ffi::c_void;
+            fn MapVirtualKeyExW(uCode: u32, uMapType: u32, dwhkl: *mut std::ffi::c_void) -> u32;
+            fn ToUnicodeEx(
+                wVirtKey: u32,
+                wScanCode: u32,
+                lpKeyState: *const u8,
+                pwszBuff: *mut u16,
+                cchBuff: i32,
+                wFlags: u32,
+                dwhkl: *mut std::ffi::c_void,
+            ) -> i32;
+        }
+
+        const MAPVK_VSC_TO_VK: u32 = 1;
+
+        unsafe {
+            let hkl = GetKeyboardLayout(0);
+            if hkl.is_null() {
+                return false;
+            }
+            let vk = MapVirtualKeyExW(0x0028, MAPVK_VSC_TO_VK, hkl);
+            if vk == 0 {
+                return false;
+            }
+            let key_state = [0u8; 256];
+            let mut buf = [0u16; 4];
+            let rc = ToUnicodeEx(vk, 0x0028, key_state.as_ptr(), buf.as_mut_ptr(), buf.len() as i32, 0, hkl);
+            if rc > 0 {
+                let text = String::from_utf16_lossy(&buf[..rc as usize]);
+                return text.chars().any(|c| c == 'ù' || c == 'Ù');
+            }
+            false
+        }
     }
 }
 

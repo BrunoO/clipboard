@@ -86,20 +86,25 @@ impl HotkeyPreset {
 
         match self {
             Self::Universal => vec![HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyV)],
-            #[cfg(target_os = "windows")]
-            Self::AzertyQuote => vec![
-                // On Windows French/Belgian AZERTY layouts, the physical 'ù' key produces VK_OEM_3 (0xC0),
-                // whereas global-hotkey maps Code::Quote to VK_OEM_7 (0xDE, the '²' key) because
-                // global-hotkey's static table assumes a US QWERTY layout.
-                // In global-hotkey, Code::Backquote maps to VK_OEM_3, which directly corresponds to 'ù' on Windows AZERTY.
-                HotKey::new(Some(base_mod), Code::Backquote),
-                HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Backquote),
-            ],
-            #[cfg(not(target_os = "windows"))]
-            Self::AzertyQuote => vec![
-                HotKey::new(Some(base_mod), Code::Quote),
-                HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Quote),
-            ],
+            Self::AzertyQuote => {
+                #[cfg(target_os = "windows")]
+                if crate::platform::windows_quote_key_is_ugrave() {
+                    vec![
+                        HotKey::new(Some(base_mod), Code::Backquote),
+                        HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Backquote),
+                    ]
+                } else {
+                    vec![
+                        HotKey::new(Some(base_mod), Code::Quote),
+                        HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Quote),
+                    ]
+                }
+                #[cfg(not(target_os = "windows"))]
+                vec![
+                    HotKey::new(Some(base_mod), Code::Quote),
+                    HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Quote),
+                ]
+            }
             Self::CtrlShiftC => vec![HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyC)],
             Self::AltSpace => vec![HotKey::new(Some(Modifiers::ALT), Code::Space)],
             Self::CtrlSpace => vec![HotKey::new(Some(base_mod), Code::Space)],
@@ -164,7 +169,7 @@ pub(crate) struct ParsedHotkey {
 
 impl ParsedHotkey {
     /// Parses a string like "Ctrl+Shift+V" into modifiers and key code.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::match_same_arms)]
     pub(crate) fn parse(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split('+').collect();
         if parts.is_empty() {
@@ -184,6 +189,11 @@ impl ParsedHotkey {
                 _ => return None,
             }
         }
+
+        #[cfg(target_os = "windows")]
+        let azerty = crate::platform::windows_quote_key_is_ugrave();
+        #[cfg(not(target_os = "windows"))]
+        let azerty = false;
 
         let key = match key_str.to_lowercase().as_str() {
             "space" => Code::Space,
@@ -225,12 +235,10 @@ impl ParsedHotkey {
             "f22" => Code::F22,
             "f23" => Code::F23,
             "f24" => Code::F24,
-            #[cfg(target_os = "windows")]
-            "ù" => Code::Backquote,
-            #[cfg(target_os = "windows")]
-            "²" => Code::Quote,
-            #[cfg(not(target_os = "windows"))]
+            "ù" if azerty => Code::Backquote,
             "ù" => Code::Quote,
+            "²" => Code::Quote,
+            "quote" | "'" if azerty => Code::Backquote,
             "quote" | "'" => Code::Quote,
             "comma" | "," => Code::Comma,
             "minus" | "-" => Code::Minus,
@@ -378,10 +386,13 @@ impl ParsedHotkey {
             Code::Backslash => "Backslash",
             Code::BracketLeft => "BracketLeft",
             Code::BracketRight => "BracketRight",
-            #[cfg(target_os = "windows")]
-            Code::Backquote => "ù",
-            #[cfg(not(target_os = "windows"))]
-            Code::Backquote => "Grave",
+            Code::Backquote => {
+                if crate::platform::windows_quote_key_is_ugrave() {
+                    "ù"
+                } else {
+                    "Grave"
+                }
+            }
             Code::CapsLock => "CapsLock",
             Code::ScrollLock => "ScrollLock",
             Code::NumLock => "NumLock",
