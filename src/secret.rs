@@ -295,9 +295,7 @@ fn looks_like_path(text: &str) -> bool {
     if text.contains('\\') {
         let has_extension = text.rsplit_once('\\').is_some_and(|(_, last)| {
             last.rsplit_once('.').is_some_and(|(_, ext)| {
-                !ext.is_empty()
-                    && ext.len() <= 5
-                    && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+                !ext.is_empty() && ext.len() <= 5 && ext.bytes().all(|b| b.is_ascii_alphanumeric())
             })
         });
         if has_extension || text.matches('\\').count() >= 2 {

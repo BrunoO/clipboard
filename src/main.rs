@@ -56,7 +56,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "ℹ️ CipherClipboard is already running (PID {pid}). Brought existing window to front."
                 );
             } else {
-                println!("ℹ️ CipherClipboard is already running. Brought existing window to front.");
+                println!(
+                    "ℹ️ CipherClipboard is already running. Brought existing window to front."
+                );
             }
             return Ok(());
         }
