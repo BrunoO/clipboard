@@ -1006,7 +1006,15 @@ mod windows {
             }
             let key_state = [0u8; 256];
             let mut buf = [0u16; 4];
-            let rc = ToUnicodeEx(vk, 0x0028, key_state.as_ptr(), buf.as_mut_ptr(), buf.len() as i32, 0, hkl);
+            let rc = ToUnicodeEx(
+                vk,
+                0x0028,
+                key_state.as_ptr(),
+                buf.as_mut_ptr(),
+                buf.len() as i32,
+                0,
+                hkl,
+            );
             if rc > 0 {
                 let text = String::from_utf16_lossy(&buf[..rc as usize]);
                 return text.chars().any(|c| c == 'ù' || c == 'Ù');

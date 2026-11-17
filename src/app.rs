@@ -880,7 +880,8 @@ impl ClipboardApp {
                 self.has_been_focused = true;
             } else if self.has_been_focused
                 && self.settings.hide_on_blur
-                && !ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
+                && !ctx.input(|i| i.viewport().minimized.unwrap_or(false))
+            {
                 let is_dragging_or_moving = pointer_down
                     || self
                         .last_drag_or_move_instant
