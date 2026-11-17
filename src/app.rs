@@ -3,6 +3,7 @@ use crate::hotkey::HotkeyService;
 use crate::media;
 use crate::platform;
 use crate::settings::{AppSettings, HotkeyPreset};
+use crate::tray::{TrayAction, TrayService};
 use arboard::Clipboard;
 use eframe::egui;
 use egui_phosphor::regular as icons;
@@ -135,6 +136,9 @@ pub(crate) struct ClipboardApp {
     notify_rx: Receiver<()>,
     hotkey_rx: Receiver<()>,
     hotkey_service: Option<HotkeyService>,
+    tray_rx: Receiver<TrayAction>,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    tray_service: Option<TrayService>,
     texture_cache: ImageTextureCache,
     is_visible: bool,
     has_been_focused: bool,
@@ -161,12 +165,15 @@ pub(crate) struct ClipboardApp {
 }
 
 impl ClipboardApp {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         _cc: &eframe::CreationContext<'_>,
         db: Database,
         notify_rx: Receiver<()>,
         hotkey_rx: Receiver<()>,
         hotkey_service: Option<HotkeyService>,
+        tray_rx: Receiver<TrayAction>,
+        tray_service: Option<TrayService>,
         settings: AppSettings,
         monitor_shutdown_tx: Sender<()>,
     ) -> Self {
@@ -213,6 +220,8 @@ impl ClipboardApp {
             notify_rx,
             hotkey_rx,
             hotkey_service,
+            tray_rx,
+            tray_service,
             texture_cache: ImageTextureCache::new(),
             is_visible: true,
             has_been_focused: false,
@@ -287,9 +296,15 @@ impl ClipboardApp {
 
         #[cfg(target_os = "windows")]
         {
-            // On Windows, minimizing keeps the application in the Taskbar and Alt+Tab
-            // so users are never locked out of returning to the window.
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            if self.tray_service.is_some() {
+                // With a system tray icon active, hide the window cleanly so it
+                // doesn't clutter the taskbar; clicking the tray icon restores it.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            } else {
+                // Fallback if tray icon failed to initialize: minimize to taskbar
+                // so the user is never locked out of returning to the window.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -902,6 +917,27 @@ impl ClipboardApp {
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.hide_window(ctx, false, false);
+        }
+    }
+
+    fn handle_tray_events(&mut self, ctx: &egui::Context) {
+        let mut latest_action = None;
+        while let Ok(action) = self.tray_rx.try_recv() {
+            latest_action = Some(action);
+        }
+        if let Some(action) = latest_action {
+            match action {
+                TrayAction::Show => {
+                    self.show_window(ctx);
+                }
+                TrayAction::OpenSettings => {
+                    self.active_view = ActiveView::Settings;
+                    self.show_window(ctx);
+                }
+                TrayAction::Quit => {
+                    self.quit(ctx);
+                }
+            }
         }
     }
 
@@ -3195,6 +3231,7 @@ impl eframe::App for ClipboardApp {
         }
 
         self.handle_window_close_request(ctx);
+        self.handle_tray_events(ctx);
         self.handle_quit_shortcut(ctx);
         self.handle_hotkey_toggle(ctx);
         self.handle_escape_key(ctx);
@@ -3268,6 +3305,7 @@ mod tests {
         let (shutdown_tx, _shutdown_rx) = std::sync::mpsc::channel();
         let (_notify_tx, notify_rx) = std::sync::mpsc::channel();
         let (_hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
+        let (tray_tx, tray_rx) = std::sync::mpsc::channel();
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("quit_test.db");
         let db = crate::db::Database::open(
@@ -3286,6 +3324,8 @@ mod tests {
             notify_rx,
             hotkey_rx,
             hotkey_service: None,
+            tray_rx,
+            tray_service: None,
             texture_cache: super::ImageTextureCache::new(),
             is_visible: true,
             has_been_focused: false,
@@ -3312,7 +3352,23 @@ mod tests {
         };
 
         assert!(!app.is_quitting);
-        app.quit(&ctx);
+
+        // Verify TrayAction::Show restores visibility
+        app.is_visible = false;
+        tray_tx.send(super::TrayAction::Show).unwrap();
+        app.handle_tray_events(&ctx);
+        assert!(app.is_visible);
+
+        // Verify TrayAction::OpenSettings switches view and shows window
+        app.is_visible = false;
+        tray_tx.send(super::TrayAction::OpenSettings).unwrap();
+        app.handle_tray_events(&ctx);
+        assert!(app.is_visible);
+        assert_eq!(app.active_view, super::ActiveView::Settings);
+
+        // Verify TrayAction::Quit sets is_quitting
+        tray_tx.send(super::TrayAction::Quit).unwrap();
+        app.handle_tray_events(&ctx);
         assert!(app.is_quitting);
     }
 }

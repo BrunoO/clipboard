@@ -583,19 +583,26 @@ mod windows {
             lpEnumFunc: unsafe extern "system" fn(HWND, isize) -> i32,
             lParam: isize,
         ) -> i32;
-        fn GetWindowTextLengthW(hwnd: HWND) -> i32;
+        fn GetWindowTextW(hwnd: HWND, lpString: *mut u16, nMaxCount: i32) -> i32;
     }
 
     pub(super) fn order_front_main_window() {
         unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: isize) -> i32 {
             let mut pid: u32 = 0;
             GetWindowThreadProcessId(hwnd, &mut pid);
-            if pid == GetCurrentProcessId() && GetWindowTextLengthW(hwnd) > 0 {
-                let out = lparam as *mut HWND;
-                if !out.is_null() {
-                    *out = hwnd;
+            if pid == GetCurrentProcessId() {
+                let mut buf = [0u16; 64];
+                let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+                if len > 0 {
+                    let title = String::from_utf16_lossy(&buf[..len as usize]);
+                    if title == "CipherClipboard" {
+                        let out = lparam as *mut HWND;
+                        if !out.is_null() {
+                            *out = hwnd;
+                        }
+                        return 0; // stop enumeration
+                    }
                 }
-                return 0; // stop enumeration
             }
             1
         }

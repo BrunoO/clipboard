@@ -15,6 +15,7 @@ mod platform;
 mod secret;
 mod settings;
 mod theme;
+mod tray;
 
 use app::ClipboardApp;
 use db::Database;
@@ -112,8 +113,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // 7. Setup inter-thread channels
     let (notify_tx, notify_rx) = std::sync::mpsc::channel();
     let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
+    let (tray_tx, tray_rx) = std::sync::mpsc::channel();
 
-    // 8. Start GUI, global hotkeys, and background monitor
+    // 8. Start GUI, global hotkeys, system tray, and background monitor
     let result = eframe::run_native(
         "CipherClipboard",
         native_options,
@@ -131,6 +133,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Initialize OS activation & reopen observers (macOS Dock click / Cmd+Tab)
             platform::set_repaint_context(&cc.egui_ctx);
             platform::setup_reopen_observer();
+
+            // Initialize Windows system tray icon (runs on main UI thread event loop)
+            let tray_service = tray::TrayService::new(&tray_tx, &cc.egui_ctx);
 
             // Initialize OS global hotkey service with user's configured hotkey
             let initial_hotkeys = settings.effective_hotkeys();
@@ -155,6 +160,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 notify_rx,
                 hotkey_rx,
                 hotkey_service,
+                tray_rx,
+                tray_service,
                 settings,
                 monitor_shutdown_tx,
             )))
