@@ -105,6 +105,23 @@ On first launch:
 
 ---
 
+## Development & CI Guardrails
+
+To ensure all contributions satisfy continuous integration standards (formatting, zero Clippy warnings, license compliance via `cargo-deny`, and passing test suite):
+
+1. **Install the Git Pre-Push Hook (Recommended):**
+   ```bash
+   ./scripts/install-hooks.sh
+   ```
+   This ensures that any `git push` automatically runs pre-flight verifications before sending commits to remote.
+
+2. **Run Local Pre-Flight Checks Manually:**
+   ```bash
+   ./scripts/preflight.sh
+   ```
+
+---
+
 ## Known Limitations
 
 * **Monochrome Emoji & Symbol Rendering:** `egui` (`0.29`) rasterizes font glyphs via `ab_glyph` using monochrome vector outlines and does not support color emoji tables (`sbix`, `COLR`/`CPAL`, or `CBDT`). As a result, emojis and symbols in copied text render in the active theme's monochrome text color rather than full color. Invisible Unicode variation selectors (`U+FE0E`, `U+FE0F`) and zero-width joiners are stripped from UI previews to avoid missing-glyph (`□`) boxes, while the original text is preserved intact when copied back to the clipboard.
