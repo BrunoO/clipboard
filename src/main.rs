@@ -110,6 +110,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
+    crate::platform::log_message("INFO", "CipherClipboard starting");
+
     // 7. Setup inter-thread channels
     let (notify_tx, notify_rx) = std::sync::mpsc::channel();
     let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();

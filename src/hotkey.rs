@@ -66,6 +66,7 @@ impl HotkeyService {
                         });
                     } else {
                         eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
+                        crate::platform::log_message("WARN", &format!("Could not register hotkey {hk:?}: {e}"));
                         results.push(HotkeyRegistrationResult {
                             hotkey: hk,
                             success: false,
@@ -171,6 +172,7 @@ impl HotkeyService {
                         });
                     } else {
                         eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
+                        crate::platform::log_message("WARN", &format!("Could not register hotkey {hk:?}: {e}"));
                         results.push(HotkeyRegistrationResult {
                             hotkey: hk,
                             success: false,

@@ -154,6 +154,7 @@ pub(crate) struct ClipboardApp {
     show_clear_confirm_dialog: bool,
     scroll_to_selected: bool,
     current_is_dark: Option<bool>,
+    title_bar_dark_mode: Option<bool>,
     monitor_shutdown_tx: Sender<()>,
     recording_custom_hotkey: bool,
     pending_custom_hotkey: String,
@@ -237,6 +238,7 @@ impl ClipboardApp {
             show_clear_confirm_dialog: false,
             scroll_to_selected: false,
             current_is_dark: None,
+            title_bar_dark_mode: None,
             recording_custom_hotkey: false,
             pending_custom_hotkey: String::new(),
             monitor_shutdown_tx,
@@ -279,6 +281,7 @@ impl ClipboardApp {
         self.scroll_to_selected = true;
         // Restore at the OS level first (important on Windows, where a minimized
         // window may otherwise stay minimized even after Visible(true)).
+        crate::platform::windows_restore_main_window();
         crate::platform::order_front_main_window();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -313,6 +316,17 @@ impl ClipboardApp {
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             crate::platform::hide_application();
+        }
+
+        #[allow(unused_mut)]
+        let mut auto_paste = auto_paste;
+        #[cfg(target_os = "windows")]
+        if auto_paste && crate::platform::windows_target_is_elevated() {
+            auto_paste = false;
+            crate::platform::log_message("WARN", "Auto-paste blocked: target app runs as Administrator");
+            self.show_toast(
+                "Auto-paste blocked: target app runs as Administrator. Paste manually or run CipherClipboard as Administrator.",
+            );
         }
 
         if restore_focus || auto_paste {
@@ -1861,6 +1875,24 @@ impl ClipboardApp {
                 }
             }
 
+            #[cfg(target_os = "windows")]
+            {
+                ui.add_space(6.0);
+                if ui.button("Re-detect keyboard layout").clicked() {
+                    if self.update_hotkeys_from_settings() {
+                        self.show_toast(&format!(
+                            "{} Hotkeys re-registered for current keyboard layout",
+                            icons::CHECK
+                        ));
+                    } else {
+                        self.show_toast(&format!(
+                            "{} Could not re-register hotkeys (may be in use by OS)",
+                            icons::WARNING
+                        ));
+                    }
+                }
+            }
+
             // Custom hotkey recorder
             if self.settings.hotkey == HotkeyPreset::Custom {
                 ui.add_space(8.0);
@@ -3237,6 +3269,10 @@ impl eframe::App for ClipboardApp {
             crate::theme::setup_theme(ctx, is_dark);
             self.current_is_dark = Some(is_dark);
         }
+        if self.title_bar_dark_mode != Some(is_dark) {
+            crate::platform::windows_set_title_bar_dark_mode(is_dark);
+            self.title_bar_dark_mode = Some(is_dark);
+        }
 
         self.handle_window_close_request(ctx);
         self.handle_tray_events(ctx);
@@ -3349,6 +3385,7 @@ mod tests {
             show_clear_confirm_dialog: false,
             scroll_to_selected: false,
             current_is_dark: None,
+            title_bar_dark_mode: None,
             recording_custom_hotkey: false,
             pending_custom_hotkey: String::new(),
             monitor_shutdown_tx: shutdown_tx,

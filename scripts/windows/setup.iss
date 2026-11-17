@@ -47,6 +47,9 @@ LicenseFile=..\..\LICENSE
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+; Close any running instance before overwriting files, then relaunch afterwards.
+CloseApplications=yes
+RestartApplications=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 

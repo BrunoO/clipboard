@@ -102,6 +102,14 @@ sudo dnf install libX11-devel libxcb-devel dbus-devel openssl-devel pkgconf-pkg-
   ```
   (Alternatively, use vcpkg and set `OPENSSL_DIR` to its installed directory.)
 
+  To avoid shipping `libcrypto-*.dll` with the installer, you can statically link OpenSSL:
+  ```powershell
+  $env:OPENSSL_STATIC = "1"
+  $env:OPENSSL_DIR = "C:\Program Files\OpenSSL-Win64"
+  cargo build --release
+  ```
+  When `OPENSSL_STATIC=1` is used, remove the `libcrypto-*.dll` line from `scripts/windows/setup.iss`.
+
 ---
 
 ## Running the Application
