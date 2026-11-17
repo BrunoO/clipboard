@@ -277,10 +277,12 @@ impl ClipboardApp {
         self.selected_index = 0;
         self.show_clear_confirm_dialog = false;
         self.scroll_to_selected = true;
+        // Restore at the OS level first (important on Windows, where a minimized
+        // window may otherwise stay minimized even after Visible(true)).
+        crate::platform::order_front_main_window();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        crate::platform::order_front_main_window();
         self.refresh_items();
         self.focus_search_input = true;
         ctx.request_repaint();
@@ -876,7 +878,9 @@ impl ClipboardApp {
         if self.is_visible {
             if is_focused {
                 self.has_been_focused = true;
-            } else if self.has_been_focused && self.settings.hide_on_blur {
+            } else if self.has_been_focused
+                && self.settings.hide_on_blur
+                && !ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
                 let is_dragging_or_moving = pointer_down
                     || self
                         .last_drag_or_move_instant
