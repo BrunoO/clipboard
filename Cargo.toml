@@ -46,7 +46,7 @@ egui-phosphor = "0.7.3"
 arboard = "3.4"
 
 # Global OS shortcut manager (Cmd+Shift+V / Ctrl+Shift+V)
-global-hotkey = "0.9"
+global-hotkey = "0.10"
 
 # SQLite with bundled SQLCipher (full database encryption)
 rusqlite = { version = "0.41", features = ["bundled-sqlcipher"] }
