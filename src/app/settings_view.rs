@@ -4,8 +4,8 @@ use eframe::egui;
 use egui_phosphor::regular as icons;
 
 impl ClipboardApp {
-    pub(super) fn render_settings_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    pub(super) fn render_settings_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading(
                     egui::RichText::new(format!("{} Preferences", icons::GEAR))

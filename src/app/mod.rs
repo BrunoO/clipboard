@@ -998,16 +998,17 @@ impl ClipboardApp {
         }
     }
 
-    fn render_top_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
-        egui::TopBottomPanel::top("top_panel")
+    fn render_top_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        let ctx = ui.ctx().clone();
+        egui::Panel::top("top_panel")
             .frame(
-                egui::Frame::none()
+                egui::Frame::new()
                     .fill(crate::theme::panel_background(is_dark))
-                    .inner_margin(egui::Margin::symmetric(10.0_f32, 6.0_f32)),
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.add_space(crate::theme::top_padding());
-                self.render_header_row(ui, ctx, is_dark);
+                self.render_header_row(ui, &ctx, is_dark);
                 ui.add_space(6.0_f32);
                 if self.active_view == ActiveView::History {
                     self.render_search_bar(ui, is_dark);
@@ -1181,11 +1182,11 @@ impl ClipboardApp {
 
     fn render_search_bar(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         let is_focused = self.focus_search_input;
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(crate::theme::search_bg(is_dark))
             .stroke(crate::theme::search_stroke(is_dark, is_focused))
-            .rounding(crate::theme::search_rounding())
-            .inner_margin(egui::Margin::symmetric(8.0_f32, 6.0_f32))
+            .corner_radius(crate::theme::search_rounding())
+            .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
@@ -1201,7 +1202,7 @@ impl ClipboardApp {
                                 )
                                 .color(crate::theme::text_secondary(is_dark)),
                             )
-                            .frame(false)
+                            .frame(egui::Frame::NONE)
                             .desired_width(f32::INFINITY),
                     );
 
@@ -1222,18 +1223,18 @@ impl ClipboardApp {
             });
     }
 
-    fn render_bottom_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
-        egui::TopBottomPanel::bottom("bottom_panel")
+    fn render_bottom_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        egui::Panel::bottom("bottom_panel")
             .frame(
-                egui::Frame::none()
+                egui::Frame::new()
                     .fill(crate::theme::panel_background(is_dark))
                     .stroke(egui::Stroke::new(
                         1.0_f32,
                         crate::theme::bottom_panel_stroke(is_dark),
                     ))
-                    .inner_margin(egui::Margin::symmetric(10.0_f32, 6.0_f32)),
+                    .inner_margin(egui::Margin::symmetric(10, 6)),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if let Some((msg, time)) = &self.toast {
                         if time.elapsed() < Duration::from_secs(2) {
@@ -1303,7 +1304,7 @@ impl ClipboardApp {
             return;
         }
 
-        let screen_rect = ctx.screen_rect();
+        let screen_rect = ctx.content_rect();
         egui::Area::new(egui::Id::new("clear_confirm_backdrop"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)
@@ -1330,9 +1331,9 @@ impl ClipboardApp {
             .default_width(300.0_f32)
             .max_width(320.0_f32)
             .frame(
-                egui::Frame::window(&ctx.style())
-                    .inner_margin(egui::Margin::symmetric(16.0_f32, 14.0_f32))
-                    .rounding(crate::theme::card_rounding())
+                egui::Frame::window(&ctx.global_style())
+                    .inner_margin(egui::Margin::symmetric(16, 14))
+                    .corner_radius(crate::theme::card_rounding())
                     .stroke(crate::theme::card_stroke(is_dark, false)),
             )
             .show(ctx, |ui| {
@@ -1398,7 +1399,7 @@ impl ClipboardApp {
             return;
         }
 
-        let screen_rect = ctx.screen_rect();
+        let screen_rect = ctx.content_rect();
         egui::Area::new(egui::Id::new("keyring_explanation_backdrop"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)
@@ -1428,9 +1429,9 @@ impl ClipboardApp {
             .default_width(360.0_f32)
             .max_width(400.0_f32)
             .frame(
-                egui::Frame::window(&ctx.style())
-                    .inner_margin(egui::Margin::symmetric(16.0_f32, 14.0_f32))
-                    .rounding(crate::theme::card_rounding())
+                egui::Frame::window(&ctx.global_style())
+                    .inner_margin(egui::Margin::symmetric(16, 14))
+                    .corner_radius(crate::theme::card_rounding())
                     .stroke(crate::theme::card_stroke(is_dark, false)),
             )
             .show(ctx, |ui| {
@@ -1490,10 +1491,11 @@ impl ClipboardApp {
 }
 
 impl eframe::App for ClipboardApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let is_dark = self.is_dark(ctx);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let is_dark = self.is_dark(&ctx);
         if self.current_is_dark != Some(is_dark) {
-            crate::theme::setup_theme(ctx, is_dark);
+            crate::theme::setup_theme(&ctx, is_dark);
             self.current_is_dark = Some(is_dark);
         }
         if self.title_bar_dark_mode != Some(is_dark) {
@@ -1501,13 +1503,13 @@ impl eframe::App for ClipboardApp {
             self.title_bar_dark_mode = Some(is_dark);
         }
 
-        self.handle_window_close_request(ctx);
-        self.handle_tray_events(ctx);
-        self.handle_quit_shortcut(ctx);
-        self.handle_hotkey_toggle(ctx);
-        self.handle_escape_key(ctx);
-        self.handle_keyboard_navigation(ctx);
-        self.handle_app_activation(ctx);
+        self.handle_window_close_request(&ctx);
+        self.handle_tray_events(&ctx);
+        self.handle_quit_shortcut(&ctx);
+        self.handle_hotkey_toggle(&ctx);
+        self.handle_escape_key(&ctx);
+        self.handle_keyboard_navigation(&ctx);
+        self.handle_app_activation(&ctx);
         self.handle_monitor_updates();
         self.handle_clipboard_auto_clear();
 
@@ -1535,16 +1537,16 @@ impl eframe::App for ClipboardApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
 
-        self.render_top_panel(ctx, is_dark);
-        self.render_bottom_panel(ctx, is_dark);
+        self.render_top_panel(ui, is_dark);
+        self.render_bottom_panel(ui, is_dark);
         match self.active_view {
-            ActiveView::History => self.render_central_panel(ctx, is_dark),
-            ActiveView::Generator => self.render_generator_panel(ctx, is_dark),
-            ActiveView::Settings => self.render_settings_panel(ctx, is_dark),
+            ActiveView::History => self.render_central_panel(ui, is_dark),
+            ActiveView::Generator => self.render_generator_panel(ui, is_dark),
+            ActiveView::Settings => self.render_settings_panel(ui, is_dark),
         }
 
-        self.render_clear_confirm_modal(ctx, is_dark);
-        self.render_keyring_explanation_modal(ctx, is_dark);
+        self.render_clear_confirm_modal(&ctx, is_dark);
+        self.render_keyring_explanation_modal(&ctx, is_dark);
     }
 }
 

@@ -10,8 +10,9 @@ impl ClipboardApp {
         let _ = self.settings.save(&self.db);
     }
 
-    pub(super) fn render_generator_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    pub(super) fn render_generator_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        let ctx = ui.ctx().clone();
+        egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading(
                     egui::RichText::new(format!("{} Password Generator", icons::KEY))
@@ -20,7 +21,7 @@ impl ClipboardApp {
                 );
                 ui.add_space(8.0);
 
-                self.render_generator_output_card(ui, ctx, is_dark);
+                self.render_generator_output_card(ui, &ctx, is_dark);
                 ui.add_space(10.0);
 
                 self.render_generator_mode_and_options(ui, is_dark);
@@ -69,11 +70,11 @@ impl ClipboardApp {
                 "•".repeat(self.password_gen.current_value.chars().count().min(32))
             };
 
-            egui::Frame::none()
+            egui::Frame::new()
                 .fill(crate::theme::search_bg(is_dark))
                 .stroke(crate::theme::card_stroke(is_dark, true))
-                .rounding(6.0_f32)
-                .inner_margin(egui::Margin::symmetric(10.0_f32, 10.0_f32))
+                .corner_radius(6)
+                .inner_margin(egui::Margin::symmetric(10, 10))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(
