@@ -42,7 +42,10 @@ impl TrayService {
                 Ok(service) => Some(service),
                 Err(e) => {
                     eprintln!("⚠️ Failed to initialize Windows system tray icon: {e}");
-                    crate::platform::log_message("WARN", &format!("Failed to initialize Windows system tray icon: {e}"));
+                    crate::platform::log_message(
+                        "WARN",
+                        &format!("Failed to initialize Windows system tray icon: {e}"),
+                    );
                     None
                 }
             }

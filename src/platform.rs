@@ -85,7 +85,7 @@ pub(crate) fn windows_quote_key_is_ugrave() -> bool {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::missing_const_for_fn)]
 pub(crate) fn windows_target_is_elevated() -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -97,15 +97,7 @@ pub(crate) fn windows_target_is_elevated() -> bool {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn windows_restore_main_window() {
-    #[cfg(target_os = "windows")]
-    {
-        windows::restore_main_window();
-    }
-}
-
-#[allow(dead_code)]
+#[allow(dead_code, clippy::missing_const_for_fn)]
 pub(crate) fn windows_set_title_bar_dark_mode(is_dark: bool) {
     #[cfg(target_os = "windows")]
     {
@@ -123,9 +115,13 @@ pub(crate) fn log_message(level: &str, message: &str) {
         let dir = base.join("cipherclipboard");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("app.log");
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-            let _ = writeln!(file, "[{}] [{}] {}", ts, level, message);
+            let _ = writeln!(file, "[{ts}] [{level}] {message}");
         }
     }
 }
@@ -646,7 +642,7 @@ mod windows {
         fn GetWindowTextW(hwnd: HWND, lpString: *mut u16, nMaxCount: i32) -> i32;
     }
 
-    pub(super) fn order_front_main_window() {
+    fn find_main_window() -> Option<HWND> {
         unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: isize) -> i32 {
             let mut pid: u32 = 0;
             GetWindowThreadProcessId(hwnd, &mut pid);
@@ -667,16 +663,26 @@ mod windows {
             1
         }
 
+        let mut target_hwnd: HWND = std::ptr::null_mut();
+        unsafe {
+            EnumWindows(enum_proc, std::ptr::addr_of_mut!(target_hwnd) as isize);
+        }
+        if target_hwnd.is_null() {
+            None
+        } else {
+            Some(target_hwnd)
+        }
+    }
+
+    pub(super) fn order_front_main_window() {
         const SW_SHOW: i32 = 5;
         const SW_RESTORE: i32 = 9;
 
-        unsafe {
-            let mut target_hwnd: HWND = std::ptr::null_mut();
-            EnumWindows(enum_proc, (&mut target_hwnd as *mut HWND) as isize);
-            if target_hwnd.is_null() {
-                return;
-            }
+        let Some(target_hwnd) = find_main_window() else {
+            return;
+        };
 
+        unsafe {
             if IsIconic(target_hwnd) != 0 {
                 ShowWindow(target_hwnd, SW_RESTORE);
             } else {
@@ -1069,11 +1075,31 @@ mod windows {
     }
 
     pub(super) fn target_is_elevated() -> bool {
+        #[link(name = "kernel32")]
         extern "system" {
-            fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> *mut std::ffi::c_void;
-            fn OpenProcessToken(ProcessHandle: *mut std::ffi::c_void, DesiredAccess: u32, TokenHandle: *mut *mut std::ffi::c_void) -> i32;
-            fn GetTokenInformation(TokenHandle: *mut std::ffi::c_void, TokenInformationClass: i32, TokenInformation: *mut std::ffi::c_void, TokenInformationLength: u32, ReturnLength: *mut u32) -> i32;
+            fn OpenProcess(
+                dwDesiredAccess: u32,
+                bInheritHandle: i32,
+                dwProcessId: u32,
+            ) -> *mut std::ffi::c_void;
             fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+            fn GetLastError() -> u32;
+        }
+
+        #[link(name = "advapi32")]
+        extern "system" {
+            fn OpenProcessToken(
+                ProcessHandle: *mut std::ffi::c_void,
+                DesiredAccess: u32,
+                TokenHandle: *mut *mut std::ffi::c_void,
+            ) -> i32;
+            fn GetTokenInformation(
+                TokenHandle: *mut std::ffi::c_void,
+                TokenInformationClass: i32,
+                TokenInformation: *mut std::ffi::c_void,
+                TokenInformationLength: u32,
+                ReturnLength: *mut u32,
+            ) -> i32;
         }
 
         #[repr(C)]
@@ -1084,129 +1110,102 @@ mod windows {
         const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
         const TOKEN_QUERY: u32 = 0x0008;
         const TOKEN_ELEVATION_CLASS: i32 = 20;
+        const ERROR_ACCESS_DENIED: u32 = 5;
 
-        unsafe fn process_is_elevated(pid: u32) -> bool {
+        unsafe fn process_is_elevated(pid: u32, treat_access_denied_as_elevated: bool) -> bool {
             if pid == 0 {
                 return false;
             }
             let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if proc.is_null() {
-                return false;
+                return treat_access_denied_as_elevated && GetLastError() == ERROR_ACCESS_DENIED;
             }
             let mut token: *mut std::ffi::c_void = std::ptr::null_mut();
             let ok = OpenProcessToken(proc, TOKEN_QUERY, &mut token);
             let mut elevated = false;
             if ok != 0 && !token.is_null() {
-                let mut info = TokenElevation { token_is_elevated: 0 };
+                let mut info = TokenElevation {
+                    token_is_elevated: 0,
+                };
                 let mut ret_len: u32 = 0;
                 let ok2 = GetTokenInformation(
                     token,
                     TOKEN_ELEVATION_CLASS,
-                    &mut info as *mut _ as *mut std::ffi::c_void,
-                    std::mem::size_of::<TokenElevation>() as u32,
+                    std::ptr::addr_of_mut!(info).cast::<std::ffi::c_void>(),
+                    u32::try_from(std::mem::size_of::<TokenElevation>()).unwrap_or(4),
                     &mut ret_len,
                 );
                 if ok2 != 0 {
                     elevated = info.token_is_elevated != 0;
                 }
                 let _ = CloseHandle(token);
+            } else if treat_access_denied_as_elevated && GetLastError() == ERROR_ACCESS_DENIED {
+                // Standard (medium-integrity) processes receive ERROR_ACCESS_DENIED when
+                // opening the token of an elevated (high-integrity) process under UIPI.
+                elevated = true;
             }
             let _ = CloseHandle(proc);
             elevated
         }
 
         unsafe {
-            let hwnd = GetForegroundWindow();
+            let current_pid = GetCurrentProcessId();
+            if process_is_elevated(current_pid, false) {
+                return false;
+            }
+
+            // Check the previously focused target window that restore_focus_and_paste()
+            // will paste into, falling back to the current foreground window if none was captured.
+            let prev_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
+            let hwnd = if prev_raw != 0 {
+                prev_raw as HWND
+            } else {
+                GetForegroundWindow()
+            };
             if hwnd.is_null() {
                 return false;
             }
             let mut target_pid: u32 = 0;
             GetWindowThreadProcessId(hwnd, &mut target_pid);
-            if target_pid == 0 || target_pid == GetCurrentProcessId() {
+            if target_pid == 0 || target_pid == current_pid {
                 return false;
             }
-            process_is_elevated(target_pid) && !process_is_elevated(GetCurrentProcessId())
-        }
-    }
-
-    pub(super) fn restore_main_window() {
-        unsafe {
-            let mut target_hwnd: HWND = std::ptr::null_mut();
-            unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: isize) -> i32 {
-                let mut pid: u32 = 0;
-                GetWindowThreadProcessId(hwnd, &mut pid);
-                if pid == GetCurrentProcessId() {
-                    let mut buf = [0u16; 64];
-                    let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-                    if len > 0 {
-                        let title = String::from_utf16_lossy(&buf[..len as usize]);
-                        if title == "CipherClipboard" {
-                            let out = lparam as *mut HWND;
-                            if !out.is_null() {
-                                *out = hwnd;
-                            }
-                            return 0;
-                        }
-                    }
-                }
-                1
-            }
-            EnumWindows(enum_proc, (&mut target_hwnd as *mut HWND) as isize);
-            if target_hwnd.is_null() {
-                return;
-            }
-            const SW_RESTORE: i32 = 9;
-            ShowWindow(target_hwnd, SW_RESTORE);
-            let cur_thread = GetCurrentThreadId();
-            let mut target_pid: u32 = 0;
-            let target_thread = GetWindowThreadProcessId(target_hwnd, &mut target_pid);
-            if target_thread != 0 && target_thread != cur_thread {
-                AttachThreadInput(cur_thread, target_thread, 1);
-                BringWindowToTop(target_hwnd);
-                SetForegroundWindow(target_hwnd);
-                AttachThreadInput(cur_thread, target_thread, 0);
-            } else {
-                BringWindowToTop(target_hwnd);
-                SetForegroundWindow(target_hwnd);
-            }
+            process_is_elevated(target_pid, true)
         }
     }
 
     pub(super) fn set_title_bar_dark_mode(is_dark: bool) {
+        #[link(name = "dwmapi")]
         extern "system" {
-            fn DwmSetWindowAttribute(hwnd: HWND, dwAttribute: u32, pvAttribute: *const std::ffi::c_void, cbAttribute: u32) -> i32;
+            fn DwmSetWindowAttribute(
+                hwnd: HWND,
+                dwAttribute: u32,
+                pvAttribute: *const std::ffi::c_void,
+                cbAttribute: u32,
+            ) -> i32;
         }
         const DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1: u32 = 19;
         const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
 
+        let Some(target_hwnd) = find_main_window() else {
+            return;
+        };
+
         unsafe {
-            let mut target_hwnd: HWND = std::ptr::null_mut();
-            unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: isize) -> i32 {
-                let mut pid: u32 = 0;
-                GetWindowThreadProcessId(hwnd, &mut pid);
-                if pid == GetCurrentProcessId() {
-                    let mut buf = [0u16; 64];
-                    let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-                    if len > 0 {
-                        let title = String::from_utf16_lossy(&buf[..len as usize]);
-                        if title == "CipherClipboard" {
-                            let out = lparam as *mut HWND;
-                            if !out.is_null() {
-                                *out = hwnd;
-                            }
-                            return 0;
-                        }
-                    }
-                }
-                1
-            }
-            EnumWindows(enum_proc, (&mut target_hwnd as *mut HWND) as isize);
-            if target_hwnd.is_null() {
-                return;
-            }
-            let value: i32 = if is_dark { 1 } else { 0 };
-            if DwmSetWindowAttribute(target_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &value as *const _ as *const std::ffi::c_void, 4) != 0 {
-                let _ = DwmSetWindowAttribute(target_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, &value as *const _ as *const std::ffi::c_void, 4);
+            let value: i32 = i32::from(is_dark);
+            if DwmSetWindowAttribute(
+                target_hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                std::ptr::addr_of!(value).cast::<std::ffi::c_void>(),
+                4,
+            ) != 0
+            {
+                let _ = DwmSetWindowAttribute(
+                    target_hwnd,
+                    DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1,
+                    std::ptr::addr_of!(value).cast::<std::ffi::c_void>(),
+                    4,
+                );
             }
         }
     }

@@ -282,7 +282,6 @@ impl ClipboardApp {
         self.scroll_to_selected = true;
         // Restore at the OS level first (important on Windows, where a minimized
         // window may otherwise stay minimized even after Visible(true)).
-        crate::platform::windows_restore_main_window();
         crate::platform::order_front_main_window();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -324,7 +323,10 @@ impl ClipboardApp {
         #[cfg(target_os = "windows")]
         if auto_paste && crate::platform::windows_target_is_elevated() {
             auto_paste = false;
-            crate::platform::log_message("WARN", "Auto-paste blocked: target app runs as Administrator");
+            crate::platform::log_message(
+                "WARN",
+                "Auto-paste blocked: target app runs as Administrator",
+            );
             self.show_toast(
                 "Auto-paste blocked: target app runs as Administrator. Paste manually or run CipherClipboard as Administrator.",
             );
@@ -665,6 +667,7 @@ impl ClipboardApp {
                         egui::Key::Num6 => "6",
                         egui::Key::Num7 => "7",
                         egui::Key::Num8 => "8",
+                        egui::Key::Num9 => "9",
                         egui::Key::Quote => {
                             if crate::platform::windows_quote_key_is_ugrave() {
                                 "ù"
@@ -946,7 +949,7 @@ impl ClipboardApp {
     fn handle_tray_events(&mut self, ctx: &egui::Context) {
         let mut latest_action = None;
         while let Ok(action) = self.tray_rx.try_recv() {
-            crate::platform::log_message("INFO", &format!("tray event received: {:?}", action));
+            crate::platform::log_message("INFO", &format!("tray event received: {action:?}"));
             latest_action = Some(action);
         }
         if let Some(action) = latest_action {

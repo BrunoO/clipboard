@@ -673,17 +673,15 @@ mod tests {
         assert_eq!(parsed.key, Code::F1);
         assert_eq!(parsed.modifiers, Modifiers::empty());
 
-        // Test Ctrl+ù (AZERTY Quote / Backquote)
+        // Test Ctrl+ù (layout-aware on Windows: Backquote on AZERTY, Quote otherwise)
         let parsed = ParsedHotkey::parse("Ctrl+ù").unwrap();
         assert!(parsed.modifiers.contains(Modifiers::CONTROL));
-        #[cfg(target_os = "windows")]
-        {
+        if crate::platform::windows_quote_key_is_ugrave() {
             assert_eq!(parsed.key, Code::Backquote);
             assert_eq!(parsed.format(), "Ctrl+ù");
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
+        } else {
             assert_eq!(parsed.key, Code::Quote);
+            assert_eq!(parsed.format(), "Ctrl+Quote");
         }
 
         // Test invalid
