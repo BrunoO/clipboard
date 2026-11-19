@@ -308,7 +308,20 @@ mod macos {
         REOPEN_REQUESTED.swap(false, Ordering::SeqCst)
     }
 
+    /// AppKit's `[NSApplication sharedApplication]` asserts it is called on the
+    /// main thread (trapping with `SIGTRAP` on macOS if invoked from a background
+    /// or `cargo test` worker thread).
+    fn is_main_thread() -> bool {
+        unsafe {
+            let is_main: bool = msg_send![class!(NSThread), isMainThread];
+            is_main
+        }
+    }
+
     pub(super) fn is_active() -> bool {
+        if !is_main_thread() {
+            return false;
+        }
         unsafe {
             let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
             if ns_app.is_null() {
@@ -321,6 +334,9 @@ mod macos {
     }
 
     pub(super) fn hide_app() {
+        if !is_main_thread() {
+            return;
+        }
         unsafe {
             let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
             if !ns_app.is_null() {
@@ -331,6 +347,9 @@ mod macos {
     }
 
     pub(super) fn order_front_main_window() {
+        if !is_main_thread() {
+            return;
+        }
         unsafe {
             let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
             if ns_app.is_null() {
