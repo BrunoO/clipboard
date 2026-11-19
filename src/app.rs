@@ -132,6 +132,7 @@ pub(crate) struct ClipboardApp {
     items: Vec<ClipboardItem>,
     clipboard_writer: Option<Clipboard>,
     toast: Option<(String, Instant)>,
+    pending_toast: Option<String>,
     last_query_cached: String,
     notify_rx: Receiver<()>,
     hotkey_rx: Receiver<()>,
@@ -217,6 +218,7 @@ impl ClipboardApp {
             items: initial_items,
             clipboard_writer,
             toast: startup_toast,
+            pending_toast: None,
             last_query_cached: String::new(),
             notify_rx,
             hotkey_rx,
@@ -287,6 +289,9 @@ impl ClipboardApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         self.refresh_items();
+        if let Some(msg) = self.pending_toast.take() {
+            self.show_toast(&msg);
+        }
         self.focus_search_input = true;
         ctx.request_repaint();
     }
@@ -327,8 +332,8 @@ impl ClipboardApp {
                 "WARN",
                 "Auto-paste blocked: target app runs as Administrator",
             );
-            self.show_toast(
-                "Auto-paste blocked: target app runs as Administrator. Paste manually or run CipherClipboard as Administrator.",
+            self.pending_toast = Some(
+                "Auto-paste blocked: target app runs as Administrator. Paste manually or run CipherClipboard as Administrator.".to_string(),
             );
         }
 
@@ -3375,6 +3380,7 @@ mod tests {
             items: Vec::new(),
             clipboard_writer: None,
             toast: None,
+            pending_toast: None,
             last_query_cached: String::new(),
             notify_rx,
             hotkey_rx,
@@ -3409,11 +3415,17 @@ mod tests {
 
         assert!(!app.is_quitting);
 
-        // Verify TrayAction::Show restores visibility
+        // Verify TrayAction::Show restores visibility and surfaces any pending toast
         app.is_visible = false;
+        app.pending_toast = Some("Auto-paste blocked".to_string());
         tray_tx.send(super::TrayAction::Show).unwrap();
         app.handle_tray_events(&ctx);
         assert!(app.is_visible);
+        assert!(app.pending_toast.is_none());
+        assert_eq!(
+            app.toast.as_ref().map(|(msg, _)| msg.as_str()),
+            Some("Auto-paste blocked")
+        );
 
         // Verify TrayAction::OpenSettings switches view and shows window
         app.is_visible = false;
