@@ -28,23 +28,6 @@ impl ParsedColor {
         Color32::from_rgba_unmultiplied(self.r, self.g, self.b, self.a)
     }
 
-    /// Returns perceived luminance (0.0 to 1.0) to determine contrast.
-    #[must_use]
-    #[allow(dead_code, clippy::suboptimal_flops)]
-    pub(crate) fn luminance(self) -> f32 {
-        let r = f32::from(self.r) / 255.0;
-        let g = f32::from(self.g) / 255.0;
-        let b = f32::from(self.b) / 255.0;
-        0.299 * r + 0.587 * g + 0.114 * b
-    }
-
-    /// Returns `true` if text drawn over this color should be dark for readability.
-    #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn is_light(self) -> bool {
-        self.luminance() > 0.55
-    }
-
     /// Formats as standard uppercase HEX string (e.g. `#FF5733` or `#FF5733CC`).
     #[must_use]
     pub(crate) fn to_hex(self) -> String {

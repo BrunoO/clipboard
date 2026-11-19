@@ -1,5 +1,6 @@
 #![allow(unsafe_code)]
 #![allow(unexpected_cfgs)]
+#![allow(clippy::missing_const_for_fn)]
 
 //! Cross-platform focus restoration and simulated paste automation.
 //!
@@ -20,7 +21,6 @@ static PREVIOUS_APP_PID: AtomicI32 = AtomicI32::new(0);
 static REPAINT_CTX: std::sync::Mutex<Option<eframe::egui::Context>> = std::sync::Mutex::new(None);
 
 /// Stores a clone of the `egui::Context` to immediately trigger repaints on OS activation.
-#[allow(dead_code, clippy::missing_const_for_fn)]
 pub(crate) fn set_repaint_context(ctx: &eframe::egui::Context) {
     #[cfg(target_os = "macos")]
     if let Ok(mut lock) = REPAINT_CTX.lock() {
@@ -40,7 +40,7 @@ pub(super) fn request_repaint() {
 }
 
 /// Returns true if the application currently has OS focus/activation.
-#[allow(dead_code, clippy::missing_const_for_fn)]
+#[cfg(test)]
 #[must_use]
 pub(crate) fn is_app_active() -> bool {
     is_app_active_state().unwrap_or(false)
@@ -49,7 +49,6 @@ pub(crate) fn is_app_active() -> bool {
 /// Returns `Some(true)` if this application is currently active at the OS/WM level,
 /// `Some(false)` if another application is active, or `None` if the platform/session
 /// cannot determine active-window ownership (e.g. pure Wayland without X11).
-#[allow(clippy::missing_const_for_fn)]
 #[must_use]
 pub(crate) fn is_app_active_state() -> Option<bool> {
     #[cfg(target_os = "macos")]
@@ -72,7 +71,6 @@ pub(crate) fn is_app_active_state() -> Option<bool> {
 
 /// Returns `true` on Windows when the current keyboard layout produces `ù` for the
 /// physical key in the US `Quote` position (French/Belgian AZERTY layouts).
-#[allow(dead_code, clippy::missing_const_for_fn)]
 #[must_use]
 pub(crate) fn windows_quote_key_is_ugrave() -> bool {
     #[cfg(target_os = "windows")]
@@ -85,7 +83,7 @@ pub(crate) fn windows_quote_key_is_ugrave() -> bool {
     }
 }
 
-#[allow(dead_code, clippy::missing_const_for_fn)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn windows_target_is_elevated() -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -97,7 +95,6 @@ pub(crate) fn windows_target_is_elevated() -> bool {
     }
 }
 
-#[allow(dead_code, clippy::missing_const_for_fn)]
 pub(crate) fn windows_set_title_bar_dark_mode(is_dark: bool) {
     #[cfg(target_os = "windows")]
     {
@@ -109,12 +106,21 @@ pub(crate) fn windows_set_title_bar_dark_mode(is_dark: bool) {
     }
 }
 
+const MAX_LOG_BYTES: u64 = 1024 * 1024; // Rotate app.log once it reaches 1 MiB
+
 pub(crate) fn log_message(level: &str, message: &str) {
     use std::io::Write;
     if let Some(base) = dirs::data_local_dir() {
         let dir = base.join("cipherclipboard");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("app.log");
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() >= MAX_LOG_BYTES {
+                let backup = dir.join("app.log.old");
+                let _ = std::fs::remove_file(&backup);
+                let _ = std::fs::rename(&path, &backup);
+            }
+        }
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -128,7 +134,6 @@ pub(crate) fn log_message(level: &str, message: &str) {
 
 /// Checks if the current clipboard content is marked as concealed or transient
 /// by password managers (e.g. 1Password, Bitwarden, `KeePass`, macOS Keychain).
-#[allow(clippy::missing_const_for_fn)]
 #[must_use]
 pub(crate) fn is_clipboard_concealed() -> bool {
     #[cfg(target_os = "macos")]
@@ -146,14 +151,13 @@ pub(crate) fn is_clipboard_concealed() -> bool {
 }
 
 /// Hides the entire application at the OS level (macOS `[NSApp hide:]`).
-#[allow(dead_code, clippy::missing_const_for_fn)]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub(crate) fn hide_application() {
     #[cfg(target_os = "macos")]
     macos::hide_app();
 }
 
 /// Unhides and orders the main window front at the OS level.
-#[allow(clippy::missing_const_for_fn)]
 pub(crate) fn order_front_main_window() {
     #[cfg(target_os = "macos")]
     macos::order_front_main_window();
@@ -175,7 +179,6 @@ pub(crate) fn show_error_dialog(message: &str) {
 }
 
 /// Checks and clears any pending reopen requests triggered by OS events (e.g. Dock icon click).
-#[allow(clippy::missing_const_for_fn)]
 #[must_use]
 pub(crate) fn take_reopen_requested() -> bool {
     #[cfg(target_os = "macos")]
@@ -189,21 +192,18 @@ pub(crate) fn take_reopen_requested() -> bool {
 }
 
 /// Registers OS-level activation and reopen observers (e.g. macOS Dock click / Cmd+Tab notifications).
-#[allow(clippy::missing_const_for_fn)]
 pub(crate) fn setup_reopen_observer() {
     #[cfg(target_os = "macos")]
     macos::setup_reopen_observer();
 }
 
 /// Removes the macOS reopen observer to prevent crashes on app termination.
-#[allow(clippy::missing_const_for_fn)]
 pub(crate) fn teardown_reopen_observer() {
     #[cfg(target_os = "macos")]
     macos::teardown_reopen_observer();
 }
 
 /// Captures the current frontmost application/window before `CipherClipboard` gains focus.
-#[allow(clippy::missing_const_for_fn)]
 pub(crate) fn capture_active_window() {
     #[cfg(target_os = "macos")]
     macos::capture_frontmost();
@@ -259,7 +259,7 @@ pub(crate) fn restore_focus_and_paste(
 }
 
 /// Checks whether macOS Accessibility permissions are granted for synthetic event posting.
-#[allow(dead_code, clippy::missing_const_for_fn)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[must_use]
 pub(crate) fn is_accessibility_trusted() -> bool {
     #[cfg(target_os = "macos")]
@@ -273,7 +273,7 @@ pub(crate) fn is_accessibility_trusted() -> bool {
 }
 
 /// Prompts the user for macOS Accessibility permissions using the native system dialog.
-#[allow(dead_code, clippy::missing_const_for_fn)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn prompt_accessibility_permission() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -286,7 +286,7 @@ pub(crate) fn prompt_accessibility_permission() -> bool {
 }
 
 /// Opens macOS System Settings directly to Privacy & Security > Accessibility.
-#[allow(dead_code, clippy::missing_const_for_fn)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn open_accessibility_settings() {
     #[cfg(target_os = "macos")]
     macos::open_accessibility_settings();

@@ -209,7 +209,7 @@ impl Database {
     }
 
     /// Retrieves the current maximum history limit.
-    #[allow(dead_code)]
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn max_history(&self) -> usize {
         self.max_history.load(Ordering::Relaxed)
@@ -267,7 +267,6 @@ impl Database {
     }
 
     /// Compacts and defragments the encrypted database to reclaim free disk space.
-    #[allow(dead_code)]
     pub(crate) fn vacuum(&self) -> Result<(), rusqlite::Error> {
         let conn = self.lock_conn();
         conn.execute_batch("VACUUM;")?;

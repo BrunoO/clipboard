@@ -23,62 +23,78 @@ pub(crate) struct HotkeyService {
     quote_fallback: linux_x11_fallback::QuoteFallback,
 }
 
-impl HotkeyService {
-    pub(crate) fn new(
-        initial_hotkeys: Vec<HotKey>,
-        hotkey_tx: std::sync::mpsc::Sender<()>,
-        ctx: egui::Context,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let manager = GlobalHotKeyManager::new()?;
-        let mut registered = Vec::new();
-        let mut ids = Vec::new();
-        let mut results = Vec::new();
+fn register_hotkey_batch(
+    manager: &GlobalHotKeyManager,
+    hotkeys: &[HotKey],
+    #[cfg(target_os = "linux")] quote_fallback: &linux_x11_fallback::QuoteFallback,
+) -> (Vec<HotKey>, Vec<u32>, Vec<HotkeyRegistrationResult>) {
+    let mut registered = Vec::new();
+    let mut ids = Vec::new();
+    let mut results = Vec::new();
 
-        #[cfg(target_os = "linux")]
-        let quote_fallback = linux_x11_fallback::QuoteFallback::new(hotkey_tx.clone(), ctx.clone());
+    for &hk in hotkeys {
+        match manager.register(hk) {
+            Ok(()) => {
+                ids.push(hk.id());
+                registered.push(hk);
+                results.push(HotkeyRegistrationResult {
+                    hotkey: hk,
+                    success: true,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                #[cfg(target_os = "linux")]
+                let fallback_ok = if hk.key == global_hotkey::hotkey::Code::Quote {
+                    quote_fallback.register(hk).is_ok()
+                } else {
+                    false
+                };
+                #[cfg(not(target_os = "linux"))]
+                let fallback_ok = false;
 
-        for hk in initial_hotkeys {
-            match manager.register(hk) {
-                Ok(()) => {
-                    ids.push(hk.id());
-                    registered.push(hk);
+                if fallback_ok {
                     results.push(HotkeyRegistrationResult {
                         hotkey: hk,
                         success: true,
                         error: None,
                     });
-                }
-                Err(e) => {
-                    #[cfg(target_os = "linux")]
-                    let fallback_ok = if hk.key == global_hotkey::hotkey::Code::Quote {
-                        quote_fallback.register(hk).is_ok()
-                    } else {
-                        false
-                    };
-                    #[cfg(not(target_os = "linux"))]
-                    let fallback_ok = false;
-
-                    if fallback_ok {
-                        results.push(HotkeyRegistrationResult {
-                            hotkey: hk,
-                            success: true,
-                            error: None,
-                        });
-                    } else {
-                        eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
-                        crate::platform::log_message(
-                            "WARN",
-                            &format!("Could not register hotkey {hk:?}: {e}"),
-                        );
-                        results.push(HotkeyRegistrationResult {
-                            hotkey: hk,
-                            success: false,
-                            error: Some(e.to_string()),
-                        });
-                    }
+                } else {
+                    eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
+                    crate::platform::log_message(
+                        "WARN",
+                        &format!("Could not register hotkey {hk:?}: {e}"),
+                    );
+                    results.push(HotkeyRegistrationResult {
+                        hotkey: hk,
+                        success: false,
+                        error: Some(e.to_string()),
+                    });
                 }
             }
         }
+    }
+
+    (registered, ids, results)
+}
+
+impl HotkeyService {
+    pub(crate) fn new(
+        initial_hotkeys: &[HotKey],
+        hotkey_tx: std::sync::mpsc::Sender<()>,
+        ctx: egui::Context,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let manager = GlobalHotKeyManager::new()?;
+
+        #[cfg(target_os = "linux")]
+        let quote_fallback = linux_x11_fallback::QuoteFallback::new(hotkey_tx.clone(), ctx.clone());
+
+        let (registered, ids, results) = register_hotkey_batch(
+            &manager,
+            initial_hotkeys,
+            #[cfg(target_os = "linux")]
+            &quote_fallback,
+        );
 
         let target_ids = Arc::new(RwLock::new(ids));
         let thread_ids = Arc::clone(&target_ids);
@@ -143,51 +159,13 @@ impl HotkeyService {
         #[cfg(target_os = "linux")]
         self.quote_fallback.clear();
 
-        let mut new_ids = Vec::new();
-        let mut results = Vec::new();
-
-        for &hk in new_hotkeys {
-            match self.manager.register(hk) {
-                Ok(()) => {
-                    new_ids.push(hk.id());
-                    self.hotkeys.push(hk);
-                    results.push(HotkeyRegistrationResult {
-                        hotkey: hk,
-                        success: true,
-                        error: None,
-                    });
-                }
-                Err(e) => {
-                    #[cfg(target_os = "linux")]
-                    let fallback_ok = if hk.key == global_hotkey::hotkey::Code::Quote {
-                        self.quote_fallback.register(hk).is_ok()
-                    } else {
-                        false
-                    };
-                    #[cfg(not(target_os = "linux"))]
-                    let fallback_ok = false;
-
-                    if fallback_ok {
-                        results.push(HotkeyRegistrationResult {
-                            hotkey: hk,
-                            success: true,
-                            error: None,
-                        });
-                    } else {
-                        eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
-                        crate::platform::log_message(
-                            "WARN",
-                            &format!("Could not register hotkey {hk:?}: {e}"),
-                        );
-                        results.push(HotkeyRegistrationResult {
-                            hotkey: hk,
-                            success: false,
-                            error: Some(e.to_string()),
-                        });
-                    }
-                }
-            }
-        }
+        let (registered, new_ids, results) = register_hotkey_batch(
+            &self.manager,
+            new_hotkeys,
+            #[cfg(target_os = "linux")]
+            &self.quote_fallback,
+        );
+        self.hotkeys = registered;
 
         let mut lock = self.target_ids.write().unwrap_or_else(|p| {
             eprintln!("⚠️ Hotkey target_ids mutex recovered from poison");

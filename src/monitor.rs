@@ -66,13 +66,14 @@ pub(crate) fn start_clipboard_monitor(
         println!("👀 Clipboard monitor active (polling every 200ms for text & images)...");
 
         loop {
-            // Check for shutdown signal
-            if shutdown_rx.try_recv().is_ok() {
-                println!("👀 Clipboard monitor shutting down...");
-                break;
+            // Wait for POLL_INTERVAL, waking immediately if a shutdown signal arrives
+            match shutdown_rx.recv_timeout(POLL_INTERVAL) {
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    println!("👀 Clipboard monitor shutting down...");
+                    break;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             }
-
-            thread::sleep(POLL_INTERVAL);
 
             // Skip processing if marked as concealed/transient by password managers
             if db.ignore_concealed() && crate::platform::is_clipboard_concealed() {

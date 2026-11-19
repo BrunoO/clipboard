@@ -17,7 +17,6 @@ pub(crate) enum CodeLanguage {
 }
 
 impl CodeLanguage {
-    #[allow(dead_code)]
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Rust => "Rust",
@@ -47,11 +46,6 @@ impl CodeLanguage {
             Self::Shell => egui_phosphor::regular::TERMINAL,
             Self::Toml | Self::Yaml => egui_phosphor::regular::FILE_TEXT,
         }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn badge(self) -> String {
-        format!("{} {}", self.icon(), self.name())
     }
 
     #[must_use]
@@ -379,12 +373,6 @@ pub(crate) fn format_json(text: &str) -> Option<String> {
     serde_json::to_string_pretty(&val).ok()
 }
 
-/// Minifies a valid JSON string onto a single compact line.
-#[allow(dead_code)]
-pub(crate) fn minify_json(text: &str) -> Option<String> {
-    let val: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
-    serde_json::to_string(&val).ok()
-}
 /// Builds an `egui::text::LayoutJob` with syntax highlighting for the given code snippet using `egui_extras` and `syntect`,
 /// post-processing all token colors to guarantee minimum WCAG contrast ratio (>= 4.5:1) against the canvas background.
 pub(crate) fn highlight_code(

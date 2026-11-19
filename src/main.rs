@@ -142,7 +142,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Initialize OS global hotkey service with user's configured hotkey
             let initial_hotkeys = settings.effective_hotkeys();
             let hotkey_service =
-                match HotkeyService::new(initial_hotkeys, hotkey_tx, cc.egui_ctx.clone()) {
+                match HotkeyService::new(&initial_hotkeys, hotkey_tx, cc.egui_ctx.clone()) {
                     Ok(service) => Some(service),
                     Err(e) => {
                         eprintln!("⚠️ Failed to register global hotkey: {e}");

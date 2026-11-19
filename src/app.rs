@@ -374,52 +374,66 @@ impl ClipboardApp {
         }
     }
 
-    fn copy_text_to_clipboard(&mut self, content: &str, ctx: &egui::Context) {
-        if let Some(cb) = &mut self.clipboard_writer {
-            if let Err(e) = cb.set_text(content.to_string()) {
-                eprintln!("Failed to write text to clipboard: {e}");
-                self.show_toast(&format!(
-                    "{} Failed to copy text to clipboard",
-                    icons::WARNING
-                ));
-            } else {
-                self.show_toast(&format!("{} Copied text to clipboard!", icons::CHECK));
-                if self.settings.hide_on_copy {
-                    self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
+    fn ensure_clipboard_writer(&mut self) -> Option<&mut Clipboard> {
+        if self.clipboard_writer.is_none() {
+            match Clipboard::new() {
+                Ok(cb) => self.clipboard_writer = Some(cb),
+                Err(e) => {
+                    eprintln!("⚠️ Failed to initialize clipboard writer: {e}");
                 }
             }
-        } else {
+        }
+        self.clipboard_writer.as_mut()
+    }
+
+    fn finish_copy(&mut self, ctx: &egui::Context, toast: &str, dismiss: bool) {
+        self.show_toast(toast);
+        if dismiss {
+            self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
+        }
+    }
+
+    fn copy_text_to_clipboard(&mut self, content: &str, ctx: &egui::Context) {
+        let Some(cb) = self.ensure_clipboard_writer() else {
             self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            return;
+        };
+        if let Err(e) = cb.set_text(content.to_string()) {
+            eprintln!("Failed to write text to clipboard: {e}");
+            self.show_toast(&format!(
+                "{} Failed to copy text to clipboard",
+                icons::WARNING
+            ));
+        } else {
+            let msg = format!("{} Copied text to clipboard!", icons::CHECK);
+            self.finish_copy(ctx, &msg, self.settings.hide_on_copy);
         }
     }
 
     fn copy_secret_to_clipboard(&mut self, secret: &str, ctx: &egui::Context) {
         self.db.skip_next_capture(secret);
-        if let Some(cb) = &mut self.clipboard_writer {
-            if let Err(e) = cb.set_text(secret.to_string()) {
-                eprintln!("Failed to write secret to clipboard: {e}");
-                self.show_toast(&format!(
-                    "{} Failed to copy secret to clipboard",
-                    icons::WARNING
-                ));
-            } else {
-                self.schedule_secret_clipboard_clear(secret);
-                let msg = if self.settings.auto_clear_secret_secs > 0 {
-                    format!(
-                        "{} Copied secret (auto-clears in {}s)",
-                        icons::LOCK,
-                        self.settings.auto_clear_secret_secs
-                    )
-                } else {
-                    format!("{} Copied secret to clipboard!", icons::LOCK)
-                };
-                self.show_toast(&msg);
-                if self.settings.hide_on_copy {
-                    self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
-                }
-            }
-        } else {
+        let Some(cb) = self.ensure_clipboard_writer() else {
             self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            return;
+        };
+        if let Err(e) = cb.set_text(secret.to_string()) {
+            eprintln!("Failed to write secret to clipboard: {e}");
+            self.show_toast(&format!(
+                "{} Failed to copy secret to clipboard",
+                icons::WARNING
+            ));
+        } else {
+            self.schedule_secret_clipboard_clear(secret);
+            let msg = if self.settings.auto_clear_secret_secs > 0 {
+                format!(
+                    "{} Copied secret (auto-clears in {}s)",
+                    icons::LOCK,
+                    self.settings.auto_clear_secret_secs
+                )
+            } else {
+                format!("{} Copied secret to clipboard!", icons::LOCK)
+            };
+            self.finish_copy(ctx, &msg, self.settings.hide_on_copy);
         }
     }
 
@@ -431,76 +445,67 @@ impl ClipboardApp {
         // Prevent the background monitor from redundantly re-capturing this copy 200ms later.
         self.db.skip_next_capture(&secret);
 
-        if let Some(cb) = &mut self.clipboard_writer {
-            if let Err(e) = cb.set_text(secret.clone()) {
-                eprintln!("Failed to write generated password to clipboard: {e}");
-                self.show_toast(&format!(
-                    "{} Failed to copy password to clipboard",
-                    icons::WARNING
-                ));
-            } else {
-                self.schedule_secret_clipboard_clear(&secret);
-                if !self.password_gen.skip_history {
-                    if let Err(e) = self.db.insert_secret(&secret) {
-                        eprintln!("Failed to save generated password to database: {e}");
-                    } else {
-                        if let Err(e) = self.db.prune_history(self.settings.max_history) {
-                            eprintln!("⚠️ Failed to prune history: {e}");
-                        }
-                        self.refresh_items();
-                    }
-                }
-                let msg = if self.password_gen.skip_history {
-                    format!("{} Copied password (not saved to history)", icons::CHECK)
+        let Some(cb) = self.ensure_clipboard_writer() else {
+            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            return;
+        };
+        if let Err(e) = cb.set_text(secret.clone()) {
+            eprintln!("Failed to write generated password to clipboard: {e}");
+            self.show_toast(&format!(
+                "{} Failed to copy password to clipboard",
+                icons::WARNING
+            ));
+        } else {
+            self.schedule_secret_clipboard_clear(&secret);
+            if !self.password_gen.skip_history {
+                if let Err(e) = self.db.insert_secret(&secret) {
+                    eprintln!("Failed to save generated password to database: {e}");
                 } else {
-                    format!("{} Copied & saved password as Secret!", icons::LOCK)
-                };
-                self.show_toast(&msg);
-                if dismiss {
-                    self.hide_window(ctx, self.settings.restore_focus, self.settings.auto_paste);
+                    if let Err(e) = self.db.prune_history(self.settings.max_history) {
+                        eprintln!("⚠️ Failed to prune history: {e}");
+                    }
+                    self.refresh_items();
                 }
             }
-        } else {
-            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            let msg = if self.password_gen.skip_history {
+                format!("{} Copied password (not saved to history)", icons::CHECK)
+            } else {
+                format!("{} Copied & saved password as Secret!", icons::LOCK)
+            };
+            self.finish_copy(ctx, &msg, dismiss);
         }
     }
 
     fn copy_image_to_clipboard(&mut self, png_bytes: &[u8], ctx: &egui::Context) {
-        if let Some(cb) = &mut self.clipboard_writer {
-            match media::png_to_rgba(png_bytes) {
-                Ok((width, height, rgba)) => {
-                    let img_data = arboard::ImageData {
-                        width,
-                        height,
-                        bytes: std::borrow::Cow::Borrowed(&rgba),
-                    };
-                    if let Err(e) = cb.set_image(img_data) {
-                        eprintln!("Failed to write image to clipboard: {e}");
-                        self.show_toast(&format!(
-                            "{} Failed to copy image to clipboard",
-                            icons::WARNING
-                        ));
-                    } else {
-                        self.show_toast(&format!("{} Copied image to clipboard!", icons::CHECK));
-                        if self.settings.hide_on_copy {
-                            self.hide_window(
-                                ctx,
-                                self.settings.restore_focus,
-                                self.settings.auto_paste,
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to decode PNG image for clipboard copy: {e}");
+        let Some(cb) = self.ensure_clipboard_writer() else {
+            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            return;
+        };
+        match media::png_to_rgba(png_bytes) {
+            Ok((width, height, rgba)) => {
+                let img_data = arboard::ImageData {
+                    width,
+                    height,
+                    bytes: std::borrow::Cow::Borrowed(&rgba),
+                };
+                if let Err(e) = cb.set_image(img_data) {
+                    eprintln!("Failed to write image to clipboard: {e}");
                     self.show_toast(&format!(
-                        "{} Failed to decode image for clipboard",
+                        "{} Failed to copy image to clipboard",
                         icons::WARNING
                     ));
+                } else {
+                    let msg = format!("{} Copied image to clipboard!", icons::CHECK);
+                    self.finish_copy(ctx, &msg, self.settings.hide_on_copy);
                 }
             }
-        } else {
-            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            Err(e) => {
+                eprintln!("Failed to decode PNG image for clipboard copy: {e}");
+                self.show_toast(&format!(
+                    "{} Failed to decode image for clipboard",
+                    icons::WARNING
+                ));
+            }
         }
     }
 
@@ -3161,6 +3166,7 @@ impl ClipboardApp {
 
                         if ui.add_sized([btn_width, btn_height], clear_btn).clicked() {
                             let _ = self.db.clear();
+                            let _ = self.db.vacuum();
                             self.texture_cache.clear();
                             self.refresh_items();
                             self.show_clear_confirm_dialog = false;
