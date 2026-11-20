@@ -19,8 +19,7 @@ if ! command -v sonar-scanner &>/dev/null; then
     fi
 fi
 
-exec $SCANNER_CMD \
-  -Dsonar.token="$TOKEN" \
+SONAR_TOKEN="$TOKEN" exec "$SCANNER_CMD" \
   -Dsonar.projectKey=BrunoO_clipboard \
   -Dsonar.organization=brunoo \
   "$@"

@@ -507,11 +507,16 @@ impl Database {
         };
 
         if let Some(search) = filter.filter(|s| !s.trim().is_empty()) {
-            let pattern = format!("%{}%", search.trim());
+            let escaped = search
+                .trim()
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            let pattern = format!("%{escaped}%");
             let mut stmt = conn.prepare(
                 "SELECT id, kind, content, image_data, width, height, created_at
                  FROM clipboard_history
-                 WHERE content LIKE ?1
+                 WHERE kind != 'secret' AND content LIKE ?1 ESCAPE '\\'
                  ORDER BY id DESC LIMIT ?2",
             )?;
             let mut rows = stmt.query(params![pattern, limit_i64])?;
@@ -955,5 +960,35 @@ mod tests {
                 "WAL file must be truncated to 0 bytes after clear()"
             );
         }
+    }
+
+    #[test]
+    fn test_search_escapes_wildcards_and_excludes_secrets() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("search_security_test.db");
+        let db = Database::open(&db_path, TEST_KEY).unwrap();
+
+        db.insert("100% pure rust").unwrap();
+        db.insert("snake_case_name").unwrap();
+        db.insert("plain hello world").unwrap();
+        db.insert_secret("my-top-secret-password-999").unwrap();
+
+        // '%' must match literally, not act as a wildcard matching all rows
+        let pct_hits = db.get_recent(10, Some("%")).unwrap();
+        assert_eq!(pct_hits.len(), 1);
+        assert_eq!(pct_hits[0].content, "100% pure rust");
+
+        // '_' must match literally, not act as a single-char wildcard
+        let underscore_hits = db.get_recent(10, Some("_")).unwrap();
+        assert_eq!(underscore_hits.len(), 1);
+        assert_eq!(underscore_hits[0].content, "snake_case_name");
+
+        // Masked secrets must not be probeable via search
+        let secret_hits = db.get_recent(10, Some("top-secret")).unwrap();
+        assert!(secret_hits.is_empty());
+
+        // Unfiltered query still returns the secret (so it appears in History/Secrets tab)
+        let all = db.get_recent(10, None).unwrap();
+        assert_eq!(all.len(), 4);
     }
 }

@@ -419,7 +419,7 @@ impl ClipboardApp {
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(
-                    "Your clipboard history is encrypted at rest using SQLCipher (256-bit AES-GCM).\nSettings and history are strictly stored on your local machine.",
+                    "Your clipboard history is encrypted at rest using SQLCipher (AES-256-CBC with HMAC-SHA512).\nSettings and history are strictly stored on your local machine.",
                 )
                 .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
@@ -514,9 +514,11 @@ impl ClipboardApp {
             );
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(
-                    "CipherClipboard v0.1.0\nA secure, platform-native clipboard manager with SQLCipher 256-bit AES encryption.",
-                )
+                egui::RichText::new(concat!(
+                    "CipherClipboard v",
+                    env!("CARGO_PKG_VERSION"),
+                    "\nA secure, platform-native clipboard manager with SQLCipher 256-bit AES encryption."
+                ))
                 .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );

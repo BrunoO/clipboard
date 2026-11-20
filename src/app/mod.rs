@@ -316,7 +316,8 @@ impl ClipboardApp {
                 "Auto-paste blocked: target app runs as Administrator",
             );
             self.pending_toast = Some(
-                "Auto-paste blocked: target app runs as Administrator. Paste manually or run CipherClipboard as Administrator.".to_string(),
+                "Auto-paste blocked: target app runs as Administrator. Paste manually (Ctrl+V)."
+                    .to_string(),
             );
         }
 
