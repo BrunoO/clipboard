@@ -1,7 +1,7 @@
 use super::{ClipboardApp, ContentFilter, ImageTextureCache};
 use crate::db::{ClipboardItem, ItemKind};
+use crate::icons;
 use eframe::egui;
-use egui_phosphor::regular as icons;
 
 pub(super) enum ItemAction {
     None,
@@ -54,7 +54,7 @@ impl ClipboardApp {
                         ContentFilter::Image => (icons::IMAGE, "No image entries found."),
                     };
                     ui.label(
-                        egui::RichText::new(empty_icon)
+                        icons::outlined(empty_icon)
                             .size(28.0)
                             .color(crate::theme::text_secondary(is_dark)),
                     );

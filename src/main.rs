@@ -7,6 +7,7 @@ mod color;
 mod crypto;
 mod db;
 mod hotkey;
+mod icons;
 mod instance;
 mod logging;
 mod media;
@@ -152,11 +153,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "CipherClipboard",
         native_options,
         Box::new(move |cc| {
-            // Register Phosphor icons and probe native system fonts (San Francisco, Segoe UI)
+            // Probe native system fonts (San Francisco, Segoe UI) and register Material icons (filled + outline)
             let mut fonts = egui::FontDefinitions::default();
-            egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
             theme::setup_fonts(&mut fonts);
             cc.egui_ctx.set_fonts(fonts);
+            egui_material_icons::initialize(&cc.egui_ctx);
 
             // Apply platform-adaptive HIG visuals (Dark or Light)
             let is_dark = settings.theme.resolve(&cc.egui_ctx);

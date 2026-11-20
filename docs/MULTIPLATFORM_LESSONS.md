@@ -56,5 +56,5 @@ Distilled from developing, hardening, and shipping CipherClipboard across **Wind
 ## 5. Cross-Platform CI, Clippy, & Ecosystem Upgrades
 
 - **Never assume Linux Clippy covers macOS/Windows `#[cfg]` blocks.** CI runs `cargo clippy --all-targets --all-features -- -D warnings` on Linux, macOS, and Windows. Inside target-gated code, avoid `items_after_statements`, `borrow_as_ptr` (prefer `&raw mut` / `&raw const` / `ptr::addr_of_mut!`), unchecked `as` casts (prefer `u32::try_from`), and manual nul-terminated byte strings (prefer `c"..."`).
-- **Upgrade the `egui` ecosystem as a coordinated trio.** `eframe`, `egui_extras`, and `egui-phosphor` must target the *same* `egui`/`epaint` minor version (otherwise `FontDefinitions` types mismatch). Always check `egui-phosphor`'s supported `egui` version before bumping `eframe`.
+- **Upgrade the `egui` ecosystem as a coordinated trio.** `eframe`, `egui_extras`, and `egui_material_icons` must target the *same* `egui`/`epaint` minor version (otherwise font/context types mismatch). Always check `egui_material_icons`'s supported `egui` version before bumping `eframe`.
 - **Keep `deny.toml` aligned with transitive dependencies.** Major UI/DB upgrades can both resolve old advisories (triggering `advisory-not-detected` warnings) and introduce new permissive font licenses (e.g., `Ubuntu-font-1.0` in `epaint_default_fonts`).

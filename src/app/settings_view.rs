@@ -1,7 +1,7 @@
 use super::{ActiveView, ClipboardApp};
+use crate::icons;
 use crate::settings::HotkeyPreset;
 use eframe::egui;
-use egui_phosphor::regular as icons;
 
 impl ClipboardApp {
     pub(super) fn render_settings_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
