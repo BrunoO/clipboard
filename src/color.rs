@@ -231,7 +231,7 @@ fn parse_hex_color(text: &str) -> Option<ParsedColor> {
     }
 }
 
-fn parse_rgb_function(text: &str) -> Option<ParsedColor> {
+fn split_color_function_parts(text: &str) -> Option<Vec<String>> {
     let start = text.find('(')?;
     let end = text.rfind(')')?;
     if end <= start {
@@ -241,17 +241,23 @@ fn parse_rgb_function(text: &str) -> Option<ParsedColor> {
     let inner = &text[start + 1..end];
     // Normalize commas, slashes, and spaces
     let normalized = inner.replace([',', '/'], " ");
-    let parts: Vec<&str> = normalized.split_whitespace().collect();
+    let parts: Vec<String> = normalized.split_whitespace().map(str::to_owned).collect();
 
     if parts.len() < 3 || parts.len() > 4 {
         return None;
     }
 
-    let r = parse_rgb_component(parts[0])?;
-    let g = parse_rgb_component(parts[1])?;
-    let b = parse_rgb_component(parts[2])?;
+    Some(parts)
+}
+
+fn parse_rgb_function(text: &str) -> Option<ParsedColor> {
+    let parts = split_color_function_parts(text)?;
+
+    let r = parse_rgb_component(&parts[0])?;
+    let g = parse_rgb_component(&parts[1])?;
+    let b = parse_rgb_component(&parts[2])?;
     let a = if parts.len() == 4 {
-        parse_alpha_component(parts[3])?
+        parse_alpha_component(&parts[3])?
     } else {
         255
     };
@@ -259,14 +265,18 @@ fn parse_rgb_function(text: &str) -> Option<ParsedColor> {
     Some(ParsedColor::rgba(r, g, b, a))
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn parse_percent_to_byte(percent_str: &str) -> Option<u8> {
+    let pct: f32 = percent_str.parse().ok()?;
+    if (0.0..=100.0).contains(&pct) {
+        return Some((pct * 2.55).round().clamp(0.0, 255.0) as u8);
+    }
+    None
+}
+
 fn parse_rgb_component(part: &str) -> Option<u8> {
     if let Some(percent_str) = part.strip_suffix('%') {
-        let pct: f32 = percent_str.parse().ok()?;
-        if (0.0..=100.0).contains(&pct) {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            return Some((pct * 2.55).round().clamp(0.0, 255.0) as u8);
-        }
-        return None;
+        return parse_percent_to_byte(percent_str);
     }
     let val: f32 = part.parse().ok()?;
     if (0.0..=255.0).contains(&val) {
@@ -278,12 +288,7 @@ fn parse_rgb_component(part: &str) -> Option<u8> {
 
 fn parse_alpha_component(part: &str) -> Option<u8> {
     if let Some(percent_str) = part.strip_suffix('%') {
-        let pct: f32 = percent_str.parse().ok()?;
-        if (0.0..=100.0).contains(&pct) {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            return Some((pct * 2.55).round().clamp(0.0, 255.0) as u8);
-        }
-        return None;
+        return parse_percent_to_byte(percent_str);
     }
     let val: f32 = part.parse().ok()?;
     if (0.0..=1.0).contains(&val) {
@@ -299,24 +304,12 @@ fn parse_alpha_component(part: &str) -> Option<u8> {
 
 #[allow(clippy::many_single_char_names)]
 fn parse_hsl_function(text: &str) -> Option<ParsedColor> {
-    let start = text.find('(')?;
-    let end = text.rfind(')')?;
-    if end <= start {
-        return None;
-    }
-
-    let inner = &text[start + 1..end];
-    let normalized = inner.replace([',', '/'], " ");
-    let parts: Vec<&str> = normalized.split_whitespace().collect();
-
-    if parts.len() < 3 || parts.len() > 4 {
-        return None;
-    }
+    let parts = split_color_function_parts(text)?;
 
     let h_str = parts[0]
         .strip_suffix("deg")
         .or_else(|| parts[0].strip_suffix("grad"))
-        .unwrap_or(parts[0]);
+        .unwrap_or(&parts[0]);
     let h: f32 = h_str.parse().ok()?;
     let h_norm = h.rem_euclid(360.0);
 
@@ -335,7 +328,7 @@ fn parse_hsl_function(text: &str) -> Option<ParsedColor> {
     let l_norm = l / 100.0;
 
     let a = if parts.len() == 4 {
-        parse_alpha_component(parts[3])?
+        parse_alpha_component(&parts[3])?
     } else {
         255
     };

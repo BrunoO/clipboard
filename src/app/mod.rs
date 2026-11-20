@@ -1159,13 +1159,10 @@ impl ClipboardApp {
             .collect()
     }
 
-    fn render_clear_confirm_modal(&mut self, ctx: &egui::Context, is_dark: bool) {
-        if !self.show_clear_confirm_dialog {
-            return;
-        }
-
+    fn render_modal_backdrop(ctx: &egui::Context, id: &'static str) -> bool {
         let screen_rect = ctx.content_rect();
-        egui::Area::new(egui::Id::new("clear_confirm_backdrop"))
+        let mut clicked = false;
+        egui::Area::new(egui::Id::new(id))
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)
             .show(ctx, |ui| {
@@ -1175,78 +1172,105 @@ impl ClipboardApp {
                     0.0_f32,
                     egui::Color32::from_black_alpha(150),
                 );
-                if response.clicked() {
-                    self.show_clear_confirm_dialog = false;
-                }
+                clicked = response.clicked();
             });
+        clicked
+    }
 
-        let mut open = self.show_clear_confirm_dialog;
-        egui::Window::new(format!("{} Clear History?", icons::WARNING))
-            .open(&mut open)
+    fn modal_window<'a>(
+        title: String,
+        open: &'a mut bool,
+        ctx: &egui::Context,
+        is_dark: bool,
+        default_width: f32,
+        max_width: f32,
+    ) -> egui::Window<'a> {
+        egui::Window::new(title)
+            .open(open)
             .collapsible(false)
             .resizable(false)
             .movable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0_f32, 0.0_f32))
             .order(egui::Order::Foreground)
-            .default_width(300.0_f32)
-            .max_width(320.0_f32)
+            .default_width(default_width)
+            .max_width(max_width)
             .frame(
                 egui::Frame::window(&ctx.global_style())
                     .inner_margin(egui::Margin::symmetric(16, 14))
                     .corner_radius(crate::theme::card_rounding())
                     .stroke(crate::theme::card_stroke(is_dark, false)),
             )
-            .show(ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(4.0_f32);
-                    ui.label(
-                        egui::RichText::new("Clear all clipboard history?")
-                            .color(crate::theme::text_primary(is_dark))
-                            .strong()
-                            .size(15.0_f32),
-                    );
-                    ui.add_space(8.0_f32);
-                    ui.label(
-                        egui::RichText::new(
-                            "This action cannot be undone. All saved clips, URLs, code snippets, and images will be permanently erased.",
-                        )
-                        .size(12.0_f32)
-                        .color(crate::theme::text_secondary(is_dark)),
-                    );
-                    ui.add_space(16.0_f32);
+    }
 
-                    ui.horizontal(|ui| {
-                        let btn_width = 110.0_f32;
-                        let btn_height = 28.0_f32;
-                        let available_width = ui.available_width();
-                        let spacing =
-                            btn_width.mul_add(-2.0_f32, available_width).max(0.0_f32) / 2.0_f32;
-                        ui.add_space(spacing);
+    fn render_clear_confirm_modal(&mut self, ctx: &egui::Context, is_dark: bool) {
+        if !self.show_clear_confirm_dialog {
+            return;
+        }
 
-                        if ui
-                            .add_sized([btn_width, btn_height], egui::Button::new("Cancel"))
-                            .clicked()
-                        {
-                            self.show_clear_confirm_dialog = false;
-                        }
+        if Self::render_modal_backdrop(ctx, "clear_confirm_backdrop") {
+            self.show_clear_confirm_dialog = false;
+        }
 
-                        let clear_btn = egui::Button::new(
-                            egui::RichText::new(format!("{} Clear All", icons::TRASH))
-                                .color(egui::Color32::WHITE),
-                        )
-                        .fill(egui::Color32::from_rgb(220, 53, 69));
+        let mut open = self.show_clear_confirm_dialog;
+        Self::modal_window(
+            format!("{} Clear History?", icons::WARNING),
+            &mut open,
+            ctx,
+            is_dark,
+            300.0_f32,
+            320.0_f32,
+        )
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(4.0_f32);
+                ui.label(
+                    egui::RichText::new("Clear all clipboard history?")
+                        .color(crate::theme::text_primary(is_dark))
+                        .strong()
+                        .size(15.0_f32),
+                );
+                ui.add_space(8.0_f32);
+                ui.label(
+                    egui::RichText::new(
+                        "This action cannot be undone. All saved clips, URLs, code snippets, and images will be permanently erased.",
+                    )
+                    .size(12.0_f32)
+                    .color(crate::theme::text_secondary(is_dark)),
+                );
+                ui.add_space(16.0_f32);
 
-                        if ui.add_sized([btn_width, btn_height], clear_btn).clicked() {
-                            let _ = self.db.clear();
-                            self.texture_cache.clear();
-                            self.refresh_items();
-                            self.show_clear_confirm_dialog = false;
-                            self.show_toast(&format!("{} History cleared.", icons::CHECK));
-                        }
-                    });
-                    ui.add_space(4.0_f32);
+                ui.horizontal(|ui| {
+                    let btn_width = 110.0_f32;
+                    let btn_height = 28.0_f32;
+                    let available_width = ui.available_width();
+                    let spacing =
+                        btn_width.mul_add(-2.0_f32, available_width).max(0.0_f32) / 2.0_f32;
+                    ui.add_space(spacing);
+
+                    if ui
+                        .add_sized([btn_width, btn_height], egui::Button::new("Cancel"))
+                        .clicked()
+                    {
+                        self.show_clear_confirm_dialog = false;
+                    }
+
+                    let clear_btn = egui::Button::new(
+                        egui::RichText::new(format!("{} Clear All", icons::TRASH))
+                            .color(egui::Color32::WHITE),
+                    )
+                    .fill(egui::Color32::from_rgb(220, 53, 69));
+
+                    if ui.add_sized([btn_width, btn_height], clear_btn).clicked() {
+                        let _ = self.db.clear();
+                        self.texture_cache.clear();
+                        self.refresh_items();
+                        self.show_clear_confirm_dialog = false;
+                        self.show_toast(&format!("{} History cleared.", icons::CHECK));
+                    }
                 });
+                ui.add_space(4.0_f32);
             });
+        });
 
         if !open {
             self.show_clear_confirm_dialog = false;
@@ -1258,88 +1282,69 @@ impl ClipboardApp {
             return;
         }
 
-        let screen_rect = ctx.content_rect();
-        egui::Area::new(egui::Id::new("keyring_explanation_backdrop"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(screen_rect.min)
-            .show(ctx, |ui| {
-                let response = ui.allocate_response(screen_rect.size(), egui::Sense::click());
-                ui.painter().rect_filled(
-                    screen_rect,
-                    0.0_f32,
-                    egui::Color32::from_black_alpha(150),
-                );
-                if response.clicked() {
-                    // Allow dismissing by clicking the backdrop.
-                    self.show_keyring_explanation = false;
-                    self.settings.keyring_explanation_shown = true;
-                    let _ = self.settings.save(&self.db);
-                }
-            });
+        if Self::render_modal_backdrop(ctx, "keyring_explanation_backdrop") {
+            // Allow dismissing by clicking the backdrop.
+            self.show_keyring_explanation = false;
+            self.settings.keyring_explanation_shown = true;
+            let _ = self.settings.save(&self.db);
+        }
 
         let mut open = self.show_keyring_explanation;
-        egui::Window::new(format!("{} Secure Key Storage", icons::SHIELD_CHECK))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .movable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0_f32, 0.0_f32))
-            .order(egui::Order::Foreground)
-            .default_width(360.0_f32)
-            .max_width(400.0_f32)
-            .frame(
-                egui::Frame::window(&ctx.global_style())
-                    .inner_margin(egui::Margin::symmetric(16, 14))
-                    .corner_radius(crate::theme::card_rounding())
-                    .stroke(crate::theme::card_stroke(is_dark, false)),
-            )
-            .show(ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(4.0_f32);
-                    ui.label(
-                        egui::RichText::new("CipherClipboard uses your OS keyring")
-                            .color(crate::theme::text_primary(is_dark))
-                            .strong()
-                            .size(15.0_f32),
-                    );
-                    ui.add_space(8.0_f32);
-                    ui.label(
-                        egui::RichText::new(
-                            "To keep your clipboard history encrypted, CipherClipboard stores a \
-                             256-bit encryption key in your operating system's secure credential \
-                             store (macOS Keychain, Windows Credential Manager, or Linux Secret \
-                             Service). You may see an OS permission prompt the first time this \
-                             happens. This prompt will not appear again unless you reinstall or \
-                             reset the app.",
+        Self::modal_window(
+            format!("{} Secure Key Storage", icons::SHIELD_CHECK),
+            &mut open,
+            ctx,
+            is_dark,
+            360.0_f32,
+            400.0_f32,
+        )
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(4.0_f32);
+                ui.label(
+                    egui::RichText::new("CipherClipboard uses your OS keyring")
+                        .color(crate::theme::text_primary(is_dark))
+                        .strong()
+                        .size(15.0_f32),
+                );
+                ui.add_space(8.0_f32);
+                ui.label(
+                    egui::RichText::new(
+                        "To keep your clipboard history encrypted, CipherClipboard stores a \
+                         256-bit encryption key in your operating system's secure credential \
+                         store (macOS Keychain, Windows Credential Manager, or Linux Secret \
+                         Service). You may see an OS permission prompt the first time this \
+                         happens. This prompt will not appear again unless you reinstall or \
+                         reset the app.",
+                    )
+                    .size(12.0_f32)
+                    .color(crate::theme::text_secondary(is_dark)),
+                );
+                ui.add_space(16.0_f32);
+
+                ui.horizontal(|ui| {
+                    let btn_width = 120.0_f32;
+                    let btn_height = 28.0_f32;
+                    let available_width = ui.available_width();
+                    let spacing =
+                        btn_width.mul_add(-1.0_f32, available_width).max(0.0_f32) / 2.0_f32;
+                    ui.add_space(spacing);
+
+                    if ui
+                        .add_sized(
+                            [btn_width, btn_height],
+                            egui::Button::new(format!("{} Got it", icons::CHECK)),
                         )
-                        .size(12.0_f32)
-                        .color(crate::theme::text_secondary(is_dark)),
-                    );
-                    ui.add_space(16.0_f32);
-
-                    ui.horizontal(|ui| {
-                        let btn_width = 120.0_f32;
-                        let btn_height = 28.0_f32;
-                        let available_width = ui.available_width();
-                        let spacing =
-                            btn_width.mul_add(-1.0_f32, available_width).max(0.0_f32) / 2.0_f32;
-                        ui.add_space(spacing);
-
-                        if ui
-                            .add_sized(
-                                [btn_width, btn_height],
-                                egui::Button::new(format!("{} Got it", icons::CHECK)),
-                            )
-                            .clicked()
-                        {
-                            self.show_keyring_explanation = false;
-                            self.settings.keyring_explanation_shown = true;
-                            let _ = self.settings.save(&self.db);
-                        }
-                    });
-                    ui.add_space(4.0_f32);
+                        .clicked()
+                    {
+                        self.show_keyring_explanation = false;
+                        self.settings.keyring_explanation_shown = true;
+                        let _ = self.settings.save(&self.db);
+                    }
                 });
+                ui.add_space(4.0_f32);
             });
+        });
 
         if !open {
             self.show_keyring_explanation = false;

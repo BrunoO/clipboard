@@ -140,38 +140,56 @@ pub(crate) fn setup_fonts(fonts: &mut FontDefinitions) {
 // Platform-Adaptive Color Palette (Dark & Light)
 // ---------------------------------------------------------------------------
 
-/// Primary window and panel background color.
-#[must_use]
-pub(crate) const fn panel_background(is_dark: bool) -> Color32 {
+const fn themed_platform_color(
+    is_dark: bool,
+    dark: (Color32, Color32, Color32),
+    light: (Color32, Color32, Color32),
+) -> Color32 {
     if is_dark {
         #[cfg(target_os = "macos")]
         {
-            Color32::from_rgb(30, 30, 30)
+            dark.0
         }
         #[cfg(target_os = "windows")]
         {
-            Color32::from_rgb(32, 32, 32)
+            dark.1
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Color32::from_rgb(36, 36, 36)
+            dark.2
         }
     } else {
         #[cfg(target_os = "macos")]
         {
-            // Apple System Grouped Background Light (#F2F2F7)
-            Color32::from_rgb(242, 242, 247)
+            light.0
         }
         #[cfg(target_os = "windows")]
         {
-            // Windows 11 Light Background (#F3F3F3)
-            Color32::from_rgb(243, 243, 243)
+            light.1
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Color32::from_rgb(246, 246, 246)
+            light.2
         }
     }
+}
+
+/// Primary window and panel background color.
+#[must_use]
+pub(crate) const fn panel_background(is_dark: bool) -> Color32 {
+    themed_platform_color(
+        is_dark,
+        (
+            Color32::from_rgb(30, 30, 30),
+            Color32::from_rgb(32, 32, 32),
+            Color32::from_rgb(36, 36, 36),
+        ),
+        (
+            Color32::from_rgb(242, 242, 247), // Apple System Grouped Background Light (#F2F2F7)
+            Color32::from_rgb(243, 243, 243), // Windows 11 Light Background (#F3F3F3)
+            Color32::from_rgb(246, 246, 246),
+        ),
+    )
 }
 
 /// Background fill for item cards.
@@ -262,33 +280,19 @@ pub(crate) fn card_stroke(is_dark: bool, is_selected: bool) -> Stroke {
 /// Selection background fill for egui visuals.
 #[must_use]
 pub(crate) const fn selection_fill(is_dark: bool) -> Color32 {
-    if is_dark {
-        #[cfg(target_os = "macos")]
-        {
-            Color32::from_rgb(10, 132, 255)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Color32::from_rgb(0, 120, 212)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Color32::from_rgb(53, 132, 228)
-        }
-    } else {
-        #[cfg(target_os = "macos")]
-        {
-            Color32::from_rgb(0, 122, 255)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Color32::from_rgb(0, 103, 184)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Color32::from_rgb(40, 110, 200)
-        }
-    }
+    themed_platform_color(
+        is_dark,
+        (
+            Color32::from_rgb(10, 132, 255),
+            Color32::from_rgb(0, 120, 212),
+            Color32::from_rgb(53, 132, 228),
+        ),
+        (
+            Color32::from_rgb(0, 122, 255),
+            Color32::from_rgb(0, 103, 184),
+            Color32::from_rgb(40, 110, 200),
+        ),
+    )
 }
 
 /// Selection stroke for egui visuals.
@@ -300,66 +304,37 @@ pub(crate) fn selection_stroke(is_dark: bool) -> Stroke {
 /// Primary accent color.
 #[must_use]
 pub(crate) const fn accent_color(is_dark: bool) -> Color32 {
-    if is_dark {
-        #[cfg(target_os = "macos")]
-        {
-            Color32::from_rgb(10, 132, 255)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Color32::from_rgb(0, 120, 212)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Color32::from_rgb(53, 132, 228)
-        }
-    } else {
-        #[cfg(target_os = "macos")]
-        {
-            Color32::from_rgb(0, 122, 255)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Color32::from_rgb(0, 103, 184)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Color32::from_rgb(40, 110, 200)
-        }
-    }
+    themed_platform_color(
+        is_dark,
+        (
+            Color32::from_rgb(10, 132, 255),
+            Color32::from_rgb(0, 120, 212),
+            Color32::from_rgb(53, 132, 228),
+        ),
+        (
+            Color32::from_rgb(0, 122, 255),
+            Color32::from_rgb(0, 103, 184),
+            Color32::from_rgb(40, 110, 200),
+        ),
+    )
 }
 
 /// Search box background color (Spotlight-style on macOS, Fluent on Windows).
 #[must_use]
 pub(crate) const fn search_bg(is_dark: bool) -> Color32 {
-    if is_dark {
-        #[cfg(target_os = "macos")]
-        {
-            Color32::from_rgb(34, 34, 36)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Color32::from_rgb(45, 45, 45)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Color32::from_rgb(42, 42, 44)
-        }
-    } else {
-        #[cfg(target_os = "macos")]
-        {
-            // Apple Spotlight light input fill (#E3E3E8)
-            Color32::from_rgb(227, 227, 232)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Color32::from_rgb(238, 238, 238)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Color32::from_rgb(234, 234, 238)
-        }
-    }
+    themed_platform_color(
+        is_dark,
+        (
+            Color32::from_rgb(34, 34, 36),
+            Color32::from_rgb(45, 45, 45),
+            Color32::from_rgb(42, 42, 44),
+        ),
+        (
+            Color32::from_rgb(227, 227, 232), // Apple Spotlight light input fill (#E3E3E8)
+            Color32::from_rgb(238, 238, 238),
+            Color32::from_rgb(234, 234, 238),
+        ),
+    )
 }
 
 /// Search box border stroke.
@@ -658,72 +633,85 @@ pub(crate) const fn category_pill_colors(
     is_dark: bool,
     kind: crate::db::ItemKind,
 ) -> (Color32, Color32, Color32) {
-    if is_dark {
-        match kind {
-            crate::db::ItemKind::Text => (
+    let (dark, light) = match kind {
+        crate::db::ItemKind::Text => (
+            (
                 Color32::from_rgb(220, 220, 225),
                 Color32::from_rgb(45, 45, 48),
                 Color32::from_rgb(70, 70, 74),
             ),
-            crate::db::ItemKind::Url => (
-                Color32::from_rgb(100, 190, 255),
-                Color32::from_rgb(18, 44, 75),
-                Color32::from_rgb(30, 90, 160),
-            ),
-            crate::db::ItemKind::Code => (
-                Color32::from_rgb(255, 130, 120),
-                Color32::from_rgb(58, 26, 26),
-                Color32::from_rgb(130, 48, 48),
-            ),
-            crate::db::ItemKind::Color => (
-                Color32::from_rgb(220, 150, 255),
-                Color32::from_rgb(46, 24, 58),
-                Color32::from_rgb(110, 50, 140),
-            ),
-            crate::db::ItemKind::Image => (
-                Color32::from_rgb(110, 230, 145),
-                Color32::from_rgb(20, 48, 30),
-                Color32::from_rgb(40, 110, 65),
-            ),
-            crate::db::ItemKind::Secret => (
-                Color32::from_rgb(255, 200, 95),
-                Color32::from_rgb(56, 38, 12),
-                Color32::from_rgb(130, 88, 24),
-            ),
-        }
-    } else {
-        match kind {
-            crate::db::ItemKind::Text => (
+            (
                 Color32::from_rgb(50, 50, 54),
                 Color32::from_rgb(235, 235, 238),
                 Color32::from_rgb(205, 205, 212),
             ),
-            crate::db::ItemKind::Url => (
+        ),
+        crate::db::ItemKind::Url => (
+            (
+                Color32::from_rgb(100, 190, 255),
+                Color32::from_rgb(18, 44, 75),
+                Color32::from_rgb(30, 90, 160),
+            ),
+            (
                 Color32::from_rgb(0, 85, 180),
                 Color32::from_rgb(225, 240, 255),
                 Color32::from_rgb(170, 210, 255),
             ),
-            crate::db::ItemKind::Code => (
+        ),
+        crate::db::ItemKind::Code => (
+            (
+                Color32::from_rgb(255, 130, 120),
+                Color32::from_rgb(58, 26, 26),
+                Color32::from_rgb(130, 48, 48),
+            ),
+            (
                 Color32::from_rgb(180, 25, 25),
                 Color32::from_rgb(255, 235, 235),
                 Color32::from_rgb(250, 185, 180),
             ),
-            crate::db::ItemKind::Color => (
+        ),
+        crate::db::ItemKind::Color => (
+            (
+                Color32::from_rgb(220, 150, 255),
+                Color32::from_rgb(46, 24, 58),
+                Color32::from_rgb(110, 50, 140),
+            ),
+            (
                 Color32::from_rgb(125, 35, 155),
                 Color32::from_rgb(245, 235, 250),
                 Color32::from_rgb(220, 185, 240),
             ),
-            crate::db::ItemKind::Image => (
+        ),
+        crate::db::ItemKind::Image => (
+            (
+                Color32::from_rgb(110, 230, 145),
+                Color32::from_rgb(20, 48, 30),
+                Color32::from_rgb(40, 110, 65),
+            ),
+            (
                 Color32::from_rgb(18, 115, 45),
                 Color32::from_rgb(230, 248, 235),
                 Color32::from_rgb(170, 230, 190),
             ),
-            crate::db::ItemKind::Secret => (
+        ),
+        crate::db::ItemKind::Secret => (
+            (
+                Color32::from_rgb(255, 200, 95),
+                Color32::from_rgb(56, 38, 12),
+                Color32::from_rgb(130, 88, 24),
+            ),
+            (
                 Color32::from_rgb(145, 80, 0),
                 Color32::from_rgb(255, 244, 224),
                 Color32::from_rgb(235, 195, 130),
             ),
-        }
+        ),
+    };
+
+    if is_dark {
+        dark
+    } else {
+        light
     }
 }
 

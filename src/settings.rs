@@ -23,29 +23,44 @@ pub(crate) enum HotkeyPreset {
 }
 
 impl HotkeyPreset {
+    /// Returns `(display_macos, display_other, badge_macos, badge_other)`.
+    const fn platform_labels(self) -> (&'static str, &'static str, &'static str, &'static str) {
+        match self {
+            Self::Universal => (
+                "Cmd + Shift + V (Universal recommended)",
+                "Ctrl + Shift + V (Universal recommended)",
+                "Cmd+Shift+V",
+                "Ctrl+Shift+V",
+            ),
+            Self::AzertyQuote => (
+                "Cmd + ù (French AZERTY)",
+                "Ctrl + ù (French AZERTY)",
+                "Cmd+ù",
+                "Ctrl+ù",
+            ),
+            Self::CtrlShiftC => (
+                "Cmd + Shift + C",
+                "Ctrl + Shift + C",
+                "Cmd+Shift+C",
+                "Ctrl+Shift+C",
+            ),
+            Self::AltSpace => ("Option + Space", "Alt + Space", "Option+Space", "Alt+Space"),
+            Self::CtrlSpace => ("Cmd + Space", "Ctrl + Space", "Cmd+Space", "Ctrl+Space"),
+            Self::None => ("Disabled", "Disabled", "Disabled", "Disabled"),
+            Self::Custom => ("Custom…", "Custom…", "Custom", "Custom"),
+        }
+    }
+
     /// Human-readable label for settings UI.
     #[must_use]
     pub(crate) const fn display_name(self) -> &'static str {
         #[cfg(target_os = "macos")]
-        match self {
-            Self::Universal => "Cmd + Shift + V (Universal recommended)",
-            Self::AzertyQuote => "Cmd + ù (French AZERTY)",
-            Self::CtrlShiftC => "Cmd + Shift + C",
-            Self::AltSpace => "Option + Space",
-            Self::CtrlSpace => "Cmd + Space",
-            Self::None => "Disabled",
-            Self::Custom => "Custom…",
+        {
+            self.platform_labels().0
         }
-
         #[cfg(not(target_os = "macos"))]
-        match self {
-            Self::Universal => "Ctrl + Shift + V (Universal recommended)",
-            Self::AzertyQuote => "Ctrl + ù (French AZERTY)",
-            Self::CtrlShiftC => "Ctrl + Shift + C",
-            Self::AltSpace => "Alt + Space",
-            Self::CtrlSpace => "Ctrl + Space",
-            Self::None => "Disabled",
-            Self::Custom => "Custom…",
+        {
+            self.platform_labels().1
         }
     }
 
@@ -53,25 +68,12 @@ impl HotkeyPreset {
     #[must_use]
     pub(crate) const fn badge(self) -> &'static str {
         #[cfg(target_os = "macos")]
-        match self {
-            Self::Universal => "Cmd+Shift+V",
-            Self::AzertyQuote => "Cmd+ù",
-            Self::CtrlShiftC => "Cmd+Shift+C",
-            Self::AltSpace => "Option+Space",
-            Self::CtrlSpace => "Cmd+Space",
-            Self::None => "Disabled",
-            Self::Custom => "Custom",
+        {
+            self.platform_labels().2
         }
-
         #[cfg(not(target_os = "macos"))]
-        match self {
-            Self::Universal => "Ctrl+Shift+V",
-            Self::AzertyQuote => "Ctrl+ù",
-            Self::CtrlShiftC => "Ctrl+Shift+C",
-            Self::AltSpace => "Alt+Space",
-            Self::CtrlSpace => "Ctrl+Space",
-            Self::None => "Disabled",
-            Self::Custom => "Custom",
+        {
+            self.platform_labels().3
         }
     }
 
