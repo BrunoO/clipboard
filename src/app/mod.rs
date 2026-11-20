@@ -919,12 +919,7 @@ impl ClipboardApp {
                     "Secrets",
                     counts.secrets,
                 ),
-                (
-                    ContentFilter::Image,
-                    icons::IMAGE,
-                    "Images",
-                    counts.images,
-                ),
+                (ContentFilter::Image, icons::IMAGE, "Images", counts.images),
             ];
 
             for (target, icon, label, count) in tabs {
@@ -1378,38 +1373,23 @@ impl ClipboardApp {
 }
 
 impl eframe::App for ClipboardApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-        let is_dark = self.is_dark(&ctx);
-        if self.current_is_dark != Some(is_dark) {
-            crate::theme::setup_theme(&ctx, is_dark);
-            self.current_is_dark = Some(is_dark);
-        }
-        if self.title_bar_dark_mode != Some(is_dark) {
-            crate::platform::windows_set_title_bar_dark_mode(is_dark);
-            self.title_bar_dark_mode = Some(is_dark);
-        }
-
-        self.handle_window_close_request(&ctx);
-        self.handle_tray_events(&ctx);
-        self.handle_quit_shortcut(&ctx);
-        self.handle_hotkey_toggle(&ctx);
-        self.handle_escape_key(&ctx);
-        self.handle_keyboard_navigation(&ctx);
-        self.handle_app_activation(&ctx);
+    /// Runs before every `ui()` frame AND while the window is hidden (`Visible(false)`).
+    /// In `eframe` 0.36+, `ui()` is skipped while the root viewport is invisible, so
+    /// all wake-up, tray, hotkey, activation/reopen, monitor, and auto-clear handlers
+    /// MUST live in `logic()`.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_window_close_request(ctx);
+        self.handle_tray_events(ctx);
+        self.handle_hotkey_toggle(ctx);
+        self.handle_app_activation(ctx);
         self.handle_monitor_updates();
         self.handle_clipboard_auto_clear();
-
-        // Show keyring explanation dialog on first run (informational)
-        if !self.settings.keyring_explanation_shown && !self.show_keyring_explanation {
-            self.show_keyring_explanation = true;
-        }
 
         if !self.is_visible {
             // Keep the event loop alive with a gentle 50ms tick while hidden.
             // When a window is set to Visible(false), OS compositors (Windows DWM,
             // macOS WindowServer, X11) suppress redraw events, which can cause
-            // request_repaint() from the background hotkey thread to stall.
+            // request_repaint() from background threads to stall.
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
             return;
         }
@@ -1422,6 +1402,32 @@ impl eframe::App for ClipboardApp {
 
         if self.pending_clipboard_clear.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let is_dark = self.is_dark(&ctx);
+        if self.current_is_dark != Some(is_dark) {
+            crate::theme::setup_theme(&ctx, is_dark);
+            self.current_is_dark = Some(is_dark);
+        }
+        if self.title_bar_dark_mode != Some(is_dark) {
+            crate::platform::windows_set_title_bar_dark_mode(is_dark);
+            self.title_bar_dark_mode = Some(is_dark);
+        }
+
+        self.handle_quit_shortcut(&ctx);
+        self.handle_escape_key(&ctx);
+        self.handle_keyboard_navigation(&ctx);
+
+        // Show keyring explanation dialog on first run (informational)
+        if !self.settings.keyring_explanation_shown && !self.show_keyring_explanation {
+            self.show_keyring_explanation = true;
+        }
+
+        if !self.is_visible {
+            return;
         }
 
         self.render_top_panel(ui, is_dark);
