@@ -40,11 +40,11 @@ impl CodeLanguage {
             | Self::Python
             | Self::JavaScript
             | Self::TypeScript
-            | Self::Html => egui_phosphor::regular::CODE,
-            Self::Json => egui_phosphor::regular::BRACKETS_CURLY,
-            Self::Sql => egui_phosphor::regular::DATABASE,
-            Self::Shell => egui_phosphor::regular::TERMINAL,
-            Self::Toml | Self::Yaml => egui_phosphor::regular::FILE_TEXT,
+            | Self::Html => crate::icons::CODE,
+            Self::Json => crate::icons::BRACKETS_CURLY,
+            Self::Sql => crate::icons::DATABASE,
+            Self::Shell => crate::icons::TERMINAL,
+            Self::Toml | Self::Yaml => crate::icons::FILE_TEXT,
         }
     }
 

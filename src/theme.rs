@@ -84,7 +84,7 @@ fn windows_font_candidates(windir: Option<&str>) -> Vec<std::path::PathBuf> {
 
 /// Probes for native system fonts (San Francisco on macOS, Segoe UI on Windows, `DejaVu` Sans on Linux)
 /// and registers them into `FontDefinitions` as the primary proportional font family,
-/// while keeping Phosphor icon glyphs as fallbacks.
+/// while keeping Material Symbols icon glyphs as fallbacks.
 pub(crate) fn setup_fonts(fonts: &mut FontDefinitions) {
     #[cfg(target_os = "macos")]
     let candidate_fonts: Vec<std::path::PathBuf> = [
@@ -654,12 +654,9 @@ pub(crate) fn render_pill_tag(
         .stroke(Stroke::new(1.0_f32, border_color))
         .inner_margin(egui::Margin::symmetric(7, 2))
         .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(format!("{icon} {text}"))
-                    .size(10.0_f32)
-                    .color(text_color)
-                    .strong(),
-            );
+            ui.label(crate::icons::label_job(
+                icon, false, text, 10.0_f32, text_color,
+            ));
         });
 }
 
@@ -703,13 +700,10 @@ pub(crate) fn render_segmented_tab(
         )
     };
 
-    let text = format!("{icon} {label} ({count})");
-    let button = egui::Button::new(
-        egui::RichText::new(text)
-            .size(11.0_f32)
-            .color(text_color)
-            .strong(),
-    )
+    let text = format!("{label} ({count})");
+    let button = egui::Button::new(crate::icons::label_job(
+        icon, selected, &text, 11.0_f32, text_color,
+    ))
     .fill(fill)
     .stroke(stroke)
     .corner_radius(pill_rounding());

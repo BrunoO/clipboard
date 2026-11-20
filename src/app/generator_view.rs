@@ -1,6 +1,6 @@
 use super::{ActiveView, ClipboardApp};
+use crate::icons;
 use eframe::egui;
-use egui_phosphor::regular as icons;
 
 impl ClipboardApp {
     fn save_generator_preferences(&mut self) {

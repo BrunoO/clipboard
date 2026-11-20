@@ -6,13 +6,13 @@ use history_view::ItemAction;
 
 use crate::db::{ClipboardItem, Database, ItemKind};
 use crate::hotkey::HotkeyService;
+use crate::icons;
 use crate::media;
 use crate::platform;
 use crate::settings::{AppSettings, HotkeyPreset};
 use crate::tray::{TrayAction, TrayService};
 use arboard::Clipboard;
 use eframe::egui;
-use egui_phosphor::regular as icons;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -1180,7 +1180,7 @@ impl ClipboardApp {
     fn render_modal_backdrop(ctx: &egui::Context, id: &'static str) -> bool {
         let screen_rect = ctx.content_rect();
         let mut clicked = false;
-        egui::Area::new(egui::Id::new(id))
+        egui::Area::new(egui::Id::unique(id))
             .order(egui::Order::Foreground)
             .fixed_pos(screen_rect.min)
             .show(ctx, |ui| {
@@ -1674,14 +1674,14 @@ fn egui_key_to_hotkey_name(key: egui::Key) -> Option<&'static str> {
 fn render_view_toggle_button(
     ui: &mut egui::Ui,
     is_active: bool,
-    inactive_icon: &str,
+    inactive_icon: &'static str,
     inactive_tooltip: &str,
 ) -> bool {
     let response = if is_active {
         ui.small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
             .on_hover_text("Back to clipboard history")
     } else {
-        ui.small_button(inactive_icon)
+        ui.small_button(icons::outlined(inactive_icon))
             .on_hover_text(inactive_tooltip)
     };
     response.clicked()
