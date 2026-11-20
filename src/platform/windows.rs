@@ -308,7 +308,7 @@ pub(super) fn is_target_foreground() -> bool {
     }
 }
 
-pub(super) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
+pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
     struct SearchCtx {
         expected_pid: Option<u32>,
         found: Hwnd,
@@ -363,7 +363,7 @@ pub(super) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
     }
 }
 
-pub(super) fn show_error_dialog(message: &str) {
+pub(crate) fn show_error_dialog(message: &str) {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
@@ -713,7 +713,7 @@ unsafe fn captured_target_pid() -> u32 {
 /// True when the captured target runs at a higher mandatory integrity level
 /// than us (normally: it runs as Administrator). UIPI silently discards the
 /// injected Ctrl+V across that boundary, so auto-paste must be skipped.
-pub(super) fn target_is_elevated() -> bool {
+pub(crate) fn target_is_elevated() -> bool {
     #[link(name = "kernel32")]
     extern "system" {
         fn OpenProcess(
@@ -886,7 +886,7 @@ extern "system" {
 const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x01;
 const DPAPI_ENTROPY: &[u8] = b"CipherClipboard-DPAPI-v1";
 
-pub(super) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let in_len = u32::try_from(plaintext.len())
         .map_err(|_| "DPAPI plaintext exceeds u32::MAX bytes".to_string())?;
     let entropy_len = u32::try_from(DPAPI_ENTROPY.len())
@@ -930,7 +930,7 @@ pub(super) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
     Ok(ciphertext)
 }
 
-pub(super) fn dpapi_unprotect(ciphertext: &[u8]) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
+pub(crate) fn dpapi_unprotect(ciphertext: &[u8]) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
     use zeroize::Zeroize;
 
     let in_len = u32::try_from(ciphertext.len())

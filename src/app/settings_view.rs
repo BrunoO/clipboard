@@ -384,7 +384,7 @@ impl ClipboardApp {
     #[cfg(target_os = "macos")]
     fn render_macos_accessibility_notice(ui: &mut egui::Ui, is_dark: bool) {
         ui.add_space(2.0);
-        if crate::platform::is_accessibility_trusted() {
+        if crate::platform::macos::is_trusted() {
             return;
         }
         ui.label(
@@ -401,13 +401,13 @@ impl ClipboardApp {
                 .small_button(format!("{} Prompt Permission", icons::SHIELD_CHECK))
                 .clicked()
             {
-                crate::platform::prompt_accessibility_permission();
+                crate::platform::macos::prompt_permission();
             }
             if ui
                 .small_button(format!("{} Open System Settings", icons::ARROW_SQUARE_OUT))
                 .clicked()
             {
-                crate::platform::open_accessibility_settings();
+                crate::platform::macos::open_accessibility_settings();
             }
         });
     }

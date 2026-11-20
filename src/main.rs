@@ -34,7 +34,7 @@ fn main() {
         eprintln!("Error: {e}");
         logging::log_message("ERROR", &format!("Startup failed: {e}"));
         #[cfg(target_os = "windows")]
-        platform::show_error_dialog(&format!("CipherClipboard failed to start:\n\n{e}"));
+        platform::windows::show_error_dialog(&format!("CipherClipboard failed to start:\n\n{e}"));
         std::process::exit(1);
     }
 }
@@ -62,7 +62,7 @@ fn install_panic_hook() {
         logging::log_message("PANIC", &format!("{summary}\n{backtrace}"));
 
         #[cfg(all(target_os = "windows", not(debug_assertions)))]
-        platform::show_error_dialog(&format!(
+        platform::windows::show_error_dialog(&format!(
             "CipherClipboard encountered an unexpected error and must close.\n\n\
              {summary}\n\n\
              Diagnostics were written to %LOCALAPPDATA%\\cipherclipboard\\app.log."
@@ -86,7 +86,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         AcquireResult::Acquired(lock) => lock,
         AcquireResult::AlreadyRunning { pid } => {
             #[cfg(target_os = "windows")]
-            platform::activate_existing_instance(pid);
+            platform::windows::activate_existing_instance(pid);
 
             if let Some(pid) = pid {
                 println!(

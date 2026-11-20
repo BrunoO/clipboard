@@ -173,8 +173,8 @@ fn read_key_file(path: &Path) -> Result<Option<Zeroizing<String>>, std::io::Erro
         if ciphertext.is_empty() {
             return Ok(None);
         }
-        let plain_bytes =
-            crate::platform::windows_dpapi_unprotect(&ciphertext).map_err(std::io::Error::other)?;
+        let plain_bytes = crate::platform::windows::dpapi_unprotect(&ciphertext)
+            .map_err(std::io::Error::other)?;
         let utf8 = std::str::from_utf8(&plain_bytes)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         Zeroizing::new(utf8.to_owned())
@@ -331,7 +331,7 @@ fn save_key_file(path: &Path, key: &str) -> Result<(), std::io::Error> {
     }
     #[cfg(target_os = "windows")]
     {
-        let protected = crate::platform::windows_dpapi_protect(key.as_bytes())
+        let protected = crate::platform::windows::dpapi_protect(key.as_bytes())
             .map_err(std::io::Error::other)?;
         fs::write(path, &protected)?;
         set_restricted_permissions(path);

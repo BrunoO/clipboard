@@ -90,7 +90,7 @@ impl HotkeyPreset {
             Self::Universal => vec![HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyV)],
             Self::AzertyQuote => {
                 #[cfg(target_os = "windows")]
-                if crate::platform::windows_quote_key_is_ugrave() {
+                if crate::platform::quote_key_is_ugrave() {
                     vec![
                         HotKey::new(Some(base_mod), Code::Backquote),
                         HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Backquote),
@@ -193,7 +193,7 @@ impl ParsedHotkey {
         }
 
         #[cfg(target_os = "windows")]
-        let azerty = crate::platform::windows_quote_key_is_ugrave();
+        let azerty = crate::platform::quote_key_is_ugrave();
         #[cfg(not(target_os = "windows"))]
         let azerty = false;
 
@@ -389,7 +389,7 @@ impl ParsedHotkey {
             Code::BracketLeft => "BracketLeft",
             Code::BracketRight => "BracketRight",
             Code::Backquote => {
-                if crate::platform::windows_quote_key_is_ugrave() {
+                if crate::platform::quote_key_is_ugrave() {
                     "ù"
                 } else {
                     "Grave"
@@ -678,7 +678,7 @@ mod tests {
         // Test Ctrl+ù (layout-aware on Windows: Backquote on AZERTY, Quote otherwise)
         let parsed = ParsedHotkey::parse("Ctrl+ù").unwrap();
         assert!(parsed.modifiers.contains(Modifiers::CONTROL));
-        if crate::platform::windows_quote_key_is_ugrave() {
+        if crate::platform::quote_key_is_ugrave() {
             assert_eq!(parsed.key, Code::Backquote);
             assert_eq!(parsed.format(), "Ctrl+ù");
         } else {

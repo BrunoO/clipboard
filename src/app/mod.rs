@@ -357,7 +357,7 @@ impl ClipboardApp {
         #[allow(unused_mut)]
         let mut auto_paste = auto_paste;
         #[cfg(target_os = "windows")]
-        if auto_paste && crate::platform::windows_target_is_elevated() {
+        if auto_paste && crate::platform::windows::target_is_elevated() {
             auto_paste = false;
             crate::logging::log_message(
                 "WARN",
@@ -1406,7 +1406,7 @@ impl eframe::App for ClipboardApp {
             self.current_is_dark = Some(is_dark);
         }
         if self.title_bar_dark_mode != Some(is_dark) {
-            crate::platform::windows_set_title_bar_dark_mode(is_dark);
+            crate::platform::set_title_bar_dark_mode(is_dark);
             self.title_bar_dark_mode = Some(is_dark);
         }
 
@@ -1620,7 +1620,7 @@ fn egui_key_to_hotkey_name(key: egui::Key) -> Option<&'static str> {
         egui::Key::Num8 => "8",
         egui::Key::Num9 => "9",
         egui::Key::Quote => {
-            if crate::platform::windows_quote_key_is_ugrave() {
+            if crate::platform::quote_key_is_ugrave() {
                 "ù"
             } else {
                 "Quote"

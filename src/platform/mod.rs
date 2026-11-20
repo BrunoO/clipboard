@@ -12,9 +12,9 @@ use std::time::Duration;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
-mod macos;
+pub(crate) mod macos;
 #[cfg(target_os = "windows")]
-mod windows;
+pub(crate) mod windows;
 
 /// Stores a clone of the `egui::Context` to immediately trigger repaints on OS activation.
 pub(crate) fn set_repaint_context(ctx: &eframe::egui::Context) {
@@ -61,7 +61,7 @@ pub(crate) fn is_app_active_state() -> Option<bool> {
 /// Returns `true` on Windows when the current keyboard layout produces `ù` for the
 /// physical key in the US `Quote` position (French/Belgian AZERTY layouts).
 #[must_use]
-pub(crate) fn windows_quote_key_is_ugrave() -> bool {
+pub(crate) fn quote_key_is_ugrave() -> bool {
     #[cfg(target_os = "windows")]
     {
         windows::quote_key_is_ugrave()
@@ -72,19 +72,8 @@ pub(crate) fn windows_quote_key_is_ugrave() -> bool {
     }
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub(crate) fn windows_target_is_elevated() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        windows::target_is_elevated()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        false
-    }
-}
-
-pub(crate) fn windows_set_title_bar_dark_mode(is_dark: bool) {
+/// Applies the platform title-bar dark mode attribute where supported (Windows DWM).
+pub(crate) fn set_title_bar_dark_mode(is_dark: bool) {
     #[cfg(target_os = "windows")]
     {
         windows::set_title_bar_dark_mode(is_dark);
@@ -93,22 +82,6 @@ pub(crate) fn windows_set_title_bar_dark_mode(is_dark: bool) {
     {
         let _ = is_dark;
     }
-}
-
-/// Encrypts `plaintext` using Windows DPAPI (`CryptProtectData`) bound to the current
-/// Windows user account (`CRYPTPROTECT_LOCAL_MACHINE` unset, `CRYPTPROTECT_UI_FORBIDDEN`).
-#[cfg(target_os = "windows")]
-pub(crate) fn windows_dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
-    windows::dpapi_protect(plaintext)
-}
-
-/// Decrypts a Windows DPAPI blob created by [`windows_dpapi_protect`], zeroizing the
-/// OS-allocated plaintext buffer before freeing it.
-#[cfg(target_os = "windows")]
-pub(crate) fn windows_dpapi_unprotect(
-    ciphertext: &[u8],
-) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
-    windows::dpapi_unprotect(ciphertext)
 }
 
 use crate::logging::log_message;
@@ -179,19 +152,6 @@ pub(crate) fn order_front_main_window() {
 
     #[cfg(target_os = "windows")]
     windows::order_front_main_window();
-}
-
-/// On Windows, activates and brings to front any existing running instance window,
-/// matching `expected_pid` when known to prevent title-based window spoofing.
-#[cfg(target_os = "windows")]
-pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
-    windows::activate_existing_instance(expected_pid)
-}
-
-/// Displays a native modal error dialog on Windows before terminating.
-#[cfg(target_os = "windows")]
-pub(crate) fn show_error_dialog(message: &str) {
-    windows::show_error_dialog(message);
 }
 
 /// Checks and clears any pending reopen requests triggered by OS events (e.g. Dock icon click).
@@ -359,40 +319,6 @@ pub(crate) fn restore_focus_and_paste(
     });
 }
 
-/// Checks whether macOS Accessibility permissions are granted for synthetic event posting.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-#[must_use]
-pub(crate) fn is_accessibility_trusted() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        macos::is_trusted()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        true
-    }
-}
-
-/// Prompts the user for macOS Accessibility permissions using the native system dialog.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn prompt_accessibility_permission() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        macos::prompt_permission()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        true
-    }
-}
-
-/// Opens macOS System Settings directly to Privacy & Security > Accessibility.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn open_accessibility_settings() {
-    #[cfg(target_os = "macos")]
-    macos::open_accessibility_settings();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,7 +328,8 @@ mod tests {
         // Calling capture and restore should never panic on any platform
         capture_active_window();
         restore_focus_and_paste(false, false, 120);
-        assert!(is_accessibility_trusted() || !is_accessibility_trusted());
+        #[cfg(target_os = "macos")]
+        assert!(macos::is_trusted() || !macos::is_trusted());
         let _ = is_app_active();
         let _ = is_clipboard_concealed();
         let _ = take_reopen_requested();

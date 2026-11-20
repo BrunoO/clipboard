@@ -228,11 +228,11 @@ extern "C" {
     fn CFRelease(cf: *const std::ffi::c_void);
 }
 
-pub(super) fn is_trusted() -> bool {
+pub(crate) fn is_trusted() -> bool {
     unsafe { AXIsProcessTrusted() }
 }
 
-pub(super) fn prompt_permission() -> bool {
+pub(crate) fn prompt_permission() -> bool {
     objc::rc::autoreleasepool(|| unsafe {
         let str_obj: *mut Object = msg_send![
             class!(NSString),
@@ -251,7 +251,7 @@ pub(super) fn prompt_permission() -> bool {
     })
 }
 
-pub(super) fn open_accessibility_settings() {
+pub(crate) fn open_accessibility_settings() {
     let _ = std::process::Command::new("open")
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         .spawn();
