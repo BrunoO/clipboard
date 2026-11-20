@@ -23,16 +23,31 @@ pub(crate) fn rgba_to_png(
     Ok(png_bytes)
 }
 
-/// Decodes PNG bytes into (width, height, raw RGBA bytes).
+/// Decodes PNG bytes into (width, height, raw RGBA bytes), validating header dimensions
+/// and applying decoder memory limits *before* allocating the pixel buffer.
 pub(crate) fn png_to_rgba(
     png_bytes: &[u8],
 ) -> Result<(usize, usize, Vec<u8>), Box<dyn std::error::Error + Send + Sync>> {
-    let img = image::load_from_memory_with_format(png_bytes, image::ImageFormat::Png)?;
-    let width = usize::try_from(img.width())?;
-    let height = usize::try_from(img.height())?;
-    if width.saturating_mul(height) > MAX_IMAGE_PIXELS {
+    let (header_w, header_h) =
+        image::ImageReader::with_format(Cursor::new(png_bytes), image::ImageFormat::Png)
+            .into_dimensions()?;
+    let width = usize::try_from(header_w)?;
+    let height = usize::try_from(header_h)?;
+    if width == 0 || height == 0 || width.saturating_mul(height) > MAX_IMAGE_PIXELS {
         return Err("Image dimensions exceed maximum safe limit".into());
     }
+
+    let mut reader =
+        image::ImageReader::with_format(Cursor::new(png_bytes), image::ImageFormat::Png);
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(
+        u64::try_from(MAX_IMAGE_PIXELS)
+            .unwrap_or(40_000_000)
+            .saturating_mul(4),
+    );
+    reader.limits(limits);
+
+    let img = reader.decode()?;
     let rgba = img.to_rgba8();
     Ok((width, height, rgba.into_raw()))
 }
@@ -66,5 +81,28 @@ mod tests {
     fn test_oversized_image_rejected() {
         let err = rgba_to_png(10_000, 10_000, &[]).unwrap_err();
         assert!(err.to_string().contains("exceed maximum safe limit"));
+    }
+
+    #[test]
+    fn test_png_decode_rejects_oversized_header_before_allocation() {
+        // Minimal PNG signature + IHDR chunk declaring 10_000 x 10_000 (100 MP > 40 MP limit)
+        // with no IDAT pixel data; must be rejected from header dimensions alone.
+        let mut crafted = vec![
+            137, 80, 78, 71, 13, 10, 26, 10, // PNG signature
+            0, 0, 0, 13, // IHDR length = 13
+            b'I', b'H', b'D', b'R',
+        ];
+        crafted.extend_from_slice(&10_000_u32.to_be_bytes());
+        crafted.extend_from_slice(&10_000_u32.to_be_bytes());
+        crafted.extend_from_slice(&[8, 6, 0, 0, 0]); // 8-bit RGBA
+        crafted.extend_from_slice(&0xba4e_6227_u32.to_be_bytes()); // valid IHDR CRC-32
+        crafted.extend_from_slice(&[0, 0, 0, 0, b'I', b'D', b'A', b'T', 0x35, 0xaf, 0x06, 0x1e]);
+        crafted.extend_from_slice(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]);
+
+        let err = png_to_rgba(&crafted).unwrap_err();
+        assert!(
+            err.to_string().contains("exceed maximum safe limit"),
+            "Unexpected error: {err}"
+        );
     }
 }
