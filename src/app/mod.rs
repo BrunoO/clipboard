@@ -416,6 +416,7 @@ impl ClipboardApp {
                 icons::WARNING
             ));
         } else {
+            crate::platform::mark_clipboard_concealed();
             self.schedule_secret_clipboard_clear(secret);
             let msg = if self.settings.auto_clear_secret_secs > 0 {
                 format!(
@@ -449,6 +450,7 @@ impl ClipboardApp {
                 icons::WARNING
             ));
         } else {
+            crate::platform::mark_clipboard_concealed();
             self.schedule_secret_clipboard_clear(&secret);
             if !self.password_gen.skip_history {
                 if let Err(e) = self.db.insert_secret(&secret) {

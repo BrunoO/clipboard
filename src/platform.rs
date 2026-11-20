@@ -154,6 +154,17 @@ pub(crate) fn is_clipboard_concealed() -> bool {
     }
 }
 
+/// Attaches OS-native privacy/concealed markers to the current clipboard entry
+/// so OS clipboard history, cloud sync, Universal Clipboard, and other clipboard
+/// managers do not record or broadcast secrets copied by `CipherClipboard`.
+pub(crate) fn mark_clipboard_concealed() {
+    #[cfg(target_os = "macos")]
+    macos::mark_clipboard_concealed();
+
+    #[cfg(target_os = "windows")]
+    windows::mark_clipboard_concealed();
+}
+
 /// Hides the entire application at the OS level (macOS `[NSApp hide:]`).
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 pub(crate) fn hide_application() {
@@ -643,6 +654,35 @@ mod macos {
             }
             false
         }
+    }
+
+    pub(super) fn mark_clipboard_concealed() {
+        objc::rc::autoreleasepool(|| unsafe {
+            let pasteboard: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
+            if pasteboard.is_null() {
+                return;
+            }
+            let empty_data: *mut Object = msg_send![class!(NSData), data];
+            if empty_data.is_null() {
+                return;
+            }
+            let nil_obj: *mut Object = std::ptr::null_mut();
+            for marker in [
+                b"org.nspasteboard.ConcealedType\0".as_slice(),
+                b"org.nspasteboard.TransientType\0".as_slice(),
+            ] {
+                let type_str: *mut Object =
+                    msg_send![class!(NSString), stringWithUTF8String: marker.as_ptr()];
+                if type_str.is_null() {
+                    continue;
+                }
+                let types_arr: *mut Object = msg_send![class!(NSArray), arrayWithObject: type_str];
+                if !types_arr.is_null() {
+                    let _: isize = msg_send![pasteboard, addTypes: types_arr owner: nil_obj];
+                    let _: bool = msg_send![pasteboard, setData: empty_data forType: type_str];
+                }
+            }
+        });
     }
 }
 
@@ -1223,6 +1263,68 @@ mod windows {
         }
 
         false
+    }
+
+    /// Appends Windows privacy clipboard formats without clearing the text just written:
+    /// - `ExcludeClipboardContentFromMonitorProcessing` (prevents clipboard monitors)
+    /// - `CanIncludeInClipboardHistory` = 0 (blocks Win+V local history)
+    /// - `CanUploadClipboardContentToCloud` = 0 (blocks Windows Cloud Clipboard sync)
+    pub(super) fn mark_clipboard_concealed() {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        #[link(name = "user32")]
+        extern "system" {
+            fn OpenClipboard(hWndNewOwner: HWND) -> i32;
+            fn CloseClipboard() -> i32;
+            fn SetClipboardData(uFormat: u32, hMem: *mut std::ffi::c_void)
+                -> *mut std::ffi::c_void;
+        }
+
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> *mut std::ffi::c_void;
+            fn GlobalLock(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            fn GlobalUnlock(hMem: *mut std::ffi::c_void) -> i32;
+            fn GlobalFree(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        }
+
+        const GMEM_MOVEABLE: u32 = 0x0002;
+
+        unsafe fn set_zero_dword_format(name: &str) {
+            let wide: Vec<u16> = OsStr::new(name)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let fmt = RegisterClipboardFormatW(wide.as_ptr());
+            if fmt == 0 {
+                return;
+            }
+            let hmem = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of::<u32>());
+            if hmem.is_null() {
+                return;
+            }
+            let ptr = GlobalLock(hmem).cast::<u32>();
+            if ptr.is_null() {
+                let _ = GlobalFree(hmem);
+                return;
+            }
+            *ptr = 0;
+            let _ = GlobalUnlock(hmem);
+            if SetClipboardData(fmt, hmem).is_null() {
+                let _ = GlobalFree(hmem);
+            }
+        }
+
+        unsafe {
+            if OpenClipboard(std::ptr::null_mut()) == 0 {
+                return;
+            }
+            set_zero_dword_format("ExcludeClipboardContentFromMonitorProcessing");
+            set_zero_dword_format("CanIncludeInClipboardHistory");
+            set_zero_dword_format("CanUploadClipboardContentToCloud");
+            let _ = CloseClipboard();
+        }
     }
 
     /// Returns `true` when the active target thread's Windows keyboard layout produces `ù`
