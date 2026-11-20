@@ -317,18 +317,87 @@ mod linux_x11_fallback {
         let _ = conn.flush();
     }
 
+    fn drain_until_shutdown(rx: &mpsc::Receiver<Msg>) {
+        while let Ok(msg) = rx.recv() {
+            match msg {
+                Msg::Register(_, reply) => {
+                    let _ = reply.send(Err(()));
+                }
+                Msg::Clear => {}
+                Msg::Shutdown => break,
+            }
+        }
+    }
+
+    fn poll_x11_key_events(
+        conn: &x11rb::rust_connection::RustConnection,
+        grabs: &[(u8, ModMask)],
+        full_mask: KeyButMask,
+        hotkey_tx: &Sender<()>,
+        ctx: &egui::Context,
+    ) {
+        while let Ok(Some(event)) = conn.poll_for_event() {
+            if let Event::KeyPress(ev) = event {
+                let ev_mods = ModMask::from((ev.state & full_mask).bits());
+                if grabs
+                    .iter()
+                    .any(|&(kc, mods)| kc == ev.detail && mods == ev_mods)
+                {
+                    crate::platform::capture_active_window();
+                    let _ = hotkey_tx.send(());
+                    ctx.request_repaint();
+                }
+            }
+        }
+    }
+
+    fn grab_quote_key(
+        conn: &x11rb::rust_connection::RustConnection,
+        root: u32,
+        grabs: &mut Vec<(u8, ModMask)>,
+        hk: HotKey,
+    ) -> Result<(), ()> {
+        let kc = find_quote_keycode(conn).ok_or(())?;
+        let mods = mods_to_x11(hk.mods);
+        let ok = ignored_mods().into_iter().all(|m| {
+            conn.grab_key(false, root, mods | m, kc, GrabMode::ASYNC, GrabMode::ASYNC)
+                .is_ok()
+        });
+        let _ = conn.flush();
+        if ok {
+            grabs.push((kc, mods));
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn handle_x11_msg(
+        conn: &x11rb::rust_connection::RustConnection,
+        root: u32,
+        grabs: &mut Vec<(u8, ModMask)>,
+        msg: Msg,
+    ) -> bool {
+        match msg {
+            Msg::Register(hk, reply) => {
+                let _ = reply.send(grab_quote_key(conn, root, grabs, hk));
+                true
+            }
+            Msg::Clear => {
+                ungrab_all(conn, root, grabs);
+                true
+            }
+            Msg::Shutdown => {
+                ungrab_all(conn, root, grabs);
+                false
+            }
+        }
+    }
+
     fn run_loop(rx: &mpsc::Receiver<Msg>, hotkey_tx: &Sender<()>, ctx: &egui::Context) {
         let Ok((conn, screen_num)) = x11rb::connect(None) else {
             // Still drain messages until shutdown so callers don't block
-            while let Ok(msg) = rx.recv() {
-                match msg {
-                    Msg::Register(_, reply) => {
-                        let _ = reply.send(Err(()));
-                    }
-                    Msg::Clear => {}
-                    Msg::Shutdown => break,
-                }
-            }
+            drain_until_shutdown(rx);
             return;
         };
         let Some(root) = conn.setup().roots.get(screen_num).map(|s| s.root) else {
@@ -340,59 +409,11 @@ mod linux_x11_fallback {
             KeyButMask::CONTROL | KeyButMask::SHIFT | KeyButMask::MOD4 | KeyButMask::MOD1;
 
         loop {
-            while let Ok(Some(event)) = conn.poll_for_event() {
-                if let Event::KeyPress(ev) = event {
-                    let ev_mods = ModMask::from((ev.state & full_mask).bits());
-                    if grabs
-                        .iter()
-                        .any(|&(kc, mods)| kc == ev.detail && mods == ev_mods)
-                    {
-                        crate::platform::capture_active_window();
-                        let _ = hotkey_tx.send(());
-                        ctx.request_repaint();
-                    }
-                }
-            }
+            poll_x11_key_events(&conn, &grabs, full_mask, hotkey_tx, ctx);
 
             while let Ok(msg) = rx.try_recv() {
-                match msg {
-                    Msg::Register(hk, reply) => {
-                        if let Some(kc) = find_quote_keycode(&conn) {
-                            let mods = mods_to_x11(hk.mods);
-                            let mut ok = true;
-                            for m in ignored_mods() {
-                                if conn
-                                    .grab_key(
-                                        false,
-                                        root,
-                                        mods | m,
-                                        kc,
-                                        GrabMode::ASYNC,
-                                        GrabMode::ASYNC,
-                                    )
-                                    .is_err()
-                                {
-                                    ok = false;
-                                }
-                            }
-                            let _ = conn.flush();
-                            if ok {
-                                grabs.push((kc, mods));
-                                let _ = reply.send(Ok(()));
-                            } else {
-                                let _ = reply.send(Err(()));
-                            }
-                        } else {
-                            let _ = reply.send(Err(()));
-                        }
-                    }
-                    Msg::Clear => {
-                        ungrab_all(&conn, root, &mut grabs);
-                    }
-                    Msg::Shutdown => {
-                        ungrab_all(&conn, root, &mut grabs);
-                        return;
-                    }
+                if !handle_x11_msg(&conn, root, &mut grabs, msg) {
+                    return;
                 }
             }
 

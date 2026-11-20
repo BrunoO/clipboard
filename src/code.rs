@@ -67,58 +67,82 @@ impl CodeLanguage {
 }
 
 /// Detects if the given text represents a recognized code snippet or structured data format.
-#[allow(clippy::too_many_lines)]
 pub(crate) fn detect_code_language(text: &str) -> Option<CodeLanguage> {
     let trimmed = text.trim();
-    if trimmed.is_empty() || trimmed.len() < 4 {
+    if trimmed.len() < 4 {
         return None;
     }
 
-    // 1. JSON detection: valid JSON object or non-trivial array
-    let is_json_bracket = (trimmed.starts_with('{') && trimmed.ends_with('}'))
-        || (trimmed.starts_with('[') && trimmed.ends_with(']'));
-    if is_json_bracket && serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+    if is_json_snippet(trimmed) {
         return Some(CodeLanguage::Json);
     }
-
-    // 2. HTML / XML detection
-    if trimmed.starts_with('<')
-        && (trimmed.contains("</") || trimmed.ends_with("/>") || trimmed.contains("<!DOCTYPE"))
-    {
+    if is_html_snippet(trimmed) {
         return Some(CodeLanguage::Html);
     }
-
-    // 3. Shell scripts / command lines
     if is_shell_command(trimmed) {
         return Some(CodeLanguage::Shell);
     }
-
-    // 4. SQL queries
-    let upper = trimmed.to_uppercase();
-    if upper.starts_with("SELECT ")
-        || upper.starts_with("INSERT INTO ")
-        || upper.starts_with("UPDATE ")
-        || upper.starts_with("DELETE FROM ")
-        || upper.starts_with("CREATE TABLE ")
-        || upper.starts_with("ALTER TABLE ")
-        || upper.starts_with("DROP TABLE ")
-    {
+    if is_sql_snippet(trimmed) {
         return Some(CodeLanguage::Sql);
     }
+    if is_toml_snippet(trimmed) {
+        return Some(CodeLanguage::Toml);
+    }
+    if is_python_snippet(trimmed) {
+        return Some(CodeLanguage::Python);
+    }
+    if is_cpp_or_objc_snippet(trimmed) {
+        return Some(CodeLanguage::Cpp);
+    }
+    if is_rust_snippet(trimmed) {
+        return Some(CodeLanguage::Rust);
+    }
+    if let Some(lang) = detect_js_or_ts(trimmed) {
+        return Some(lang);
+    }
+    if is_yaml_snippet(trimmed) {
+        return Some(CodeLanguage::Yaml);
+    }
 
-    // 5. TOML configuration
-    let is_toml_bracket =
-        trimmed.starts_with('[') && trimmed.contains(']') && trimmed.contains('=');
-    if is_toml_bracket
+    None
+}
+
+fn is_json_snippet(trimmed: &str) -> bool {
+    let is_bracketed = (trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'));
+    is_bracketed && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+}
+
+fn is_html_snippet(trimmed: &str) -> bool {
+    trimmed.starts_with('<')
+        && (trimmed.contains("</") || trimmed.ends_with("/>") || trimmed.contains("<!DOCTYPE"))
+}
+
+fn is_sql_snippet(trimmed: &str) -> bool {
+    const SQL_PREFIXES: &[&str] = &[
+        "SELECT ",
+        "INSERT INTO ",
+        "UPDATE ",
+        "DELETE FROM ",
+        "CREATE TABLE ",
+        "ALTER TABLE ",
+        "DROP TABLE ",
+    ];
+    let upper = trimmed.to_uppercase();
+    SQL_PREFIXES.iter().any(|p| upper.starts_with(p))
+}
+
+fn is_toml_snippet(trimmed: &str) -> bool {
+    trimmed.starts_with('[')
+        && trimmed.contains(']')
+        && trimmed.contains('=')
         && (trimmed.contains("[package]")
             || trimmed.contains("[dependencies]")
             || trimmed.contains("[lints"))
-    {
-        return Some(CodeLanguage::Toml);
-    }
+}
 
-    // 6. Python detection
-    let is_python = trimmed.contains("def ")
+fn is_python_snippet(trimmed: &str) -> bool {
+    let has_python_syntax = trimmed.contains("def ")
         || (trimmed.contains("import ")
             && (trimmed.contains("from ")
                 || trimmed.contains("def ")
@@ -127,103 +151,103 @@ pub(crate) fn detect_code_language(text: &str) -> Option<CodeLanguage> {
         || trimmed.contains("if __name__ == '__main__':")
         || (trimmed.contains("class ") && trimmed.contains(':'));
 
-    if is_python && !trimmed.contains("fn ") && !trimmed.contains("pub ") {
-        return Some(CodeLanguage::Python);
-    }
+    has_python_syntax && !trimmed.contains("fn ") && !trimmed.contains("pub ")
+}
 
-    // 7. C++ & Objective-C++ detection
-    let is_cpp_headers_or_ns = trimmed.contains("#include <")
-        || trimmed.contains("#include \"")
-        || trimmed.contains("std::")
-        || trimmed.contains("using namespace ")
-        || trimmed.contains("cout <<")
-        || trimmed.contains("cin >>")
-        || trimmed.contains("nullptr")
-        || trimmed.contains("constexpr ")
-        || trimmed.contains("template<")
-        || trimmed.contains("template <")
+fn is_cpp_or_objc_snippet(trimmed: &str) -> bool {
+    const CPP_TOKENS: &[&str] = &[
+        "#include <",
+        "#include \"",
+        "std::",
+        "using namespace ",
+        "cout <<",
+        "cin >>",
+        "nullptr",
+        "constexpr ",
+        "template<",
+        "template <",
+        "NSString",
+        "NSData",
+        "NSDictionary",
+        "NSArray",
+        "NSError",
+        "NSObject",
+        "[[",
+        "alloc]",
+        "initWith",
+        "UTF8String",
+        "@interface",
+        "@implementation",
+        "@autoreleasepool",
+        "->",
+        "static_cast<",
+        "dynamic_cast<",
+        "reinterpret_cast<",
+        "const char*",
+        "for (int ",
+        "for (auto ",
+        "printf(",
+    ];
+
+    let has_cpp_token = CPP_TOKENS.iter().any(|t| trimmed.contains(t))
         || ((trimmed.contains("public:") || trimmed.contains("private:"))
-            && trimmed.contains("class "));
-
-    let is_objc_cpp = trimmed.contains("NSString")
-        || trimmed.contains("NSData")
-        || trimmed.contains("NSDictionary")
-        || trimmed.contains("NSArray")
-        || trimmed.contains("NSError")
-        || trimmed.contains("NSObject")
-        || trimmed.contains("[[")
-        || trimmed.contains("alloc]")
-        || trimmed.contains("initWith")
-        || trimmed.contains("UTF8String")
-        || trimmed.contains("@interface")
-        || trimmed.contains("@implementation")
-        || trimmed.contains("@autoreleasepool");
-
-    let is_cpp_patterns = trimmed.contains("->")
-        || trimmed.contains("static_cast<")
-        || trimmed.contains("dynamic_cast<")
-        || trimmed.contains("reinterpret_cast<")
-        || trimmed.contains("const char*")
-        || trimmed.contains("for (int ")
-        || trimmed.contains("for (auto ")
-        || trimmed.contains("printf(")
+            && trimmed.contains("class "))
         || (trimmed.contains("void ") && trimmed.contains('(') && trimmed.contains(')'));
 
-    let is_cpp = (is_cpp_headers_or_ns || is_objc_cpp || is_cpp_patterns)
+    has_cpp_token
         && !trimmed.contains("fn ")
         && !trimmed.contains("pub fn ")
-        && !trimmed.contains("let mut ");
+        && !trimmed.contains("let mut ")
+}
 
-    if is_cpp {
-        return Some(CodeLanguage::Cpp);
-    }
-
-    // 8. Rust detection
-    let is_rust = trimmed.contains("fn ")
-        || trimmed.contains("pub fn ")
-        || trimmed.contains("let mut ")
-        || trimmed.contains("impl ")
-        || trimmed.contains("-> Result<")
-        || trimmed.contains("println!(")
-        || trimmed.contains("#[derive(")
+fn is_rust_snippet(trimmed: &str) -> bool {
+    const RUST_TOKENS: &[&str] = &[
+        "fn ",
+        "pub fn ",
+        "let mut ",
+        "impl ",
+        "-> Result<",
+        "println!(",
+        "#[derive(",
+    ];
+    RUST_TOKENS.iter().any(|t| trimmed.contains(t))
         || (trimmed.contains("struct ") && trimmed.contains('{'))
-        || (trimmed.contains("enum ") && trimmed.contains('{'));
+        || (trimmed.contains("enum ") && trimmed.contains('{'))
+}
 
-    if is_rust {
-        return Some(CodeLanguage::Rust);
+fn detect_js_or_ts(trimmed: &str) -> Option<CodeLanguage> {
+    const JS_TOKENS: &[&str] = &[
+        "const ",
+        "let ",
+        "function ",
+        "console.log(",
+        "export default ",
+        "=> {",
+    ];
+    const TS_TOKENS: &[&str] = &[
+        "interface ",
+        ": string",
+        ": number",
+        ": boolean",
+        ": any",
+        "type ",
+    ];
+
+    if !JS_TOKENS.iter().any(|t| trimmed.contains(t)) {
+        return None;
     }
-
-    // 8. TypeScript vs JavaScript detection
-    let has_js_indicators = trimmed.contains("const ")
-        || trimmed.contains("let ")
-        || trimmed.contains("function ")
-        || trimmed.contains("console.log(")
-        || trimmed.contains("export default ")
-        || trimmed.contains("=> {");
-
-    if has_js_indicators {
-        let has_ts_types = trimmed.contains("interface ")
-            || trimmed.contains(": string")
-            || trimmed.contains(": number")
-            || trimmed.contains(": boolean")
-            || trimmed.contains(": any")
-            || trimmed.contains("type ");
-        if has_ts_types {
-            return Some(CodeLanguage::TypeScript);
-        }
-        return Some(CodeLanguage::JavaScript);
+    if TS_TOKENS.iter().any(|t| trimmed.contains(t)) {
+        Some(CodeLanguage::TypeScript)
+    } else {
+        Some(CodeLanguage::JavaScript)
     }
+}
 
-    // 9. YAML detection
-    if trimmed.starts_with("---")
+fn is_yaml_snippet(trimmed: &str) -> bool {
+    trimmed.starts_with("---")
         || (trimmed.contains(": ")
             && trimmed.lines().count() >= 3
             && trimmed.lines().any(|l| l.trim_start().starts_with("- ")))
-    {
-        return Some(CodeLanguage::Yaml);
-    }
-
-    None
 }
 
 const KNOWN_SHELL_COMMANDS: &[&str] = &[

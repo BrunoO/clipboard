@@ -1824,9 +1824,7 @@ mod linux {
     /// by inspecting the `CLIPBOARD` selection's advertised `TARGETS` for
     /// `x-kde-passwordManagerHint`.
     pub(super) fn is_clipboard_concealed() -> bool {
-        use std::time::{Duration, Instant};
         use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
-        use x11rb::protocol::Event;
 
         let Ok((conn, screen_num)) = x11rb::connect(None) else {
             return false;
@@ -1887,8 +1885,7 @@ mod linux {
             return false;
         }
 
-        let mut concealed = false;
-        if conn
+        let concealed = if conn
             .convert_selection(
                 win,
                 clipboard_atom,
@@ -1899,33 +1896,48 @@ mod linux {
             .is_ok()
             && conn.flush().is_ok()
         {
-            let deadline = Instant::now() + Duration::from_millis(50);
-            while Instant::now() < deadline {
-                match conn.poll_for_event() {
-                    Ok(Some(Event::SelectionNotify(ev))) => {
-                        if ev.property != 0 {
-                            if let Ok(cookie) =
-                                conn.get_property(true, win, ev.property, AtomEnum::ATOM, 0, 1024)
-                            {
-                                if let Ok(reply) = cookie.reply() {
-                                    if let Some(mut atoms) = reply.value32() {
-                                        concealed = atoms.any(|a| a == hint_atom);
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    Ok(Some(_)) => {}
-                    Ok(None) => std::thread::sleep(Duration::from_millis(2)),
-                    Err(_) => break,
-                }
-            }
-        }
+            poll_selection_for_hint(&conn, win, hint_atom)
+        } else {
+            false
+        };
 
         let _ = conn.destroy_window(win);
         let _ = conn.flush();
         concealed
+    }
+
+    fn poll_selection_for_hint(
+        conn: &x11rb::rust_connection::RustConnection,
+        win: u32,
+        hint_atom: u32,
+    ) -> bool {
+        use std::time::{Duration, Instant};
+        use x11rb::protocol::Event;
+
+        let deadline = Instant::now() + Duration::from_millis(50);
+        while Instant::now() < deadline {
+            match conn.poll_for_event() {
+                Ok(Some(Event::SelectionNotify(ev))) => {
+                    if ev.property == 0 {
+                        return false;
+                    }
+                    return conn
+                        .get_property(true, win, ev.property, AtomEnum::ATOM, 0, 1024)
+                        .ok()
+                        .and_then(|cookie| cookie.reply().ok())
+                        .and_then(|reply| {
+                            reply
+                                .value32()
+                                .map(|mut atoms| atoms.any(|a| a == hint_atom))
+                        })
+                        .unwrap_or(false);
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => std::thread::sleep(Duration::from_millis(2)),
+                Err(_) => break,
+            }
+        }
+        false
     }
 }
 

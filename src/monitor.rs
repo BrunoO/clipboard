@@ -43,25 +43,11 @@ pub(crate) fn start_clipboard_monitor(
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
     let handle = thread::spawn(move || {
-        // On Windows the clipboard can be briefly unavailable (e.g. at session
-        // logon with auto-start, while disconnected from an RDP session, or
-        // during session switches). Retry instead of silently disabling
-        // clipboard capture until the app is restarted.
-        let mut clipboard = loop {
-            match Clipboard::new() {
-                Ok(cb) => break cb,
-                Err(e) => {
-                    eprintln!("⚠️ Failed to initialize clipboard monitor: {e}");
-                    if shutdown_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
-                        println!("👀 Clipboard monitor shutting down...");
-                        return;
-                    }
-                }
-            }
+        let Some(mut clipboard) = init_clipboard_with_retry(&shutdown_rx) else {
+            return;
         };
 
-        let mut last_copied_text: Option<String> = None;
-        let mut last_copied_image_hash: Option<u64> = None;
+        let mut state = MonitorState::default();
 
         println!("👀 Clipboard monitor active (polling every 200ms for text & images)...");
 
@@ -80,83 +66,131 @@ pub(crate) fn start_clipboard_monitor(
                 continue;
             }
 
-            // 1. Check for text on clipboard
-            if let Ok(text) = clipboard.get_text() {
-                let trimmed = text.trim();
-                if !trimmed.is_empty()
-                    && text.len() <= MAX_TEXT_LENGTH
-                    && last_copied_text.as_deref() != Some(&text)
-                {
-                    last_copied_text = Some(text.clone());
-                    last_copied_image_hash = None;
-
-                    if db.take_if_skipped(&text) {
-                        continue;
-                    }
-
-                    match db.insert(&text) {
-                        Ok(Some(id)) => {
-                            log_captured_text(id, &text);
-                            let _ = notify_tx.send(());
-                            ctx.request_repaint();
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            eprintln!("⚠️ Failed to save clipboard item to database: {e}");
-                        }
-                    }
-                    continue;
-                }
+            if poll_clipboard_text(&mut clipboard, &db, &notify_tx, &ctx, &mut state) {
+                continue;
             }
 
-            // 2. Check for image on clipboard
-            if let Ok(img) = clipboard.get_image() {
-                let width = img.width;
-                let height = img.height;
-                let len = img.bytes.len();
-
-                if width > 0
-                    && height > 0
-                    && width.saturating_mul(height) <= MAX_IMAGE_PIXELS
-                    && len == width.saturating_mul(height).saturating_mul(4)
-                {
-                    let fingerprint = compute_image_fingerprint(width, height, &img.bytes);
-                    if last_copied_image_hash != Some(fingerprint) {
-                        last_copied_image_hash = Some(fingerprint);
-                        last_copied_text = None;
-
-                        match media::rgba_to_png(width, height, &img.bytes) {
-                            Ok(png_bytes) => {
-                                let width_u32 = u32::try_from(width).unwrap_or(0);
-                                let height_u32 = u32::try_from(height).unwrap_or(0);
-                                match db.insert_image(width_u32, height_u32, &png_bytes) {
-                                    Ok(Some(id)) => {
-                                        #[cfg(debug_assertions)]
-                                        println!(
-                                            "🖼️ Captured new image clipboard entry [id: {id}] ({width}x{height})"
-                                        );
-                                        #[cfg(not(debug_assertions))]
-                                        let _ = id;
-                                        let _ = notify_tx.send(());
-                                        ctx.request_repaint();
-                                    }
-                                    Ok(None) => {}
-                                    Err(e) => {
-                                        eprintln!("⚠️ Failed to save image to database: {e}");
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("⚠️ Failed to encode clipboard image to PNG: {e}");
-                            }
-                        }
-                    }
-                }
-            }
+            poll_clipboard_image(&mut clipboard, &db, &notify_tx, &ctx, &mut state);
         }
     });
 
     (handle, shutdown_tx)
+}
+
+#[derive(Default)]
+struct MonitorState {
+    last_copied_text: Option<String>,
+    last_copied_image_hash: Option<u64>,
+}
+
+/// On Windows the clipboard can be briefly unavailable (e.g. at session logon
+/// with auto-start, while disconnected from an RDP session, or during session
+/// switches). Retry instead of silently disabling clipboard capture.
+fn init_clipboard_with_retry(shutdown_rx: &std::sync::mpsc::Receiver<()>) -> Option<Clipboard> {
+    loop {
+        match Clipboard::new() {
+            Ok(cb) => return Some(cb),
+            Err(e) => {
+                eprintln!("⚠️ Failed to initialize clipboard monitor: {e}");
+                if shutdown_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
+                    println!("👀 Clipboard monitor shutting down...");
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+fn poll_clipboard_text(
+    clipboard: &mut Clipboard,
+    db: &Database,
+    notify_tx: &Sender<()>,
+    ctx: &egui::Context,
+    state: &mut MonitorState,
+) -> bool {
+    let Ok(text) = clipboard.get_text() else {
+        return false;
+    };
+    if text.trim().is_empty()
+        || text.len() > MAX_TEXT_LENGTH
+        || state.last_copied_text.as_deref() == Some(text.as_str())
+    {
+        return false;
+    }
+
+    state.last_copied_text = Some(text.clone());
+    state.last_copied_image_hash = None;
+
+    if db.take_if_skipped(&text) {
+        return true;
+    }
+
+    match db.insert(&text) {
+        Ok(Some(id)) => {
+            log_captured_text(id, &text);
+            let _ = notify_tx.send(());
+            ctx.request_repaint();
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("⚠️ Failed to save clipboard item to database: {e}");
+        }
+    }
+    true
+}
+
+fn poll_clipboard_image(
+    clipboard: &mut Clipboard,
+    db: &Database,
+    notify_tx: &Sender<()>,
+    ctx: &egui::Context,
+    state: &mut MonitorState,
+) {
+    let Ok(img) = clipboard.get_image() else {
+        return;
+    };
+    let width = img.width;
+    let height = img.height;
+    let expected_len = width.saturating_mul(height).saturating_mul(4);
+    if width == 0
+        || height == 0
+        || width.saturating_mul(height) > MAX_IMAGE_PIXELS
+        || img.bytes.len() != expected_len
+    {
+        return;
+    }
+
+    let fingerprint = compute_image_fingerprint(width, height, &img.bytes);
+    if state.last_copied_image_hash == Some(fingerprint) {
+        return;
+    }
+    state.last_copied_image_hash = Some(fingerprint);
+    state.last_copied_text = None;
+
+    let png_bytes = match media::rgba_to_png(width, height, &img.bytes) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("⚠️ Failed to encode clipboard image to PNG: {e}");
+            return;
+        }
+    };
+
+    let width_u32 = u32::try_from(width).unwrap_or(0);
+    let height_u32 = u32::try_from(height).unwrap_or(0);
+    match db.insert_image(width_u32, height_u32, &png_bytes) {
+        Ok(Some(id)) => {
+            #[cfg(debug_assertions)]
+            println!("🖼️ Captured new image clipboard entry [id: {id}] ({width}x{height})");
+            #[cfg(not(debug_assertions))]
+            let _ = id;
+            let _ = notify_tx.send(());
+            ctx.request_repaint();
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("⚠️ Failed to save image to database: {e}");
+        }
+    }
 }
 
 #[cfg(debug_assertions)]
