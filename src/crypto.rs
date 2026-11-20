@@ -312,6 +312,18 @@ fn set_restricted_permissions(path: &Path) {
     let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
 }
 
+#[cfg(any(windows, test))]
+fn resolve_windows_icacls_path(system_root: Option<&str>) -> std::path::PathBuf {
+    let root = system_root
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(r"C:\Windows");
+    let mut path = std::path::PathBuf::from(root);
+    path.push("System32");
+    path.push("icacls.exe");
+    path
+}
+
 #[cfg(windows)]
 fn set_restricted_permissions(path: &Path) {
     use std::os::windows::process::CommandExt;
@@ -332,6 +344,10 @@ fn set_restricted_permissions(path: &Path) {
     // inherited ACLs would silently remain in place.
     let username = std::env::var("USERNAME").unwrap_or_default();
     if username.trim().is_empty() {
+        crate::platform::log_message(
+            "WARN",
+            "Skipping key file ACL hardening: USERNAME environment variable is empty",
+        );
         return;
     }
     let user = match std::env::var("USERDOMAIN") {
@@ -341,11 +357,33 @@ fn set_restricted_permissions(path: &Path) {
         _ => username,
     };
     let grant = format!("{user}:(F)");
+    let system_root = std::env::var("SystemRoot").ok();
+    let icacls_path = resolve_windows_icacls_path(system_root.as_deref());
 
-    let _ = Command::new("icacls")
+    match Command::new(&icacls_path)
         .args([path_str, "/inheritance:r", "/grant:r", &grant])
         .creation_flags(CREATE_NO_WINDOW)
-        .output();
+        .output()
+    {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let msg = format!(
+                "Failed to restrict key file ACLs via {} (exit {:?})",
+                icacls_path.display(),
+                output.status.code()
+            );
+            eprintln!("⚠️ {msg}");
+            crate::platform::log_message("WARN", &msg);
+        }
+        Err(e) => {
+            let msg = format!(
+                "Failed to execute {} for key file ACL hardening: {e}",
+                icacls_path.display()
+            );
+            eprintln!("⚠️ {msg}");
+            crate::platform::log_message("WARN", &msg);
+        }
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -488,5 +526,20 @@ mod tests {
             mode, 0o700,
             "Data directory permissions must be 0700 on Unix"
         );
+    }
+
+    #[test]
+    fn test_resolve_windows_icacls_path() {
+        let custom = resolve_windows_icacls_path(Some(r"D:\WinOS"));
+        assert!(custom.ends_with("icacls.exe"));
+        assert!(custom.to_string_lossy().contains("System32"));
+        assert!(custom.to_string_lossy().starts_with(r"D:\WinOS"));
+
+        let fallback = resolve_windows_icacls_path(None);
+        assert!(fallback.to_string_lossy().starts_with(r"C:\Windows"));
+        assert!(fallback.ends_with("icacls.exe"));
+
+        let blank = resolve_windows_icacls_path(Some("   "));
+        assert!(blank.to_string_lossy().starts_with(r"C:\Windows"));
     }
 }
