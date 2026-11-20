@@ -11,11 +11,6 @@ targets = [
 [advisories]
 unmaintained = "workspace"
 ignore = [
-    # quick-xml < 0.41.0 transitive dependency via eframe -> accesskit_winit -> atspi -> zbus_xml
-    { id = "RUSTSEC-2026-0194", reason = "Transitive dependency through eframe/accesskit" },
-    { id = "RUSTSEC-2026-0195", reason = "Transitive dependency through eframe/accesskit" },
-    # sqlcipher-src pinned by libsqlite3-sys =0.39.1 via rusqlite bundled-sqlcipher
-    { id = "RUSTSEC-2026-0502", reason = "Transitive dependency through rusqlite bundled-sqlcipher" },
     # chrono unmaintained advisory RUSTSEC-2026-0543
     { id = "RUSTSEC-2026-0543", reason = "Used only for local timestamp string formatting in db.rs" },
 ]
@@ -36,6 +31,7 @@ allow = [
     "BSL-1.0",
     "0BSD",
     "OFL-1.1",
+    "Ubuntu-font-1.0",
     "blessing",
     "WTFPL",
     "LicenseRef-UFL-1.0",

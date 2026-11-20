@@ -27,11 +27,12 @@ struct ItemRenderState {
 }
 
 impl ClipboardApp {
-    pub(super) fn render_central_panel(&mut self, ctx: &egui::Context, is_dark: bool) {
+    pub(super) fn render_central_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        let ctx = ui.ctx().clone();
         let filter = self.content_filter;
         let filtered_indices = self.get_filtered_indices();
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             if filtered_indices.is_empty() {
                 ui.vertical_centered(|ui| {
                     ui.add_space(35.0);
@@ -74,7 +75,7 @@ impl ClipboardApp {
                 return;
             }
 
-            self.render_items_scroll_area(ui, &filtered_indices, ctx, is_dark);
+            self.render_items_scroll_area(ui, &filtered_indices, &ctx, is_dark);
         });
     }
 
@@ -202,10 +203,10 @@ impl ClipboardApp {
         let rounding = crate::theme::card_rounding();
 
         let frame_resp = egui::Frame::group(ui.style())
-            .rounding(rounding)
+            .corner_radius(rounding)
             .stroke(stroke)
             .fill(fill)
-            .inner_margin(8.0_f32)
+            .inner_margin(8)
             .show(ui, |ui| {
                 let header_action = Self::render_item_header(
                     ui,
@@ -385,11 +386,11 @@ impl ClipboardApp {
                     let (text_c, bg_c, stroke_c) =
                         crate::theme::shortcut_badge_colors(is_dark, is_selected);
 
-                    egui::Frame::none()
-                        .rounding(crate::theme::pill_rounding())
+                    egui::Frame::new()
+                        .corner_radius(crate::theme::pill_rounding())
                         .fill(bg_c)
                         .stroke(egui::Stroke::new(1.0_f32, stroke_c))
-                        .inner_margin(egui::Margin::symmetric(5.0_f32, 1.5_f32))
+                        .inner_margin(egui::Margin::symmetric(5, 2))
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(shortcut_str)
@@ -536,10 +537,10 @@ impl ClipboardApp {
         };
 
         egui::Frame::canvas(ui.style())
-            .rounding(4.0)
+            .corner_radius(4)
             .fill(canvas_fill)
             .stroke(canvas_stroke)
-            .inner_margin(6.0)
+            .inner_margin(6)
             .show(ui, |ui| {
                 let preview: String = item
                     .content
@@ -660,7 +661,7 @@ impl ClipboardApp {
         painter: &egui::Painter,
         rect: egui::Rect,
         parsed: crate::color::ParsedColor,
-        r_radius: f32,
+        r_radius: u8,
     ) {
         if parsed.a == 255 {
             // Fully opaque color: clean solid rounded fill
@@ -679,11 +680,11 @@ impl ClipboardApp {
             // Left half: Opaque base color
             painter.rect_filled(
                 left_rect,
-                egui::Rounding {
+                egui::CornerRadius {
                     nw: r_radius,
-                    ne: 0.0,
+                    ne: 0,
                     sw: r_radius,
-                    se: 0.0,
+                    se: 0,
                 },
                 egui::Color32::from_rgb(parsed.r, parsed.g, parsed.b),
             );
@@ -691,10 +692,10 @@ impl ClipboardApp {
             // Right half: Light checkerboard base
             painter.rect_filled(
                 right_rect,
-                egui::Rounding {
-                    nw: 0.0,
+                egui::CornerRadius {
+                    nw: 0,
                     ne: r_radius,
-                    sw: 0.0,
+                    sw: 0,
                     se: r_radius,
                 },
                 egui::Color32::from_gray(245),
@@ -706,16 +707,16 @@ impl ClipboardApp {
                 right_rect.min + egui::vec2(cell, cell),
                 egui::vec2(cell, cell),
             );
-            painter.rect_filled(q_top_left, 0.0, egui::Color32::from_gray(190));
-            painter.rect_filled(q_mid, 0.0, egui::Color32::from_gray(190));
+            painter.rect_filled(q_top_left, 0, egui::Color32::from_gray(190));
+            painter.rect_filled(q_mid, 0, egui::Color32::from_gray(190));
 
             // Alpha overlay on right half
             painter.rect_filled(
                 right_rect,
-                egui::Rounding {
-                    nw: 0.0,
+                egui::CornerRadius {
+                    nw: 0,
                     ne: r_radius,
-                    sw: 0.0,
+                    sw: 0,
                     se: r_radius,
                 },
                 parsed.to_color32(),
@@ -736,6 +737,7 @@ impl ClipboardApp {
             rect,
             r_radius,
             egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(50)),
+            egui::StrokeKind::Inside,
         );
     }
 
@@ -758,7 +760,7 @@ impl ClipboardApp {
 
     fn render_color_swatch(ui: &mut egui::Ui, parsed: crate::color::ParsedColor) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(egui::vec2(44.0, 32.0), egui::Sense::click());
-        Self::paint_color_swatch(ui.painter(), rect, parsed, 4.0);
+        Self::paint_color_swatch(ui.painter(), rect, parsed, 4);
         response.on_hover_ui(|ui| {
             Self::render_color_tooltip(ui, parsed);
         })
@@ -769,7 +771,7 @@ impl ClipboardApp {
         parsed: crate::color::ParsedColor,
     ) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 16.0), egui::Sense::click());
-        Self::paint_color_swatch(ui.painter(), rect, parsed, 3.0);
+        Self::paint_color_swatch(ui.painter(), rect, parsed, 3);
         response.on_hover_ui(|ui| {
             Self::render_color_tooltip(ui, parsed);
         })
@@ -803,11 +805,11 @@ impl ClipboardApp {
             };
 
             for &color in colors {
-                egui::Frame::none()
+                egui::Frame::new()
                     .fill(bg)
                     .stroke(stroke)
-                    .rounding(4.0)
-                    .inner_margin(egui::vec2(5.0, 2.0))
+                    .corner_radius(4)
+                    .inner_margin(egui::Margin::symmetric(5, 2))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             let swatch_res = Self::render_mini_color_swatch(ui, color);

@@ -1,7 +1,7 @@
 //! Platform-adaptive UI theme providing native macOS Apple HIG styling,
 //! Windows 11 Fluent styling, and Linux Adwaita styling in both Dark and Light modes.
 
-use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, Rounding, Stroke};
+use eframe::egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Stroke};
 use std::path::Path;
 
 /// Applies the platform-adaptive theme visuals (Dark or Light) to the egui context.
@@ -15,14 +15,14 @@ pub(crate) fn setup_theme(ctx: &egui::Context, is_dark: bool) {
     // Window & Panel backgrounds
     visuals.panel_fill = panel_background(is_dark);
     visuals.window_fill = panel_background(is_dark);
-    visuals.window_rounding = card_rounding();
+    visuals.window_corner_radius = card_rounding();
     visuals.override_text_color = Some(text_primary(is_dark));
 
     // Base widget frames
     visuals.widgets.noninteractive.bg_fill = card_fill(is_dark, false);
     visuals.widgets.noninteractive.bg_stroke = card_stroke(is_dark, false);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, text_primary(is_dark));
-    visuals.widgets.noninteractive.rounding = card_rounding();
+    visuals.widgets.noninteractive.corner_radius = card_rounding();
 
     visuals.widgets.inactive.bg_fill = button_inactive_fill(is_dark);
     visuals.widgets.inactive.bg_stroke = Stroke::new(
@@ -34,7 +34,7 @@ pub(crate) fn setup_theme(ctx: &egui::Context, is_dark: bool) {
         },
     );
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, text_primary(is_dark));
-    visuals.widgets.inactive.rounding = button_rounding();
+    visuals.widgets.inactive.corner_radius = button_rounding();
 
     visuals.widgets.hovered.bg_fill = button_hover_fill(is_dark);
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, accent_color(is_dark));
@@ -46,12 +46,12 @@ pub(crate) fn setup_theme(ctx: &egui::Context, is_dark: bool) {
             Color32::from_rgb(10, 10, 12)
         },
     );
-    visuals.widgets.hovered.rounding = button_rounding();
+    visuals.widgets.hovered.corner_radius = button_rounding();
 
     visuals.widgets.active.bg_fill = accent_color(is_dark);
     visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, accent_color(is_dark));
     visuals.widgets.active.fg_stroke = Stroke::new(2.0_f32, Color32::WHITE);
-    visuals.widgets.active.rounding = button_rounding();
+    visuals.widgets.active.corner_radius = button_rounding();
 
     // Selection visuals
     visuals.selection.bg_fill = selection_fill(is_dark);
@@ -105,7 +105,7 @@ pub(crate) fn setup_fonts(fonts: &mut FontDefinitions) {
                 let font_name = "system_ui".to_owned();
                 fonts
                     .font_data
-                    .insert(font_name.clone(), FontData::from_owned(bytes));
+                    .insert(font_name.clone(), FontData::from_owned(bytes).into());
                 if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
                     family.insert(0, font_name.clone());
                 }
@@ -538,69 +538,69 @@ pub(crate) fn ensure_contrast(mut fg: Color32, bg: Color32, min_contrast: f32) -
 
 /// Corner rounding for clipboard item cards.
 #[must_use]
-pub(crate) const fn card_rounding() -> Rounding {
+pub(crate) const fn card_rounding() -> CornerRadius {
     #[cfg(target_os = "macos")]
     {
-        Rounding::same(10.0_f32)
+        CornerRadius::same(10)
     }
     #[cfg(target_os = "windows")]
     {
-        Rounding::same(6.0_f32)
+        CornerRadius::same(6)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        Rounding::same(8.0_f32)
+        CornerRadius::same(8)
     }
 }
 
 /// Corner rounding for search bars.
 #[must_use]
-pub(crate) const fn search_rounding() -> Rounding {
+pub(crate) const fn search_rounding() -> CornerRadius {
     #[cfg(target_os = "macos")]
     {
-        Rounding::same(8.0_f32)
+        CornerRadius::same(8)
     }
     #[cfg(target_os = "windows")]
     {
-        Rounding::same(4.0_f32)
+        CornerRadius::same(4)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        Rounding::same(6.0_f32)
+        CornerRadius::same(6)
     }
 }
 
 /// Corner rounding for standard buttons.
 #[must_use]
-pub(crate) const fn button_rounding() -> Rounding {
+pub(crate) const fn button_rounding() -> CornerRadius {
     #[cfg(target_os = "macos")]
     {
-        Rounding::same(6.0_f32)
+        CornerRadius::same(6)
     }
     #[cfg(target_os = "windows")]
     {
-        Rounding::same(4.0_f32)
+        CornerRadius::same(4)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        Rounding::same(6.0_f32)
+        CornerRadius::same(6)
     }
 }
 
 /// Corner rounding for pills and badges.
 #[must_use]
-pub(crate) const fn pill_rounding() -> Rounding {
+pub(crate) const fn pill_rounding() -> CornerRadius {
     #[cfg(target_os = "macos")]
     {
-        Rounding::same(12.0_f32)
+        CornerRadius::same(12)
     }
     #[cfg(target_os = "windows")]
     {
-        Rounding::same(4.0_f32)
+        CornerRadius::same(4)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        Rounding::same(8.0_f32)
+        CornerRadius::same(8)
     }
 }
 
@@ -753,11 +753,11 @@ pub(crate) fn render_pill_tag(
     bg_tint: Color32,
     border_color: Color32,
 ) {
-    egui::Frame::none()
-        .rounding(pill_rounding())
+    egui::Frame::new()
+        .corner_radius(pill_rounding())
         .fill(bg_tint)
         .stroke(Stroke::new(1.0_f32, border_color))
-        .inner_margin(egui::Margin::symmetric(7.0_f32, 2.0_f32))
+        .inner_margin(egui::Margin::symmetric(7, 2))
         .show(ui, |ui| {
             ui.label(
                 egui::RichText::new(format!("{icon} {text}"))
@@ -817,7 +817,7 @@ pub(crate) fn render_segmented_tab(
     )
     .fill(fill)
     .stroke(stroke)
-    .rounding(pill_rounding());
+    .corner_radius(pill_rounding());
 
     ui.add(button)
 }
@@ -942,7 +942,7 @@ mod tests {
 
             let ctx = egui::Context::default();
             setup_theme(&ctx, is_dark);
-            let style = ctx.style();
+            let style = ctx.global_style();
 
             let code_job = crate::code::highlight_code(
                 &ctx,
@@ -956,7 +956,8 @@ mod tests {
                 Color32::from_rgb(244, 244, 247)
             };
             for (i, sec_fmt) in code_job.sections.iter().enumerate() {
-                let txt = &code_job.text[sec_fmt.byte_range.clone()];
+                let range = sec_fmt.byte_range.start.0..sec_fmt.byte_range.end.0;
+                let txt = &code_job.text[range];
                 let c = sec_fmt.format.color;
                 let cr = contrast_ratio(c, canvas_fill);
                 println!("Code token [{i}] {txt:?}: color {c:?}, on canvas: {cr:.2}:1");
