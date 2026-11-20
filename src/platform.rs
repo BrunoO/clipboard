@@ -254,7 +254,16 @@ pub(crate) fn restore_focus_and_paste(
             macos::simulate_paste();
 
             #[cfg(target_os = "windows")]
-            windows::simulate_paste();
+            {
+                if !windows::is_target_foreground() {
+                    crate::platform::log_message(
+                        "WARN",
+                        "Auto-paste skipped: captured target window is not in the foreground",
+                    );
+                    return;
+                }
+                let _ = windows::simulate_paste();
+            }
 
             #[cfg(target_os = "linux")]
             linux::simulate_paste();
@@ -642,11 +651,35 @@ mod macos {
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "windows")]
 mod windows {
-    use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+
+    use super::log_message;
 
     static PREVIOUS_HWND: AtomicIsize = AtomicIsize::new(0);
+    static PREVIOUS_PID: AtomicU32 = AtomicU32::new(0);
 
     type HWND = *mut std::ffi::c_void;
+
+    // Calling PeekMessage on a thread creates its message queue. This is a
+    // prerequisite for AttachThreadInput, which a bare std::thread lacks.
+    #[allow(clippy::upper_case_acronyms)]
+    #[repr(C)]
+    struct MSG {
+        hwnd: HWND,
+        message: u32,
+        w_param: usize,
+        l_param: isize,
+        time: u32,
+        pt_x: i32,
+        pt_y: i32,
+        l_private: u32,
+    }
+
+    const PM_NOREMOVE: u32 = 0;
+    const SW_SHOW: i32 = 5;
+    const SW_RESTORE: i32 = 9;
+    const MAPVK_VK_TO_VSC: u32 = 0;
+    const MAPVK_VSC_TO_VK: u32 = 1;
 
     extern "system" {
         fn GetForegroundWindow() -> HWND;
@@ -654,6 +687,14 @@ mod windows {
         fn BringWindowToTop(hwnd: HWND) -> i32;
         fn ShowWindow(hwnd: HWND, nCmdShow: i32) -> i32;
         fn IsIconic(hwnd: HWND) -> i32;
+        fn IsWindow(hwnd: HWND) -> i32;
+        fn PeekMessageW(
+            lpMsg: *mut MSG,
+            hWnd: HWND,
+            wMsgFilterMin: u32,
+            wMsgFilterMax: u32,
+            wRemoveMsg: u32,
+        ) -> i32;
         fn GetCurrentProcessId() -> u32;
         fn GetCurrentThreadId() -> u32;
         fn GetWindowThreadProcessId(hwnd: HWND, lpdwProcessId: *mut u32) -> u32;
@@ -663,6 +704,58 @@ mod windows {
             lParam: isize,
         ) -> i32;
         fn GetWindowTextW(hwnd: HWND, lpString: *mut u16, nMaxCount: i32) -> i32;
+        fn GetKeyboardLayout(idThread: u32) -> *mut std::ffi::c_void;
+        fn MapVirtualKeyExW(uCode: u32, uMapType: u32, dwhkl: *mut std::ffi::c_void) -> u32;
+        fn ToUnicodeEx(
+            wVirtKey: u32,
+            wScanCode: u32,
+            lpKeyState: *const u8,
+            pwszBuff: *mut u16,
+            cchBuff: i32,
+            wFlags: u32,
+            dwhkl: *mut std::ffi::c_void,
+        ) -> i32;
+    }
+
+    /// Resolves the keyboard layout (HKL) for the thread whose layout the user is
+    /// currently typing with, preferring the foreground window's thread (or the
+    /// captured target window when our own window is foreground) over our UI thread.
+    unsafe fn target_keyboard_layout() -> *mut std::ffi::c_void {
+        let current_pid = GetCurrentProcessId();
+        let fg = GetForegroundWindow();
+        let mut fg_pid = 0u32;
+        let fg_thread = if fg.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(fg, &mut fg_pid)
+        };
+
+        let target_thread = if fg_thread != 0 && fg_pid != current_pid {
+            fg_thread
+        } else {
+            let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
+            if hwnd_raw != 0 {
+                let hwnd = hwnd_raw as HWND;
+                if IsWindow(hwnd) != 0 {
+                    GetWindowThreadProcessId(hwnd, std::ptr::null_mut())
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        };
+
+        let hkl = if target_thread != 0 {
+            GetKeyboardLayout(target_thread)
+        } else {
+            std::ptr::null_mut()
+        };
+        if hkl.is_null() {
+            GetKeyboardLayout(0)
+        } else {
+            hkl
+        }
     }
 
     fn find_main_window() -> Option<HWND> {
@@ -698,9 +791,6 @@ mod windows {
     }
 
     pub(super) fn order_front_main_window() {
-        const SW_SHOW: i32 = 5;
-        const SW_RESTORE: i32 = 9;
-
         let Some(target_hwnd) = find_main_window() else {
             return;
         };
@@ -751,8 +841,9 @@ mod windows {
             if !hwnd.is_null() {
                 let mut pid: u32 = 0;
                 GetWindowThreadProcessId(hwnd, &mut pid);
-                if pid != GetCurrentProcessId() {
+                if pid != 0 && pid != GetCurrentProcessId() {
                     PREVIOUS_HWND.store(hwnd as isize, Ordering::SeqCst);
+                    PREVIOUS_PID.store(pid, Ordering::SeqCst);
                 }
             }
         }
@@ -760,23 +851,86 @@ mod windows {
 
     pub(super) fn restore_focus() {
         let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
-        if hwnd_raw != 0 {
-            unsafe {
-                let target_hwnd = hwnd_raw as HWND;
-                let cur_thread = GetCurrentThreadId();
-                let mut target_pid: u32 = 0;
-                let target_thread = GetWindowThreadProcessId(target_hwnd, &mut target_pid);
+        if hwnd_raw == 0 {
+            log_message(
+                "WARN",
+                "Focus restore skipped: no previously captured window",
+            );
+            return;
+        }
 
-                if target_thread != 0 && target_thread != cur_thread {
-                    AttachThreadInput(cur_thread, target_thread, 1);
-                    BringWindowToTop(target_hwnd);
-                    SetForegroundWindow(target_hwnd);
-                    AttachThreadInput(cur_thread, target_thread, 0);
-                } else {
-                    BringWindowToTop(target_hwnd);
-                    SetForegroundWindow(target_hwnd);
-                }
+        unsafe {
+            let target_hwnd = hwnd_raw as HWND;
+            if IsWindow(target_hwnd) == 0 {
+                PREVIOUS_HWND.store(0, Ordering::SeqCst);
+                PREVIOUS_PID.store(0, Ordering::SeqCst);
+                log_message(
+                    "WARN",
+                    "Focus restore skipped: captured target window no longer exists",
+                );
+                return;
             }
+
+            // A bare worker thread has no message queue and AttachThreadInput fails
+            // unless both threads have one. PeekMessage creates it as a side effect.
+            let mut msg = std::mem::zeroed::<MSG>();
+            let _ = PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
+
+            let cur_thread = GetCurrentThreadId();
+            let fg_hwnd = GetForegroundWindow();
+            let fg_thread = if fg_hwnd.is_null() {
+                0
+            } else {
+                GetWindowThreadProcessId(fg_hwnd, std::ptr::null_mut())
+            };
+
+            // Sharing the foreground thread's input queue relaxes the foreground
+            // lock for SetForegroundWindow. Always detach afterwards.
+            let attached = fg_thread != 0
+                && fg_thread != cur_thread
+                && AttachThreadInput(cur_thread, fg_thread, 1) != 0;
+
+            BringWindowToTop(target_hwnd);
+            let activated = SetForegroundWindow(target_hwnd) != 0;
+
+            if attached {
+                let _ = AttachThreadInput(cur_thread, fg_thread, 0);
+            }
+
+            if !activated {
+                log_message(
+                    "WARN",
+                    &format!(
+                        "SetForegroundWindow failed for captured target {hwnd_raw:#x} (attached={attached}, fg_thread={fg_thread}, cur_thread={cur_thread})"
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Confirms the captured target is in the foreground before synthetic keys are sent.
+    pub(super) fn is_target_foreground() -> bool {
+        let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
+        if hwnd_raw == 0 {
+            return false;
+        }
+        unsafe {
+            let fg = GetForegroundWindow();
+            if fg.is_null() {
+                return false;
+            }
+            if fg == hwnd_raw as HWND {
+                return true;
+            }
+            // Some apps replace their top-level HWND between capture and paste.
+            // Accepting the captured process is still safe: never another app.
+            let target_pid = PREVIOUS_PID.load(Ordering::SeqCst);
+            if target_pid == 0 {
+                return false;
+            }
+            let mut fg_pid: u32 = 0;
+            GetWindowThreadProcessId(fg, &mut fg_pid);
+            fg_pid != 0 && fg_pid == target_pid
         }
     }
 
@@ -791,17 +945,17 @@ mod windows {
 
         extern "system" {
             fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> HWND;
-            fn ShowWindow(hwnd: HWND, nCmdShow: i32) -> i32;
         }
-
-        const SW_RESTORE: i32 = 9;
-        const SW_SHOW: i32 = 5;
 
         unsafe {
             let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
             if !hwnd.is_null() {
-                ShowWindow(hwnd, SW_RESTORE);
-                ShowWindow(hwnd, SW_SHOW);
+                // SW_RESTORE on a maximized/snapped window would un-maximize it.
+                if IsIconic(hwnd) != 0 {
+                    ShowWindow(hwnd, SW_RESTORE);
+                } else {
+                    ShowWindow(hwnd, SW_SHOW);
+                }
                 BringWindowToTop(hwnd);
                 SetForegroundWindow(hwnd);
                 true
@@ -846,7 +1000,8 @@ mod windows {
         }
     }
 
-    pub(super) fn simulate_paste() {
+    /// Returns `true` only when all four keyboard events were inserted.
+    pub(super) fn simulate_paste() -> bool {
         #[allow(non_snake_case, non_camel_case_types)]
         #[repr(C)]
         struct KEYBDINPUT {
@@ -883,13 +1038,25 @@ mod windows {
         const VK_V: u16 = 0x56;
 
         unsafe {
+            // Raw Input / Windows Terminal-style handlers read hardware scan codes
+            // and drop events with wScan == 0 even when wVk is set.
+            let hkl = target_keyboard_layout();
+            let ctrl_scan = u16::try_from(MapVirtualKeyExW(
+                u32::from(VK_CONTROL),
+                MAPVK_VK_TO_VSC,
+                hkl,
+            ))
+            .unwrap_or(0);
+            let v_scan =
+                u16::try_from(MapVirtualKeyExW(u32::from(VK_V), MAPVK_VK_TO_VSC, hkl)).unwrap_or(0);
+
             let inputs = [
                 // Ctrl Down
                 INPUT {
                     r#type: INPUT_KEYBOARD,
                     u: KEYBDINPUT {
                         wVk: VK_CONTROL,
-                        wScan: 0,
+                        wScan: ctrl_scan,
                         dwFlags: 0,
                         time: 0,
                         dwExtraInfo: 0,
@@ -901,7 +1068,7 @@ mod windows {
                     r#type: INPUT_KEYBOARD,
                     u: KEYBDINPUT {
                         wVk: VK_V,
-                        wScan: 0,
+                        wScan: v_scan,
                         dwFlags: 0,
                         time: 0,
                         dwExtraInfo: 0,
@@ -913,7 +1080,7 @@ mod windows {
                     r#type: INPUT_KEYBOARD,
                     u: KEYBDINPUT {
                         wVk: VK_V,
-                        wScan: 0,
+                        wScan: v_scan,
                         dwFlags: KEYEVENTF_KEYUP,
                         time: 0,
                         dwExtraInfo: 0,
@@ -925,7 +1092,7 @@ mod windows {
                     r#type: INPUT_KEYBOARD,
                     u: KEYBDINPUT {
                         wVk: VK_CONTROL,
-                        wScan: 0,
+                        wScan: ctrl_scan,
                         dwFlags: KEYEVENTF_KEYUP,
                         time: 0,
                         dwExtraInfo: 0,
@@ -934,7 +1101,15 @@ mod windows {
                 },
             ];
 
-            SendInput(4, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+            let inserted = SendInput(4, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+            let ok = inserted == 4;
+            if !ok {
+                log_message(
+                    "WARN",
+                    &format!("SendInput inserted {inserted}/4 events for auto-paste (possible UIPI block)"),
+                );
+            }
+            ok
         }
     }
 
@@ -1050,27 +1225,11 @@ mod windows {
         false
     }
 
-    /// Returns `true` when the current Windows keyboard layout produces `ù` for the
-    /// physical key in the US `Quote` position (French/Belgian AZERTY layouts).
+    /// Returns `true` when the active target thread's Windows keyboard layout produces `ù`
+    /// for the physical key in the US `Quote` position (French/Belgian AZERTY layouts).
     pub(super) fn quote_key_is_ugrave() -> bool {
-        extern "system" {
-            fn GetKeyboardLayout(idThread: u32) -> *mut std::ffi::c_void;
-            fn MapVirtualKeyExW(uCode: u32, uMapType: u32, dwhkl: *mut std::ffi::c_void) -> u32;
-            fn ToUnicodeEx(
-                wVirtKey: u32,
-                wScanCode: u32,
-                lpKeyState: *const u8,
-                pwszBuff: *mut u16,
-                cchBuff: i32,
-                wFlags: u32,
-                dwhkl: *mut std::ffi::c_void,
-            ) -> i32;
-        }
-
-        const MAPVK_VSC_TO_VK: u32 = 1;
-
         unsafe {
-            let hkl = GetKeyboardLayout(0);
+            let hkl = target_keyboard_layout();
             if hkl.is_null() {
                 return false;
             }
@@ -1097,6 +1256,29 @@ mod windows {
         }
     }
 
+    unsafe fn captured_target_pid() -> u32 {
+        let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
+        if hwnd_raw != 0 {
+            let hwnd = hwnd_raw as HWND;
+            if IsWindow(hwnd) != 0 {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(hwnd, &mut pid);
+                if pid != 0 && pid != GetCurrentProcessId() {
+                    return pid;
+                }
+            }
+        }
+        let stored = PREVIOUS_PID.load(Ordering::SeqCst);
+        if stored != 0 && stored != GetCurrentProcessId() {
+            stored
+        } else {
+            0
+        }
+    }
+
+    /// True when the captured target runs at a higher mandatory integrity level
+    /// than us (normally: it runs as Administrator). UIPI silently discards the
+    /// injected Ctrl+V across that boundary, so auto-paste must be skipped.
     pub(super) fn target_is_elevated() -> bool {
         #[link(name = "kernel32")]
         extern "system" {
@@ -1106,7 +1288,6 @@ mod windows {
                 dwProcessId: u32,
             ) -> *mut std::ffi::c_void;
             fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
-            fn GetLastError() -> u32;
         }
 
         #[link(name = "advapi32")]
@@ -1123,77 +1304,81 @@ mod windows {
                 TokenInformationLength: u32,
                 ReturnLength: *mut u32,
             ) -> i32;
+            fn GetSidSubAuthorityCount(pSid: *mut std::ffi::c_void) -> *mut u8;
+            fn GetSidSubAuthority(pSid: *mut std::ffi::c_void, nSubAuthority: u32) -> *mut u32;
         }
 
+        // TOKEN_MANDATORY_LABEL = SID_AND_ATTRIBUTES followed inline by the SID bytes.
+        // Allocate a properly aligned 256-byte buffer so GetTokenInformation can store
+        // both the header and the inline integrity SID without ERROR_INSUFFICIENT_BUFFER.
+        #[allow(dead_code)]
         #[repr(C)]
-        struct TokenElevation {
-            token_is_elevated: u32,
+        struct SidAndAttributes {
+            sid: *mut std::ffi::c_void,
+            attributes: u32,
         }
+
+        #[repr(C, align(8))]
+        struct TokenIntegrityBuf([u8; 256]);
 
         const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
         const TOKEN_QUERY: u32 = 0x0008;
-        const TOKEN_ELEVATION_CLASS: i32 = 20;
-        const ERROR_ACCESS_DENIED: u32 = 5;
+        const TOKEN_INTEGRITY_LEVEL_CLASS: i32 = 25;
+        const SECURITY_MANDATORY_MEDIUM_RID: u32 = 0x2000;
 
-        unsafe fn process_is_elevated(pid: u32, treat_access_denied_as_elevated: bool) -> bool {
+        unsafe fn integrity_level(pid: u32) -> Option<u32> {
             if pid == 0 {
-                return false;
+                return None;
             }
             let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if proc.is_null() {
-                return treat_access_denied_as_elevated && GetLastError() == ERROR_ACCESS_DENIED;
+                return None;
             }
             let mut token: *mut std::ffi::c_void = std::ptr::null_mut();
-            let ok = OpenProcessToken(proc, TOKEN_QUERY, &mut token);
-            let mut elevated = false;
-            if ok != 0 && !token.is_null() {
-                let mut info = TokenElevation {
-                    token_is_elevated: 0,
-                };
-                let mut ret_len: u32 = 0;
-                let ok2 = GetTokenInformation(
+            let opened = OpenProcessToken(proc, TOKEN_QUERY, &mut token) != 0 && !token.is_null();
+            let mut level = None;
+            if opened {
+                let mut buf = TokenIntegrityBuf([0u8; 256]);
+                let mut ret_len = 0u32;
+                let ok = GetTokenInformation(
                     token,
-                    TOKEN_ELEVATION_CLASS,
-                    std::ptr::addr_of_mut!(info).cast::<std::ffi::c_void>(),
-                    u32::try_from(std::mem::size_of::<TokenElevation>()).unwrap_or(4),
+                    TOKEN_INTEGRITY_LEVEL_CLASS,
+                    buf.0.as_mut_ptr().cast::<std::ffi::c_void>(),
+                    u32::try_from(buf.0.len()).unwrap_or(256),
                     &mut ret_len,
                 );
-                if ok2 != 0 {
-                    elevated = info.token_is_elevated != 0;
+                if ok != 0 {
+                    let info = &*buf.0.as_ptr().cast::<SidAndAttributes>();
+                    if !info.sid.is_null() {
+                        let count = GetSidSubAuthorityCount(info.sid);
+                        if !count.is_null() && *count > 0 {
+                            let rid = GetSidSubAuthority(info.sid, u32::from(*count - 1));
+                            if !rid.is_null() {
+                                level = Some(*rid);
+                            }
+                        }
+                    }
                 }
                 let _ = CloseHandle(token);
-            } else if treat_access_denied_as_elevated && GetLastError() == ERROR_ACCESS_DENIED {
-                // Standard (medium-integrity) processes receive ERROR_ACCESS_DENIED when
-                // opening the token of an elevated (high-integrity) process under UIPI.
-                elevated = true;
             }
             let _ = CloseHandle(proc);
-            elevated
+            level
         }
 
         unsafe {
-            let current_pid = GetCurrentProcessId();
-            if process_is_elevated(current_pid, false) {
+            let target_pid = captured_target_pid();
+            if target_pid == 0 {
                 return false;
             }
-
-            // Check the previously focused target window that restore_focus_and_paste()
-            // will paste into, falling back to the current foreground window if none was captured.
-            let prev_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
-            let hwnd = if prev_raw != 0 {
-                prev_raw as HWND
-            } else {
-                GetForegroundWindow()
-            };
-            if hwnd.is_null() {
-                return false;
+            let self_level =
+                integrity_level(GetCurrentProcessId()).unwrap_or(SECURITY_MANDATORY_MEDIUM_RID);
+            match integrity_level(target_pid) {
+                Some(level) => level > self_level,
+                // Protected / higher-integrity processes often refuse TOKEN_QUERY.
+                // Fail closed: asking the user to paste manually is safer than a
+                // silent drop by UIPI.
+                None => true,
             }
-            let mut target_pid: u32 = 0;
-            GetWindowThreadProcessId(hwnd, &mut target_pid);
-            if target_pid == 0 || target_pid == current_pid {
-                return false;
-            }
-            process_is_elevated(target_pid, true)
         }
     }
 

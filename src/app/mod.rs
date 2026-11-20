@@ -289,13 +289,17 @@ impl ClipboardApp {
 
         #[cfg(target_os = "windows")]
         {
-            if self.tray_service.is_some() {
-                // With a system tray icon active, hide the window cleanly so it
-                // doesn't clutter the taskbar; clicking the tray icon restores it.
+            if self.tray_service.as_ref().is_some_and(TrayService::is_live) {
+                // With a confirmed shell tray icon, hide the window cleanly so
+                // it doesn't clutter the taskbar; clicking the tray restores it.
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             } else {
-                // Fallback if tray icon failed to initialize: minimize to taskbar
-                // so the user is never locked out of returning to the window.
+                // No live tray icon (init failed, Explorer restarted, ...):
+                // minimize to the taskbar so the user is never locked out.
+                crate::platform::log_message(
+                    "WARN",
+                    "No live tray icon; minimizing to taskbar instead of hiding",
+                );
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
         }
