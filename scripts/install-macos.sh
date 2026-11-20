@@ -6,10 +6,12 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${PROJECT_DIR}"
 
 APP_NAME="CipherClipboard"
+APP_VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
+APP_VERSION="${APP_VERSION:-0.1.0}"
 INSTALL_DIR="${1:-/Applications}"
 APP_BUNDLE="${INSTALL_DIR}/${APP_NAME}.app"
 
-echo "📦 Building ${APP_NAME} in release mode..."
+echo "📦 Building ${APP_NAME} v${APP_VERSION} in release mode..."
 cargo build --release
 
 echo "📂 Creating bundle directory at ${APP_BUNDLE}..."
@@ -27,7 +29,7 @@ if [ -f "assets/icon.icns" ]; then
 fi
 
 echo "⚙️ Writing Info.plist metadata..."
-cat << 'EOF' > "${APP_BUNDLE}/Contents/Info.plist"
+cat << EOF > "${APP_BUNDLE}/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -45,13 +47,15 @@ cat << 'EOF' > "${APP_BUNDLE}/Contents/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>${APP_VERSION}</string>
     <key>LSMinimumSystemVersion</key>
     <string>10.15</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSKeychainUsageDescription</key>
+    <string>CipherClipboard stores your database encryption key securely in macOS Keychain so your clipboard history remains encrypted and accessible only to you.</string>
 </dict>
 </plist>
 EOF
