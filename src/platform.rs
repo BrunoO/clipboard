@@ -480,12 +480,13 @@ mod macos {
             None
         };
         if let Some(ObserverPtr(observer)) = observer {
-            unsafe {
+            objc::rc::autoreleasepool(|| unsafe {
                 let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
                 if !center.is_null() {
                     let _: () = msg_send![center, removeObserver: observer];
                 }
-            }
+                let _: () = msg_send![observer, release];
+            });
         }
     }
 
@@ -517,7 +518,7 @@ mod macos {
     }
 
     pub(super) fn prompt_permission() -> bool {
-        unsafe {
+        objc::rc::autoreleasepool(|| unsafe {
             let key = b"AXTrustedCheckOptionPrompt\0";
             let str_obj: *mut Object =
                 msg_send![class!(NSString), stringWithUTF8String: key.as_ptr()];
@@ -525,7 +526,7 @@ mod macos {
             let dict: *mut Object =
                 msg_send![class!(NSDictionary), dictionaryWithObject: num_obj forKey: str_obj];
             AXIsProcessTrustedWithOptions(dict as *const std::ffi::c_void)
-        }
+        })
     }
 
     pub(super) fn open_accessibility_settings() {
@@ -535,7 +536,7 @@ mod macos {
     }
 
     pub(super) fn capture_frontmost() {
-        unsafe {
+        objc::rc::autoreleasepool(|| unsafe {
             let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
             if workspace.is_null() {
                 return;
@@ -550,19 +551,14 @@ mod macos {
             if pid > 0 && pid != our_pid {
                 PREVIOUS_APP_PID.store(pid, Ordering::SeqCst);
             }
-        }
+        });
     }
 
     pub(super) fn restore_focus() {
-        unsafe {
-            // 1. Hide CipherClipboard application so macOS automatically yields focus
-            let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-            if !ns_app.is_null() {
-                let nil_obj: *mut Object = std::ptr::null_mut();
-                let _: () = msg_send![ns_app, hide: nil_obj];
-            }
-
-            // 2. Explicitly reactivate the target process by its PID
+        // Note: hide_app() is already called on the main thread before spawning
+        // the restore/paste worker thread. Calling [NSApplication sharedApplication]
+        // from a background thread violates AppKit's main-thread contract (SIGTRAP).
+        objc::rc::autoreleasepool(|| unsafe {
             let pid = PREVIOUS_APP_PID.load(Ordering::SeqCst);
             if pid > 0 {
                 let target_app: *mut Object = msg_send![
@@ -578,7 +574,7 @@ mod macos {
                     ];
                 }
             }
-        }
+        });
     }
 
     pub(super) fn simulate_paste() {
@@ -623,7 +619,7 @@ mod macos {
     }
 
     pub(super) fn is_clipboard_concealed() -> bool {
-        unsafe {
+        objc::rc::autoreleasepool(|| unsafe {
             let pasteboard: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
             if pasteboard.is_null() {
                 return false;
@@ -657,7 +653,7 @@ mod macos {
                 }
             }
             false
-        }
+        })
     }
 
     pub(super) fn mark_clipboard_concealed() {
