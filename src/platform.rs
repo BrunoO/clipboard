@@ -110,6 +110,22 @@ pub(crate) fn windows_set_title_bar_dark_mode(is_dark: bool) {
     }
 }
 
+/// Encrypts `plaintext` using Windows DPAPI (`CryptProtectData`) bound to the current
+/// Windows user account (`CRYPTPROTECT_LOCAL_MACHINE` unset, `CRYPTPROTECT_UI_FORBIDDEN`).
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    windows::dpapi_protect(plaintext)
+}
+
+/// Decrypts a Windows DPAPI blob created by [`windows_dpapi_protect`], zeroizing the
+/// OS-allocated plaintext buffer before freeing it.
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_dpapi_unprotect(
+    ciphertext: &[u8],
+) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
+    windows::dpapi_unprotect(ciphertext)
+}
+
 const MAX_LOG_BYTES: u64 = 1024 * 1024; // Rotate app.log once it reaches 1 MiB
 
 static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -895,7 +911,8 @@ mod windows {
     fn store_previous_window(hwnd: isize, pid: u32) {
         *PREVIOUS_WINDOW
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(CapturedWindow { hwnd, pid });
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(CapturedWindow { hwnd, pid });
     }
 
     fn clear_previous_window_if_matches(stale_hwnd: isize) {
@@ -1728,6 +1745,136 @@ mod windows {
             }
         }
     }
+
+    #[repr(C)]
+    struct DataBlob {
+        cb_data: u32,
+        pb_data: *mut u8,
+    }
+
+    #[link(name = "crypt32")]
+    extern "system" {
+        fn CryptProtectData(
+            p_data_in: *const DataBlob,
+            sz_data_descr: *const u16,
+            p_optional_entropy: *const DataBlob,
+            pv_reserved: *mut std::ffi::c_void,
+            p_prompt_struct: *mut std::ffi::c_void,
+            dw_flags: u32,
+            p_data_out: *mut DataBlob,
+        ) -> i32;
+
+        fn CryptUnprotectData(
+            p_data_in: *const DataBlob,
+            ppsz_data_descr: *mut *mut u16,
+            p_optional_entropy: *const DataBlob,
+            pv_reserved: *mut std::ffi::c_void,
+            p_prompt_struct: *mut std::ffi::c_void,
+            dw_flags: u32,
+            p_data_out: *mut DataBlob,
+        ) -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LocalFree(h_mem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    }
+
+    const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x01;
+    const DPAPI_ENTROPY: &[u8] = b"CipherClipboard-DPAPI-v1";
+
+    pub(super) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
+        let in_len = u32::try_from(plaintext.len())
+            .map_err(|_| "DPAPI plaintext exceeds u32::MAX bytes".to_string())?;
+        let entropy_len = u32::try_from(DPAPI_ENTROPY.len())
+            .map_err(|_| "DPAPI entropy length invalid".to_string())?;
+
+        let in_blob = DataBlob {
+            cb_data: in_len,
+            pb_data: plaintext.as_ptr().cast_mut(),
+        };
+        let entropy_blob = DataBlob {
+            cb_data: entropy_len,
+            pb_data: DPAPI_ENTROPY.as_ptr().cast_mut(),
+        };
+        let mut out_blob = DataBlob {
+            cb_data: 0,
+            pb_data: std::ptr::null_mut(),
+        };
+
+        let ok = unsafe {
+            CryptProtectData(
+                &raw const in_blob,
+                std::ptr::null(),
+                &raw const entropy_blob,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &raw mut out_blob,
+            )
+        };
+        if ok == 0 || out_blob.pb_data.is_null() {
+            return Err("Windows DPAPI CryptProtectData failed".to_string());
+        }
+
+        let out_len = usize::try_from(out_blob.cb_data).unwrap_or(0);
+        let ciphertext = unsafe {
+            let slice = std::slice::from_raw_parts(out_blob.pb_data, out_len);
+            let copied = slice.to_vec();
+            let _ = LocalFree(out_blob.pb_data.cast::<std::ffi::c_void>());
+            copied
+        };
+        Ok(ciphertext)
+    }
+
+    pub(super) fn dpapi_unprotect(
+        ciphertext: &[u8],
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
+        use zeroize::Zeroize;
+
+        let in_len = u32::try_from(ciphertext.len())
+            .map_err(|_| "DPAPI ciphertext exceeds u32::MAX bytes".to_string())?;
+        let entropy_len = u32::try_from(DPAPI_ENTROPY.len())
+            .map_err(|_| "DPAPI entropy length invalid".to_string())?;
+
+        let in_blob = DataBlob {
+            cb_data: in_len,
+            pb_data: ciphertext.as_ptr().cast_mut(),
+        };
+        let entropy_blob = DataBlob {
+            cb_data: entropy_len,
+            pb_data: DPAPI_ENTROPY.as_ptr().cast_mut(),
+        };
+        let mut out_blob = DataBlob {
+            cb_data: 0,
+            pb_data: std::ptr::null_mut(),
+        };
+
+        let ok = unsafe {
+            CryptUnprotectData(
+                &raw const in_blob,
+                std::ptr::null_mut(),
+                &raw const entropy_blob,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &raw mut out_blob,
+            )
+        };
+        if ok == 0 || out_blob.pb_data.is_null() {
+            return Err("Windows DPAPI CryptUnprotectData failed".to_string());
+        }
+
+        let out_len = usize::try_from(out_blob.cb_data).unwrap_or(0);
+        let plaintext = unsafe {
+            let slice = std::slice::from_raw_parts_mut(out_blob.pb_data, out_len);
+            let copied = zeroize::Zeroizing::new(slice.to_vec());
+            slice.zeroize();
+            let _ = LocalFree(out_blob.pb_data.cast::<std::ffi::c_void>());
+            copied
+        };
+        Ok(plaintext)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1771,12 +1918,8 @@ mod linux {
             let c_pid = conn.intern_atom(true, b"_NET_WM_PID").ok()?;
             let c_clipboard = conn.intern_atom(false, b"CLIPBOARD").ok()?;
             let c_targets = conn.intern_atom(false, b"TARGETS").ok()?;
-            let c_hint = conn
-                .intern_atom(false, b"x-kde-passwordManagerHint")
-                .ok()?;
-            let c_prop = conn
-                .intern_atom(false, b"_CIPHERCLIPBOARD_TARGETS")
-                .ok()?;
+            let c_hint = conn.intern_atom(false, b"x-kde-passwordManagerHint").ok()?;
+            let c_prop = conn.intern_atom(false, b"_CIPHERCLIPBOARD_TARGETS").ok()?;
 
             let net_active_window = c_active.reply().ok().map_or(0, |r| r.atom);
             let net_wm_pid = c_pid.reply().ok().map_or(0, |r| r.atom);
@@ -1956,9 +2099,7 @@ mod linux {
             let _ = s
                 .conn
                 .xtest_fake_input(KEY_PRESS, ctrl_kc, 0, s.root, 0, 0, 0);
-            let _ = s
-                .conn
-                .xtest_fake_input(KEY_PRESS, v_kc, 0, s.root, 0, 0, 0);
+            let _ = s.conn.xtest_fake_input(KEY_PRESS, v_kc, 0, s.root, 0, 0, 0);
             let _ = s.conn.flush();
 
             std::thread::sleep(Duration::from_millis(15));

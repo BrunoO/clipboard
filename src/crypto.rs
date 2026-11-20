@@ -167,7 +167,21 @@ fn read_key_file(path: &Path) -> Result<Option<Zeroizing<String>>, std::io::Erro
     if !path.exists() {
         return Ok(None);
     }
+    #[cfg(windows)]
+    let key = {
+        let ciphertext = fs::read(path)?;
+        if ciphertext.is_empty() {
+            return Ok(None);
+        }
+        let plain_bytes =
+            crate::platform::windows_dpapi_unprotect(&ciphertext).map_err(std::io::Error::other)?;
+        let utf8 = std::str::from_utf8(&plain_bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Zeroizing::new(utf8.to_owned())
+    };
+    #[cfg(not(windows))]
     let key = Zeroizing::new(fs::read_to_string(path)?);
+
     let trimmed = Zeroizing::new(key.trim().to_string());
     if trimmed.is_empty() {
         Ok(None)
@@ -315,7 +329,14 @@ fn save_key_file(path: &Path, key: &str) -> Result<(), std::io::Error> {
         // Also tighten permissions if the file already existed with broader mode.
         set_restricted_permissions(path);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let protected = crate::platform::windows_dpapi_protect(key.as_bytes())
+            .map_err(std::io::Error::other)?;
+        fs::write(path, &protected)?;
+        set_restricted_permissions(path);
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         fs::write(path, key)?;
         set_restricted_permissions(path);
@@ -454,6 +475,16 @@ mod tests {
             let metadata = fs::metadata(&key_file).unwrap();
             let mode = metadata.permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "Key file permissions must be 0600 on Unix");
+        }
+
+        #[cfg(windows)]
+        {
+            let raw_on_disk = fs::read(&key_file).unwrap();
+            assert_ne!(
+                raw_on_disk.as_slice(),
+                test_key.as_bytes(),
+                "Windows fallback key file must be DPAPI-encrypted on disk"
+            );
         }
 
         let (loaded, mode) = get_or_create_encryption_key(dir.path(), false).unwrap();
