@@ -38,7 +38,7 @@ objc = "0.2"
 x11rb = { version = "0.14", features = ["xtest"] }
 
 [dependencies]
-eframe = { version = "0.36", features = ["wgpu"] }
+eframe = { version = "0.37", features = ["wgpu"] }
 egui_extras = { version = "0.36", features = ["syntect"] }
 egui-phosphor = "0.14"
 
