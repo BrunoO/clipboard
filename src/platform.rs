@@ -126,59 +126,7 @@ pub(crate) fn windows_dpapi_unprotect(
     windows::dpapi_unprotect(ciphertext)
 }
 
-const MAX_LOG_BYTES: u64 = 1024 * 1024; // Rotate app.log once it reaches 1 MiB
-
-static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-static LOG_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
-
-pub(crate) fn log_message(level: &str, message: &str) {
-    use std::io::Write;
-
-    let dir = LOG_DIR.get_or_init(|| {
-        let dir = dirs::data_local_dir()?.join("cipherclipboard");
-        let _ = std::fs::create_dir_all(&dir);
-        crate::crypto::set_restricted_dir_permissions(&dir);
-        Some(dir)
-    });
-    let Some(dir) = dir.as_ref() else {
-        return;
-    };
-
-    // Guard rotation and appends against concurrent writers.
-    // Inside a panic hook, use try_lock() so we never self-deadlock if the
-    // panicking thread was already holding LOG_LOCK.
-    let _guard = if std::thread::panicking() {
-        match LOG_LOCK.try_lock() {
-            Ok(g) => g,
-            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
-            Err(std::sync::TryLockError::WouldBlock) => return,
-        }
-    } else {
-        LOG_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    };
-
-    let path = dir.join("app.log");
-    if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() >= MAX_LOG_BYTES {
-            let backup = dir.join("app.log.old");
-            let _ = std::fs::remove_file(&backup);
-            let _ = std::fs::rename(&path, &backup);
-        }
-    }
-    let mut opts = std::fs::OpenOptions::new();
-    opts.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    if let Ok(mut file) = opts.open(&path) {
-        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-        let _ = writeln!(file, "[{ts}] [{level}] {message}");
-    }
-}
+use crate::logging::log_message;
 
 /// Returns a monotonic OS clipboard change counter when supported by the platform
 /// (macOS `NSPasteboard.changeCount`, Windows `GetClipboardSequenceNumber`), allowing
@@ -320,7 +268,7 @@ fn simulate_paste_if_foreground() {
     #[cfg(target_os = "macos")]
     {
         if !macos::is_target_foreground() {
-            crate::platform::log_message(
+            log_message(
                 "WARN",
                 "Auto-paste skipped: captured target application is not frontmost",
             );
@@ -332,7 +280,7 @@ fn simulate_paste_if_foreground() {
     #[cfg(target_os = "windows")]
     {
         if !windows::is_target_foreground() {
-            crate::platform::log_message(
+            log_message(
                 "WARN",
                 "Auto-paste skipped: captured target window is not in the foreground",
             );
@@ -344,7 +292,7 @@ fn simulate_paste_if_foreground() {
     #[cfg(target_os = "linux")]
     {
         if !linux::is_target_foreground() {
-            crate::platform::log_message(
+            log_message(
                 "WARN",
                 "Auto-paste skipped: captured target window is not active",
             );

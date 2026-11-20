@@ -399,7 +399,7 @@ fn set_restricted_permissions(path: &Path) {
     // inherited ACLs would silently remain in place.
     let username = std::env::var("USERNAME").unwrap_or_default();
     if username.trim().is_empty() {
-        crate::platform::log_message(
+        crate::logging::log_message(
             "WARN",
             "Skipping key file ACL hardening: USERNAME environment variable is empty",
         );
@@ -428,7 +428,7 @@ fn set_restricted_permissions(path: &Path) {
                 output.status.code()
             );
             eprintln!("⚠️ {msg}");
-            crate::platform::log_message("WARN", &msg);
+            crate::logging::log_message("WARN", &msg);
         }
         Err(e) => {
             let msg = format!(
@@ -436,7 +436,7 @@ fn set_restricted_permissions(path: &Path) {
                 icacls_path.display()
             );
             eprintln!("⚠️ {msg}");
-            crate::platform::log_message("WARN", &msg);
+            crate::logging::log_message("WARN", &msg);
         }
     }
 }

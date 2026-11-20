@@ -62,7 +62,7 @@ fn register_hotkey_batch(
                     });
                 } else {
                     eprintln!("⚠️ Could not register hotkey {hk:?}: {e}");
-                    crate::platform::log_message(
+                    crate::logging::log_message(
                         "WARN",
                         &format!("Could not register hotkey {hk:?}: {e}"),
                     );

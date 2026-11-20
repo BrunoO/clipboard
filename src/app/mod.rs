@@ -302,7 +302,7 @@ impl ClipboardApp {
     }
 
     fn show_window(&mut self, ctx: &egui::Context) {
-        crate::platform::log_message("INFO", "show_window called");
+        crate::logging::log_message("INFO", "show_window called");
         self.is_visible = true;
         self.has_been_focused = false;
         self.was_inactive_since_hidden = false;
@@ -340,7 +340,7 @@ impl ClipboardApp {
             } else {
                 // No live tray icon (init failed, Explorer restarted, ...):
                 // minimize to the taskbar so the user is never locked out.
-                crate::platform::log_message(
+                crate::logging::log_message(
                     "WARN",
                     "No live tray icon; minimizing to taskbar instead of hiding",
                 );
@@ -359,7 +359,7 @@ impl ClipboardApp {
         #[cfg(target_os = "windows")]
         if auto_paste && crate::platform::windows_target_is_elevated() {
             auto_paste = false;
-            crate::platform::log_message(
+            crate::logging::log_message(
                 "WARN",
                 "Auto-paste blocked: target app runs as Administrator",
             );
@@ -823,7 +823,7 @@ impl ClipboardApp {
     fn handle_tray_events(&mut self, ctx: &egui::Context) {
         let mut latest_action = None;
         while let Ok(action) = self.tray_rx.try_recv() {
-            crate::platform::log_message("INFO", &format!("tray event received: {action:?}"));
+            crate::logging::log_message("INFO", &format!("tray event received: {action:?}"));
             latest_action = Some(action);
         }
         if let Some(action) = latest_action {

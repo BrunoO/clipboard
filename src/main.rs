@@ -8,6 +8,7 @@ mod crypto;
 mod db;
 mod hotkey;
 mod instance;
+mod logging;
 mod media;
 mod monitor;
 mod password;
@@ -31,7 +32,7 @@ fn main() {
 
     if let Err(e) = run() {
         eprintln!("Error: {e}");
-        platform::log_message("ERROR", &format!("Startup failed: {e}"));
+        logging::log_message("ERROR", &format!("Startup failed: {e}"));
         #[cfg(target_os = "windows")]
         platform::show_error_dialog(&format!("CipherClipboard failed to start:\n\n{e}"));
         std::process::exit(1);
@@ -58,7 +59,7 @@ fn install_panic_hook() {
 
         let summary = format!("Thread '{thread_name}' panicked at {location}: {payload}");
         eprintln!("💥 {summary}\n{backtrace}");
-        platform::log_message("PANIC", &format!("{summary}\n{backtrace}"));
+        logging::log_message("PANIC", &format!("{summary}\n{backtrace}"));
 
         #[cfg(all(target_os = "windows", not(debug_assertions)))]
         platform::show_error_dialog(&format!(
@@ -138,7 +139,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
-    crate::platform::log_message("INFO", "CipherClipboard starting");
+    crate::logging::log_message("INFO", "CipherClipboard starting");
 
     // 7. Setup inter-thread channels (bounded capacity 1 for coalesced wakeup signals)
     let (notify_tx, notify_rx) = std::sync::mpsc::sync_channel(1);
