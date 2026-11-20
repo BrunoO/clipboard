@@ -401,33 +401,46 @@ mod macos {
         if !is_main_thread() {
             return;
         }
-        unsafe {
+        objc::rc::autoreleasepool(|| unsafe {
             let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
             if ns_app.is_null() {
                 return;
             }
             let nil_obj: *mut Object = std::ptr::null_mut();
-            let _: () = msg_send![ns_app, unhide: nil_obj];
-            let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+            let hidden: bool = msg_send![ns_app, isHidden];
+            if hidden {
+                let _: () = msg_send![ns_app, unhide: nil_obj];
+            }
+            let active: bool = msg_send![ns_app, isActive];
+            if !active {
+                let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+            }
 
             let windows: *mut Object = msg_send![ns_app, windows];
             if !windows.is_null() {
                 let count: usize = msg_send![windows, count];
                 for i in 0..count {
                     let window: *mut Object = msg_send![windows, objectAtIndex: i];
-                    if !window.is_null() {
-                        let _: () = msg_send![window, setIsVisible: true];
+                    if window.is_null() {
+                        continue;
+                    }
+                    // Skip AppKit's private internal windows (Touch Bar panels,
+                    // tooltips, popovers, animation proxies) — mutating their
+                    // visibility/key state corrupts _NSTouchBarFinderObservation KVO.
+                    let can_main: bool = msg_send![window, canBecomeMainWindow];
+                    if can_main {
                         let _: () = msg_send![window, makeKeyAndOrderFront: nil_obj];
-                        let _: () = msg_send![window, orderFrontRegardless];
                     }
                 }
             }
-        }
+        });
     }
 
     extern "C" fn on_app_reopen(_this: &Object, _cmd: Sel, _notification: *mut Object) {
+        // Defer window ordering to the next egui frame (ClipboardApp::update checks
+        // take_reopen_requested()) instead of mutating AppKit windows re-entrantly
+        // inside NSNotificationCenter activation/unhide callbacks.
         REOPEN_REQUESTED.store(true, Ordering::SeqCst);
-        order_front_main_window();
         super::request_repaint();
     }
 
@@ -439,64 +452,72 @@ mod macos {
     static REOPEN_OBSERVER: std::sync::Mutex<Option<ObserverPtr>> = std::sync::Mutex::new(None);
 
     pub(super) fn setup_reopen_observer() {
+        if !is_main_thread() {
+            return;
+        }
         static INIT: std::sync::Once = std::sync::Once::new();
-        INIT.call_once(|| unsafe {
-            let superclass = class!(NSObject);
-            if let Some(mut decl) = ClassDecl::new("CipherReopenObserver", superclass) {
-                decl.add_method(
-                    sel!(onNotification:),
-                    on_app_reopen as extern "C" fn(&Object, Sel, *mut Object),
-                );
-                decl.register();
-            }
+        INIT.call_once(|| {
+            objc::rc::autoreleasepool(|| unsafe {
+                let superclass = class!(NSObject);
+                if let Some(mut decl) = ClassDecl::new("CipherReopenObserver", superclass) {
+                    decl.add_method(
+                        sel!(onNotification:),
+                        on_app_reopen as extern "C" fn(&Object, Sel, *mut Object),
+                    );
+                    decl.register();
+                }
 
-            let observer_cls = class!(CipherReopenObserver);
-            let observer: *mut Object = msg_send![observer_cls, new];
-            let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
-            if center.is_null() || observer.is_null() {
-                return;
-            }
+                let observer_cls = class!(CipherReopenObserver);
+                let observer: *mut Object = msg_send![observer_cls, new];
+                let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
+                if center.is_null() || observer.is_null() {
+                    return;
+                }
 
-            let nil_obj: *mut Object = std::ptr::null_mut();
+                let nil_obj: *mut Object = std::ptr::null_mut();
 
-            // Observe NSApplicationDidBecomeActiveNotification (fires on Dock click, Cmd+Tab, app activate)
-            let active_name: *mut Object = msg_send![
-                class!(NSString),
-                stringWithUTF8String: c"NSApplicationDidBecomeActiveNotification".as_ptr()
-            ];
-            if !active_name.is_null() {
-                let _: () = msg_send![
-                    center,
-                    addObserver: observer
-                    selector: sel!(onNotification:)
-                    name: active_name
-                    object: nil_obj
+                // Observe NSApplicationDidBecomeActiveNotification (fires on Dock click, Cmd+Tab, app activate)
+                let active_name: *mut Object = msg_send![
+                    class!(NSString),
+                    stringWithUTF8String: c"NSApplicationDidBecomeActiveNotification".as_ptr()
                 ];
-            }
+                if !active_name.is_null() {
+                    let _: () = msg_send![
+                        center,
+                        addObserver: observer
+                        selector: sel!(onNotification:)
+                        name: active_name
+                        object: nil_obj
+                    ];
+                }
 
-            // Observe NSApplicationDidUnhideNotification (fires when macOS unhides on Dock click / Cmd+Tab)
-            let unhide_name: *mut Object = msg_send![
-                class!(NSString),
-                stringWithUTF8String: c"NSApplicationDidUnhideNotification".as_ptr()
-            ];
-            if !unhide_name.is_null() {
-                let _: () = msg_send![
-                    center,
-                    addObserver: observer
-                    selector: sel!(onNotification:)
-                    name: unhide_name
-                    object: nil_obj
+                // Observe NSApplicationDidUnhideNotification (fires when macOS unhides on Dock click / Cmd+Tab)
+                let unhide_name: *mut Object = msg_send![
+                    class!(NSString),
+                    stringWithUTF8String: c"NSApplicationDidUnhideNotification".as_ptr()
                 ];
-            }
+                if !unhide_name.is_null() {
+                    let _: () = msg_send![
+                        center,
+                        addObserver: observer
+                        selector: sel!(onNotification:)
+                        name: unhide_name
+                        object: nil_obj
+                    ];
+                }
 
-            // Store observer for later cleanup
-            if let Ok(mut lock) = REOPEN_OBSERVER.lock() {
-                *lock = Some(ObserverPtr(observer));
-            }
+                // Store observer for later cleanup
+                if let Ok(mut lock) = REOPEN_OBSERVER.lock() {
+                    *lock = Some(ObserverPtr(observer));
+                }
+            });
         });
     }
 
     pub(super) fn teardown_reopen_observer() {
+        if !is_main_thread() {
+            return;
+        }
         let observer = REOPEN_OBSERVER.lock().ok().and_then(|mut lock| lock.take());
         if let Some(ObserverPtr(observer)) = observer {
             objc::rc::autoreleasepool(|| unsafe {
@@ -538,12 +559,19 @@ mod macos {
 
     pub(super) fn prompt_permission() -> bool {
         objc::rc::autoreleasepool(|| unsafe {
-            let key = b"AXTrustedCheckOptionPrompt\0";
-            let str_obj: *mut Object =
-                msg_send![class!(NSString), stringWithUTF8String: key.as_ptr()];
+            let str_obj: *mut Object = msg_send![
+                class!(NSString),
+                stringWithUTF8String: c"AXTrustedCheckOptionPrompt".as_ptr()
+            ];
             let num_obj: *mut Object = msg_send![class!(NSNumber), numberWithBool: true];
+            if str_obj.is_null() || num_obj.is_null() {
+                return AXIsProcessTrusted();
+            }
             let dict: *mut Object =
                 msg_send![class!(NSDictionary), dictionaryWithObject: num_obj forKey: str_obj];
+            if dict.is_null() {
+                return AXIsProcessTrusted();
+            }
             AXIsProcessTrustedWithOptions(dict as *const std::ffi::c_void)
         })
     }
