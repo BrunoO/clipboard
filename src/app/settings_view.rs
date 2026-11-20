@@ -92,7 +92,6 @@ impl ClipboardApp {
         });
     }
 
-    #[allow(clippy::too_many_lines)]
     fn render_hotkey_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         ui.group(|ui| {
             ui.label(
@@ -109,154 +108,171 @@ impl ClipboardApp {
             );
             ui.add_space(6.0);
 
-            let current_preset = self.settings.hotkey;
-            for &preset in HotkeyPreset::all_presets() {
-                let is_selected = current_preset == preset;
-                let mut selected = is_selected;
-                if ui.radio_value(&mut selected, true, preset.display_name()).clicked()
-                    && !is_selected
-                {
-                    self.settings.hotkey = preset;
-                    if let Err(e) = self.settings.save(&self.db) {
-                        eprintln!("Failed to save settings: {e}");
-                    }
-                    if self.update_hotkeys_from_settings() {
-                        self.show_toast(&format!(
-                            "{} Shortcut set to {}",
-                            icons::CHECK,
-                            preset.badge()
-                        ));
-                    } else {
-                        self.show_toast(&format!(
-                            "{} Could not register {} (may be in use by OS)",
-                            icons::WARNING,
-                            preset.badge()
-                        ));
-                    }
-                }
-            }
+            self.render_hotkey_preset_selector(ui);
 
             #[cfg(target_os = "windows")]
-            {
-                ui.add_space(6.0);
-                if ui.button("Re-detect keyboard layout").clicked() {
-                    if self.update_hotkeys_from_settings() {
-                        self.show_toast(&format!(
-                            "{} Hotkeys re-registered for current keyboard layout",
-                            icons::CHECK
-                        ));
-                    } else {
-                        self.show_toast(&format!(
-                            "{} Could not re-register hotkeys (may be in use by OS)",
-                            icons::WARNING
-                        ));
-                    }
-                }
+            self.render_windows_keyboard_layout_button(ui);
+
+            if self.settings.hotkey == HotkeyPreset::Custom {
+                self.render_custom_hotkey_editor(ui, is_dark);
             }
 
-            // Custom hotkey recorder
-            if self.settings.hotkey == HotkeyPreset::Custom {
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(4.0);
+            self.render_hotkey_registration_status(ui, is_dark);
+        });
+    }
 
-                if self.recording_custom_hotkey {
-                    // Recording mode
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("Press desired key combination…")
-                                .color(crate::theme::accent_color(is_dark))
-                                .strong(),
-                        );
-                        if ui.button("Cancel").clicked() {
-                            self.recording_custom_hotkey = false;
-                            self.pending_custom_hotkey.clear();
-                        }
-                    });
-                    ui.add_space(4.0);
+    fn render_hotkey_preset_selector(&mut self, ui: &mut egui::Ui) {
+        let current_preset = self.settings.hotkey;
+        for &preset in HotkeyPreset::all_presets() {
+            let is_selected = current_preset == preset;
+            let mut selected = is_selected;
+            if ui
+                .radio_value(&mut selected, true, preset.display_name())
+                .clicked()
+                && !is_selected
+            {
+                self.settings.hotkey = preset;
+                if let Err(e) = self.settings.save(&self.db) {
+                    eprintln!("Failed to save settings: {e}");
+                }
+                if self.update_hotkeys_from_settings() {
+                    self.show_toast(&format!(
+                        "{} Shortcut set to {}",
+                        icons::CHECK,
+                        preset.badge()
+                    ));
+                } else {
+                    self.show_toast(&format!(
+                        "{} Could not register {} (may be in use by OS)",
+                        icons::WARNING,
+                        preset.badge()
+                    ));
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn render_windows_keyboard_layout_button(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        if ui.button("Re-detect keyboard layout").clicked() {
+            if self.update_hotkeys_from_settings() {
+                self.show_toast(&format!(
+                    "{} Hotkeys re-registered for current keyboard layout",
+                    icons::CHECK
+                ));
+            } else {
+                self.show_toast(&format!(
+                    "{} Could not re-register hotkeys (may be in use by OS)",
+                    icons::WARNING
+                ));
+            }
+        }
+    }
+
+    fn render_custom_hotkey_editor(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        if self.recording_custom_hotkey {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Press desired key combination…")
+                        .color(crate::theme::accent_color(is_dark))
+                        .strong(),
+                );
+                if ui.button("Cancel").clicked() {
+                    self.recording_custom_hotkey = false;
+                    self.pending_custom_hotkey.clear();
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Press Esc to cancel, or Backspace to clear")
+                    .color(crate::theme::text_secondary(is_dark))
+                    .size(10.0),
+            );
+            return;
+        }
+
+        ui.horizontal(|ui| {
+            let current = if self.settings.custom_hotkey.is_empty() {
+                "(not set)".to_string()
+            } else {
+                self.settings.custom_hotkey.clone()
+            };
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.pending_custom_hotkey)
+                    .hint_text(current)
+                    .desired_width(200.0),
+            );
+            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                self.apply_custom_hotkey();
+            }
+            let btn_label = if self.pending_custom_hotkey.is_empty() {
+                "Record"
+            } else {
+                "Apply"
+            };
+            if ui.button(btn_label).clicked() {
+                if self.pending_custom_hotkey.is_empty() {
+                    self.start_recording_custom_hotkey();
+                } else {
+                    self.apply_custom_hotkey();
+                }
+            }
+            if !self.settings.custom_hotkey.is_empty() && ui.button("Clear").clicked() {
+                self.settings.custom_hotkey.clear();
+                let _ = self.settings.save(&self.db);
+                self.update_hotkeys_from_settings();
+                self.pending_custom_hotkey.clear();
+            }
+        });
+        if !self.settings.custom_hotkey.is_empty() {
+            ui.label(
+                egui::RichText::new(format!("Current: {}", self.settings.custom_hotkey))
+                    .color(crate::theme::text_secondary(is_dark))
+                    .size(10.0),
+            );
+        }
+    }
+
+    fn render_hotkey_registration_status(&self, ui: &mut egui::Ui, is_dark: bool) {
+        let Some(service) = &self.hotkey_service else {
+            return;
+        };
+        let results = service.registration_results();
+        if results.is_empty() {
+            return;
+        }
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("Registration Status:")
+                .color(crate::theme::text_primary(is_dark))
+                .strong(),
+        );
+        for result in results {
+            ui.horizontal(|ui| {
+                let (icon, color) = if result.success {
+                    (icons::CHECK, crate::theme::text_secondary(is_dark))
+                } else {
+                    (icons::WARNING, crate::theme::warning_color(is_dark))
+                };
+                ui.label(egui::RichText::new(icon).color(color));
+                ui.label(egui::RichText::new(format!("{}", result.hotkey)).color(color));
+                if let Some(err) = &result.error {
                     ui.label(
-                        egui::RichText::new("Press Esc to cancel, or Backspace to clear")
+                        egui::RichText::new(format!("({err})"))
                             .color(crate::theme::text_secondary(is_dark))
                             .size(10.0),
                     );
-                } else {
-                    // Display/edit mode
-                    ui.horizontal(|ui| {
-                        let current = if self.settings.custom_hotkey.is_empty() {
-                            "(not set)".to_string()
-                        } else {
-                            self.settings.custom_hotkey.clone()
-                        };
-                        let response = ui.add(
-                            egui::TextEdit::singleline(&mut self.pending_custom_hotkey)
-                                .hint_text(current)
-                                .desired_width(200.0),
-                        );
-                        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            self.apply_custom_hotkey();
-                        }
-                        if ui.button(if self.pending_custom_hotkey.is_empty() {
-                            "Record"
-                        } else {
-                            "Apply"
-                        }).clicked() {
-                            if self.pending_custom_hotkey.is_empty() {
-                                self.start_recording_custom_hotkey();
-                            } else {
-                                self.apply_custom_hotkey();
-                            }
-                        }
-                        if !self.settings.custom_hotkey.is_empty() && ui.button("Clear").clicked() {
-                            self.settings.custom_hotkey.clear();
-                            let _ = self.settings.save(&self.db);
-                            self.update_hotkeys_from_settings();
-                            self.pending_custom_hotkey.clear();
-                        }
-                    });
-                    if !self.settings.custom_hotkey.is_empty() {
-                        ui.label(
-                            egui::RichText::new(format!("Current: {}", self.settings.custom_hotkey))
-                                .color(crate::theme::text_secondary(is_dark))
-                                .size(10.0),
-                        );
-                    }
                 }
-            }
-
-            // Registration status
-            if let Some(service) = &self.hotkey_service {
-                let results = service.registration_results();
-                if !results.is_empty() {
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new("Registration Status:")
-                            .color(crate::theme::text_primary(is_dark))
-                            .strong(),
-                    );
-                    for result in results {
-                        ui.horizontal(|ui| {
-                            let (icon, color) = if result.success {
-                                (icons::CHECK, crate::theme::text_secondary(is_dark))
-                            } else {
-                                (icons::WARNING, crate::theme::warning_color(is_dark))
-                            };
-                            ui.label(egui::RichText::new(icon).color(color));
-                            let display = format!("{}", result.hotkey);
-                            ui.label(egui::RichText::new(display).color(color));
-                            if let Some(err) = &result.error {
-                                ui.label(
-                                    egui::RichText::new(format!("({err})"))
-                                        .color(crate::theme::text_secondary(is_dark))
-                                        .size(10.0),
-                                    );
-                            }
-                        });
-                    }
-                }
-            }
-        });
+            });
+        }
     }
 
     /// Updates hotkeys from current settings (handles Custom preset).
@@ -357,55 +373,65 @@ impl ClipboardApp {
 
             #[cfg(target_os = "macos")]
             if auto_paste {
-                ui.add_space(2.0);
-                if !crate::platform::is_accessibility_trusted() {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} macOS note: Direct auto-paste requires Accessibility permissions in System Settings > Privacy & Security > Accessibility.\nNote: When running via terminal, grant permission to your terminal app as well.",
-                            icons::WARNING
-                        ))
-                        .size(11.0)
-                        .color(crate::theme::warning_color(is_dark)),
-                    );
-                    ui.add_space(2.0);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .small_button(format!("{} Prompt Permission", icons::SHIELD_CHECK))
-                            .clicked()
-                        {
-                            crate::platform::prompt_accessibility_permission();
-                        }
-                        if ui
-                            .small_button(format!("{} Open System Settings", icons::ARROW_SQUARE_OUT))
-                            .clicked()
-                        {
-                            crate::platform::open_accessibility_settings();
-                        }
-                    });
-                }
+                Self::render_macos_accessibility_notice(ui, is_dark);
             }
 
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label("History size limit:");
-                let mut max_hist = self.settings.max_history;
-                egui::ComboBox::from_id_salt("max_history_combo")
-                    .selected_text(format!("{max_hist} items"))
-                    .show_ui(ui, |ui| {
-                        for limit in [50, 100, 200, 500, 1000] {
-                            if ui
-                                .selectable_value(&mut max_hist, limit, format!("{limit} items"))
-                                .clicked()
-                            {
-                                self.settings.max_history = limit;
-                                self.db.set_max_history(limit);
-                                let _ = self.db.prune_history(limit);
-                                let _ = self.settings.save(&self.db);
-                                self.refresh_items();
-                            }
+            self.render_max_history_selector(ui);
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    fn render_macos_accessibility_notice(ui: &mut egui::Ui, is_dark: bool) {
+        ui.add_space(2.0);
+        if crate::platform::is_accessibility_trusted() {
+            return;
+        }
+        ui.label(
+            egui::RichText::new(format!(
+                "{} macOS note: Direct auto-paste requires Accessibility permissions in System Settings > Privacy & Security > Accessibility.\nNote: When running via terminal, grant permission to your terminal app as well.",
+                icons::WARNING
+            ))
+            .size(11.0)
+            .color(crate::theme::warning_color(is_dark)),
+        );
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            if ui
+                .small_button(format!("{} Prompt Permission", icons::SHIELD_CHECK))
+                .clicked()
+            {
+                crate::platform::prompt_accessibility_permission();
+            }
+            if ui
+                .small_button(format!("{} Open System Settings", icons::ARROW_SQUARE_OUT))
+                .clicked()
+            {
+                crate::platform::open_accessibility_settings();
+            }
+        });
+    }
+
+    fn render_max_history_selector(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("History size limit:");
+            let mut max_hist = self.settings.max_history;
+            egui::ComboBox::from_id_salt("max_history_combo")
+                .selected_text(format!("{max_hist} items"))
+                .show_ui(ui, |ui| {
+                    for limit in [50, 100, 200, 500, 1000] {
+                        if ui
+                            .selectable_value(&mut max_hist, limit, format!("{limit} items"))
+                            .clicked()
+                        {
+                            self.settings.max_history = limit;
+                            self.db.set_max_history(limit);
+                            let _ = self.db.prune_history(limit);
+                            let _ = self.settings.save(&self.db);
+                            self.refresh_items();
                         }
-                    });
-            });
+                    }
+                });
         });
     }
 
@@ -468,30 +494,7 @@ impl ClipboardApp {
             }
 
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label("Auto-clear copied secrets after:");
-                let mut clear_secs = self.settings.auto_clear_secret_secs;
-                let selected_label = if clear_secs == 0 {
-                    "Off".to_string()
-                } else {
-                    format!("{clear_secs}s")
-                };
-                egui::ComboBox::from_id_salt("auto_clear_secret_combo")
-                    .selected_text(selected_label)
-                    .show_ui(ui, |ui| {
-                        for secs in [0_u64, 15, 30, 45, 60, 120] {
-                            let label = if secs == 0 {
-                                "Off".to_string()
-                            } else {
-                                format!("{secs}s")
-                            };
-                            if ui.selectable_value(&mut clear_secs, secs, label).clicked() {
-                                self.settings.auto_clear_secret_secs = secs;
-                                let _ = self.settings.save(&self.db);
-                            }
-                        }
-                    });
-            });
+            self.render_auto_clear_secret_selector(ui);
 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -513,6 +516,25 @@ impl ClipboardApp {
                     self.show_keyring_explanation = true;
                 }
             });
+        });
+    }
+
+    fn render_auto_clear_secret_selector(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Auto-clear copied secrets after:");
+            let mut clear_secs = self.settings.auto_clear_secret_secs;
+            let selected_label = format_secret_clear_secs(clear_secs);
+            egui::ComboBox::from_id_salt("auto_clear_secret_combo")
+                .selected_text(selected_label)
+                .show_ui(ui, |ui| {
+                    for secs in [0_u64, 15, 30, 45, 60, 120] {
+                        let label = format_secret_clear_secs(secs);
+                        if ui.selectable_value(&mut clear_secs, secs, label).clicked() {
+                            self.settings.auto_clear_secret_secs = secs;
+                            let _ = self.settings.save(&self.db);
+                        }
+                    }
+                });
         });
     }
 
@@ -543,5 +565,13 @@ impl ClipboardApp {
                 }
             });
         });
+    }
+}
+
+fn format_secret_clear_secs(secs: u64) -> String {
+    if secs == 0 {
+        "Off".to_string()
+    } else {
+        format!("{secs}s")
     }
 }
