@@ -27,12 +27,46 @@ use std::fs;
 use std::path::PathBuf;
 
 fn main() {
+    install_panic_hook();
+
     if let Err(e) = run() {
         eprintln!("Error: {e}");
+        platform::log_message("ERROR", &format!("Startup failed: {e}"));
         #[cfg(target_os = "windows")]
         platform::show_error_dialog(&format!("CipherClipboard failed to start:\n\n{e}"));
         std::process::exit(1);
     }
+}
+
+/// Installs a panic hook that records crash diagnostics (thread, location, message,
+/// and backtrace) to `app.log` before `panic = "abort"` terminates the process.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("<unnamed>");
+        let location = info.location().map_or_else(
+            || "<unknown location>".to_string(),
+            |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
+        );
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("<non-string panic payload>");
+        let backtrace = std::backtrace::Backtrace::capture();
+
+        let summary = format!("Thread '{thread_name}' panicked at {location}: {payload}");
+        eprintln!("💥 {summary}\n{backtrace}");
+        platform::log_message("PANIC", &format!("{summary}\n{backtrace}"));
+
+        #[cfg(all(target_os = "windows", not(debug_assertions)))]
+        platform::show_error_dialog(&format!(
+            "CipherClipboard encountered an unexpected error and must close.\n\n\
+             {summary}\n\n\
+             Diagnostics were written to %LOCALAPPDATA%\\cipherclipboard\\app.log."
+        ));
+    }));
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
