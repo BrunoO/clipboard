@@ -167,7 +167,7 @@ fn read_key_file(path: &Path) -> Result<Option<Zeroizing<String>>, std::io::Erro
     if !path.exists() {
         return Ok(None);
     }
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     let key = {
         let ciphertext = fs::read(path)?;
         if ciphertext.is_empty() {
@@ -179,7 +179,7 @@ fn read_key_file(path: &Path) -> Result<Option<Zeroizing<String>>, std::io::Erro
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         Zeroizing::new(utf8.to_owned())
     };
-    #[cfg(not(windows))]
+    #[cfg(not(target_os = "windows"))]
     let key = Zeroizing::new(fs::read_to_string(path)?);
 
     let trimmed = Zeroizing::new(key.trim().to_string());
@@ -329,14 +329,14 @@ fn save_key_file(path: &Path, key: &str) -> Result<(), std::io::Error> {
         // Also tighten permissions if the file already existed with broader mode.
         set_restricted_permissions(path);
     }
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     {
         let protected = crate::platform::windows_dpapi_protect(key.as_bytes())
             .map_err(std::io::Error::other)?;
         fs::write(path, &protected)?;
         set_restricted_permissions(path);
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         fs::write(path, key)?;
         set_restricted_permissions(path);
@@ -367,7 +367,7 @@ fn set_restricted_permissions(path: &Path) {
     let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(target_os = "windows", test))]
 fn resolve_windows_icacls_path(system_root: Option<&str>) -> std::path::PathBuf {
     let root = system_root
         .map(str::trim)
@@ -379,7 +379,7 @@ fn resolve_windows_icacls_path(system_root: Option<&str>) -> std::path::PathBuf 
     path
 }
 
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 fn set_restricted_permissions(path: &Path) {
     use std::os::windows::process::CommandExt;
     use std::process::Command;
@@ -441,7 +441,7 @@ fn set_restricted_permissions(path: &Path) {
     }
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(any(unix, target_os = "windows")))]
 fn set_restricted_permissions(_path: &Path) {
     // No platform-specific hardening implemented.
 }
@@ -477,7 +477,7 @@ mod tests {
             assert_eq!(mode, 0o600, "Key file permissions must be 0600 on Unix");
         }
 
-        #[cfg(windows)]
+        #[cfg(target_os = "windows")]
         {
             let raw_on_disk = fs::read(&key_file).unwrap();
             assert_ne!(
