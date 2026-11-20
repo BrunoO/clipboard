@@ -134,7 +134,7 @@ pub(crate) struct ClipboardApp {
     active_view: ActiveView,
     password_gen: crate::password::PasswordGeneratorState,
     revealed_secrets: HashSet<i64>,
-    pending_clipboard_clear: Option<(String, Instant)>,
+    pending_clipboard_clear: Option<(zeroize::Zeroizing<String>, Instant)>,
     show_clear_confirm_dialog: bool,
     scroll_to_selected: bool,
     current_is_dark: Option<bool>,
@@ -333,7 +333,22 @@ impl ClipboardApp {
         if self.settings.auto_clear_secret_secs > 0 {
             let deadline =
                 Instant::now() + Duration::from_secs(self.settings.auto_clear_secret_secs);
-            self.pending_clipboard_clear = Some((secret.to_string(), deadline));
+            self.pending_clipboard_clear =
+                Some((zeroize::Zeroizing::new(secret.to_string()), deadline));
+        }
+    }
+
+    fn clear_pending_secret_from_clipboard(&mut self) {
+        let Some((expected_secret, _)) = self.pending_clipboard_clear.take() else {
+            return;
+        };
+        if let Some(cb) = &mut self.clipboard_writer {
+            if let Ok(current) = cb.get_text() {
+                if current == *expected_secret {
+                    self.db.skip_next_capture("");
+                    let _ = cb.clear();
+                }
+            }
         }
     }
 
@@ -344,17 +359,7 @@ impl ClipboardApp {
         if Instant::now() < *deadline {
             return;
         }
-        let Some((expected_secret, _)) = self.pending_clipboard_clear.take() else {
-            return;
-        };
-        if let Some(cb) = &mut self.clipboard_writer {
-            if let Ok(current) = cb.get_text() {
-                if current == expected_secret {
-                    self.db.skip_next_capture("");
-                    let _ = cb.clear();
-                }
-            }
-        }
+        self.clear_pending_secret_from_clipboard();
     }
 
     fn ensure_clipboard_writer(&mut self) -> Option<&mut Clipboard> {
@@ -1551,6 +1556,7 @@ impl eframe::App for ClipboardApp {
 
 impl Drop for ClipboardApp {
     fn drop(&mut self) {
+        self.clear_pending_secret_from_clipboard();
         if let Some(hotkey) = self.hotkey_service.as_mut() {
             hotkey.shutdown();
         }
