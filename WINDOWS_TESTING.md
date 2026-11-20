@@ -7,7 +7,10 @@ the hardest platform to reach in CI (the `windows-latest` job is `continue-on-er
 
 - [ ] Fresh machine with only **Visual Studio C++ Build Tools** + **OpenSSL** (`choco install openssl`, `OPENSSL_DIR` set) builds successfully (`cargo build --release`).
 - [ ] Release binary runs without a console (uses `windows_subsystem = "windows"`).
-- [ ] Installer (`setup.iss`) copies `libcrypto-*.dll` next to the exe and the app starts.
+- [ ] `CipherClipboard.exe` file properties show the CipherClipboard icon, product name and version metadata (an empty/generic resource means the resource compiler failed).
+- [ ] **Clean Windows image with no VC++ redistributable:** installer installs the bundled `vc_redist.x64.exe` and the app starts.
+- [ ] **Clean Windows image:** portable ZIP's `vc_redist.x64.exe` run once, then `CipherClipboard.exe` starts.
+- [ ] Installer (`setup.iss`) copies the pinned `libcrypto-3-x64.dll` next to the exe and the app starts.
 - [ ] First launch creates `%LOCALAPPDATA%\cipherclipboard\` and registers the key in Windows Credential Manager.
 
 ## Hotkeys
@@ -42,8 +45,10 @@ the hardest platform to reach in CI (the `windows-latest` job is `continue-on-er
 ## Auto-paste & focus
 
 - [ ] Auto-paste (`Ctrl+V`) works into a normal (non-elevated) target app.
+- [ ] Auto-paste into scan-code-sensitive targets (e.g. Windows Terminal) works — confirms `wScan` is populated.
 - [ ] Auto-paste into an elevated (Administrator) target app is documented as blocked by UIPI.
 - [ ] Focus returns to the previous window after paste.
+- [ ] Switching input language in another app (without opening our Settings) makes `Ctrl+ù` register for the new layout automatically — confirms the layout probe reads the target thread.
 
 ## Crypto / storage
 

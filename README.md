@@ -95,20 +95,16 @@ sudo dnf install libX11-devel libxcb-devel dbus-devel openssl-devel pkgconf-pkg-
   ```powershell
   choco install openssl
   ```
-  Then set `OPENSSL_DIR` to the install location before building:
+  Then point the build at the Chocolatey install (CI uses `scripts/windows/setup-openssl-ci.ps1` to derive the same values):
   ```powershell
   $env:OPENSSL_DIR = "C:\Program Files\OpenSSL-Win64"
+  $env:OPENSSL_LIB_DIR = "$env:OPENSSL_DIR\lib\VC\x64\MD"
+  $env:OPENSSL_INCLUDE_DIR = "$env:OPENSSL_DIR\include"
   cargo build
   ```
-  (Alternatively, use vcpkg and set `OPENSSL_DIR` to its installed directory.)
+  Use the `MD` import library — Rust's MSVC target links the dynamic CRT. Do not flatten the `MD`/`MT` lib directories into one. (Alternatively, use vcpkg and set these variables to its installed directories.)
 
-  To avoid shipping `libcrypto-*.dll` with the installer, you can statically link OpenSSL:
-  ```powershell
-  $env:OPENSSL_STATIC = "1"
-  $env:OPENSSL_DIR = "C:\Program Files\OpenSSL-Win64"
-  cargo build --release
-  ```
-  When `OPENSSL_STATIC=1` is used, remove the `libcrypto-*.dll` line from `scripts/windows/setup.iss`.
+  `bundled-sqlcipher` links `libcrypto` **dynamically** on Windows, so ship the matching `libcrypto-3-x64.dll` next to the executable (the release workflow pins and stages it). `OPENSSL_STATIC=1` is an `openssl-sys` setting and has **no effect** with this feature set — do not remove the DLL line from `scripts/windows/setup.iss`, or the exe will fail at startup with a missing-DLL error.
 
 ---
 
@@ -119,6 +115,10 @@ In your terminal:
 ```bash
 cargo run
 ```
+
+### Windows release downloads
+
+The installer runs the bundled **Visual C++ redistributable (x64)** when the runtime is missing (a no-op when it is already installed). The portable ZIP contains `vc_redist.x64.exe` too — run it once before launching `CipherClipboard.exe` on a fresh Windows install. The executable is MSVC-linked (SQLCipher + OpenSSL), so it cannot start without the Universal CRT.
 
 On first launch:
 1. It automatically generates a secure 256-bit encryption key and registers it with your **OS Keyring** (under service `cipherclipboard`).

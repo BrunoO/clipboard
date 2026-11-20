@@ -10,9 +10,15 @@ fn main() {
                 "CipherClipboard — Encrypted Cross-Platform Clipboard Manager",
             );
             res.set("LegalCopyright", "Copyright (c) 2026 BrunoO");
-            if let Err(e) = res.compile() {
-                eprintln!("Warning: Failed to compile Windows resource: {e}");
-            }
+            // A missing rc.exe / windres used to leave the exe with no icon or
+            // version resource while the build still reported success. That is
+            // not a valid release: fail loudly instead of shipping a generic exe.
+            res.compile().unwrap_or_else(|e| {
+                panic!(
+                    "Failed to compile Windows resources (icon/version info): {e}. \
+                     Install the Windows SDK (rc.exe) or matching-architecture MinGW windres/ar."
+                )
+            });
         }
     }
 }

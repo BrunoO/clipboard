@@ -53,10 +53,8 @@ jobs:
           "TAG_NAME=$tag" >> $env:GITHUB_ENV
 
       - name: Install Windows OpenSSL dependencies
-        run: |
-          choco install openssl -y --no-progress
-          Get-ChildItem -Path "C:\Program Files\OpenSSL\lib" -Filter "*.lib" -Recurse | Copy-Item -Destination "C:\Program Files\OpenSSL\lib" -Force
-          echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
+        shell: pwsh
+        run: .\scripts\windows\setup-openssl-ci.ps1
 
       - name: Install Inno Setup
         run: |
@@ -69,24 +67,57 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
-      - name: Verify release executable exists
+      - name: Verify executable and stage pinned OpenSSL DLL
         shell: pwsh
         run: |
-          if (-not (Test-Path "target\release\CipherClipboard.exe")) {
-            throw "target\release\CipherClipboard.exe was not found after compilation!"
+          $exePath = "target\release\CipherClipboard.exe"
+          if (-not (Test-Path $exePath)) {
+            throw "$exePath was not found after compilation!"
           }
-          $openSslDlls = Get-ChildItem -Path "C:\Program Files\OpenSSL" -Filter "libcrypto-*.dll" -Recurse -File
-          foreach ($dll in $openSslDlls) {
-            Copy-Item $dll.FullName -Destination "target\release\" -Force
-            Write-Host "Staged OpenSSL runtime DLL: $($dll.Name)"
+          $versionInfo = (Get-Item $exePath).VersionInfo
+          if ($versionInfo.ProductName -ne "CipherClipboard" -or [string]::IsNullOrWhiteSpace($versionInfo.FileDescription)) {
+            throw "$exePath is missing embedded Windows icon/version resources"
           }
+          Write-Host "Embedded version resource: $($versionInfo.ProductName) $($versionInfo.ProductVersion)"
+          $dllName = $env:OPENSSL_RUNTIME_DLL
+          if ([string]::IsNullOrWhiteSpace($env:OPENSSL_DIR) -or [string]::IsNullOrWhiteSpace($dllName)) {
+            throw "OPENSSL_DIR / OPENSSL_RUNTIME_DLL are not set"
+          }
+          $matches = @(Get-ChildItem -Path $env:OPENSSL_DIR -Filter $dllName -File -Recurse)
+          if ($matches.Count -eq 0) {
+            throw "$dllName was not found under OPENSSL_DIR ($env:OPENSSL_DIR)"
+          }
+          $hashes = @($matches | ForEach-Object { (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash } | Select-Object -Unique)
+          if ($hashes.Count -gt 1) {
+            throw "Multiple different $dllName files under OPENSSL_DIR; refusing to guess which one matches the import library"
+          }
+          Copy-Item $matches[0].FullName -Destination "target\release\$dllName" -Force
+          $exeText = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes((Resolve-Path $exePath).Path))
+          if (-not $exeText.Contains($dllName)) {
+            throw "$exePath does not import $dllName; staged DLL does not match the linked import library"
+          }
+          Write-Host "Staged $dllName (SHA256 $($hashes[0])) from $($matches[0].FullName)"
           Write-Host "CipherClipboard.exe built successfully."
+
+      - name: Download Visual C++ redistributable
+        shell: pwsh
+        run: |
+          $redist = "target\release\vc_redist.x64.exe"
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $redist -UseBasicParsing
+          if (-not (Test-Path $redist)) {
+            throw "Failed to download the Visual C++ redistributable"
+          }
+          $signature = Get-AuthenticodeSignature -FilePath $redist
+          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Microsoft") {
+            throw "Downloaded VC++ redistributable is not validly signed by Microsoft (status: $($signature.Status))"
+          }
+          Write-Host "Staged Microsoft-signed VC++ redistributable: $redist"
 
       - name: Compile Inno Setup installer
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "dist"
-          & iscc.exe /DMyAppVersion="$env:VERSION" scripts\windows\setup.iss
+          & iscc.exe /DMyAppVersion="$env:VERSION" /DOpenSslDllName="$env:OPENSSL_RUNTIME_DLL" scripts\windows\setup.iss
 
       - name: Package portable ZIP archive
         shell: pwsh
@@ -94,7 +125,8 @@ jobs:
           $portableDir = "dist\CipherClipboard-$env:VERSION-windows-x64-portable"
           New-Item -ItemType Directory -Force -Path $portableDir
           Copy-Item "target\release\CipherClipboard.exe" -Destination $portableDir
-          Get-ChildItem -Path "target\release" -Filter "libcrypto-*.dll" -File | Copy-Item -Destination $portableDir
+          Copy-Item "target\release\$env:OPENSSL_RUNTIME_DLL" -Destination $portableDir
+          Copy-Item "target\release\vc_redist.x64.exe" -Destination $portableDir
           Copy-Item "assets\icon.ico" -Destination $portableDir
           Copy-Item "assets\icon.png" -Destination $portableDir
           Copy-Item "README.md" -Destination $portableDir
@@ -105,7 +137,10 @@ jobs:
       - name: Compute SHA-256 checksums
         shell: pwsh
         run: |
-          $files = Get-ChildItem -Path "dist" -Include "*.exe","*.zip" -File
+          $files = @(Get-ChildItem -Path "dist" -File | Where-Object { $_.Extension -in @(".exe", ".zip") })
+          if ($files.Count -eq 0) {
+            throw "No Windows release artifacts found in dist to checksum"
+          }
           $sums = @()
           foreach ($file in $files) {
             $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLower()
@@ -134,6 +169,7 @@ jobs:
             dist/*.exe
             dist/*.zip
             dist/*.sha256
+            dist/SHA256SUMS-windows-x64.txt
 
   release-linux:
     name: Build & Package Linux (x64)

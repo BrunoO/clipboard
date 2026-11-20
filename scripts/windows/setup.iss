@@ -8,6 +8,11 @@
 #define MyAppPublisher "BrunoO"
 #define MyAppURL "https://github.com/BrunoO/clipboard"
 #define MyAppExeName "CipherClipboard.exe"
+#define VCRedistName "vc_redist.x64.exe"
+; Pinned by the release workflow; matches the dylib name in libsqlite3-sys.
+#ifndef OpenSslDllName
+  #define OpenSslDllName "libcrypto-3-x64.dll"
+#endif
 
 #ifndef SourceExeDir
   #if FileExists("..\..\target\x86_64-pc-windows-msvc\release\" + MyAppExeName)
@@ -61,7 +66,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#SourceExeDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceExeDir}\libcrypto-*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+; Staged by the release workflow. Skipped for local dev builds, which already
+; have the VC++ runtime from Visual Studio Build Tools.
+Source: "{#SourceExeDir}\{#VCRedistName}"; DestDir: "{tmp}"; Flags: deleteafterinstall skipifsourcedoesntexist
+Source: "{#SourceExeDir}\{#OpenSslDllName}"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\..\assets\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\assets\icon.png"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -72,4 +80,15 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFile
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Run]
+; The MSVC-linked exe cannot start on a clean Windows install without the
+; Universal CRT. vc_redist exits immediately when already installed; skip it
+; entirely when vcruntime140.dll is present so silent installs do not trigger
+; an unnecessary elevation prompt.
+Filename: "{tmp}\{#VCRedistName}"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Visual C++ runtime..."; Check: NeedsVCRedist; Flags: waituntilterminated skipifdoesntexist
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function NeedsVCRedist: Boolean;
+begin
+  Result := not FileExists(ExpandConstant('{sys}\vcruntime140.dll'));
+end;
