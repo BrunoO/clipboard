@@ -266,7 +266,16 @@ pub(crate) fn restore_focus_and_paste(
             std::thread::sleep(Duration::from_millis(auto_paste_delay_ms));
 
             #[cfg(target_os = "macos")]
-            macos::simulate_paste();
+            {
+                if !macos::is_target_foreground() {
+                    crate::platform::log_message(
+                        "WARN",
+                        "Auto-paste skipped: captured target application is not frontmost",
+                    );
+                    return;
+                }
+                macos::simulate_paste();
+            }
 
             #[cfg(target_os = "windows")]
             {
@@ -281,7 +290,16 @@ pub(crate) fn restore_focus_and_paste(
             }
 
             #[cfg(target_os = "linux")]
-            linux::simulate_paste();
+            {
+                if !linux::is_target_foreground() {
+                    crate::platform::log_message(
+                        "WARN",
+                        "Auto-paste skipped: captured target window is not active",
+                    );
+                    return;
+                }
+                linux::simulate_paste();
+            }
         }
     });
 }
@@ -575,6 +593,25 @@ mod macos {
                 }
             }
         });
+    }
+
+    pub(super) fn is_target_foreground() -> bool {
+        let target_pid = PREVIOUS_APP_PID.load(Ordering::SeqCst);
+        if target_pid <= 0 {
+            return false;
+        }
+        objc::rc::autoreleasepool(|| unsafe {
+            let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
+            if workspace.is_null() {
+                return false;
+            }
+            let frontmost: *mut Object = msg_send![workspace, frontmostApplication];
+            if frontmost.is_null() {
+                return false;
+            }
+            let pid: i32 = msg_send![frontmost, processIdentifier];
+            pid == target_pid
+        })
     }
 
     pub(super) fn simulate_paste() {
@@ -1703,6 +1740,14 @@ mod linux {
 
         let _ = conn.set_input_focus(InputFocus::PARENT, win, x11rb::CURRENT_TIME);
         let _ = conn.flush();
+    }
+
+    pub(super) fn is_target_foreground() -> bool {
+        let target_win = PREVIOUS_X11_WINDOW.load(Ordering::SeqCst);
+        if target_win == 0 {
+            return false;
+        }
+        active_window_and_pid().is_some_and(|(win, _)| win == target_win)
     }
 
     fn find_keycode<C: Connection>(conn: &C, target_keysym: u32) -> Option<u8> {
