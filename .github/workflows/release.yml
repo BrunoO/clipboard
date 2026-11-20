@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -24,12 +26,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Resolve release version and tag
         shell: pwsh
+        env:
+          INPUT_TAG: ${{ inputs.tag_name }}
         run: |
-          $inputTag = "${{ inputs.tag_name }}".Trim()
+          $inputTag = "$env:INPUT_TAG".Trim()
           if (-not [string]::IsNullOrWhiteSpace($inputTag)) {
             $tag = $inputTag
           } elseif ($env:GITHUB_REF -like "refs/tags/*") {
@@ -60,7 +64,7 @@ jobs:
           echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
 
       - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2
 
       - name: Build release binary
         run: cargo build --release --locked
@@ -112,8 +116,15 @@ jobs:
           }
           $sums | Set-Content -Path "dist\SHA256SUMS-windows-x64.txt" -Encoding ascii
 
+      - name: Attest Windows build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            dist/*.exe
+            dist/*.zip
+
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -129,7 +140,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Linux dependencies
         run: |
@@ -137,14 +148,16 @@ jobs:
           sudo apt-get install -y libx11-dev libxcb1-dev libdbus-1-dev libssl-dev pkg-config
 
       - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2
         with:
           cache: false
 
       - name: Resolve release version and tag
         shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag_name }}
         run: |
-          input_tag="${{ inputs.tag_name }}"
+          input_tag="$INPUT_TAG"
           if [ -n "$input_tag" ]; then
             tag="$input_tag"
           elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -192,8 +205,13 @@ jobs:
           done
           sha256sum *.tar.gz > SHA256SUMS-linux-x64.txt
 
+      - name: Attest Linux build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/*.tar.gz
+
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
