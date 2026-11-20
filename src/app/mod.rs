@@ -1385,23 +1385,16 @@ impl eframe::App for ClipboardApp {
         self.handle_monitor_updates();
         self.handle_clipboard_auto_clear();
 
-        if !self.is_visible {
-            // Keep the event loop alive with a gentle 50ms tick while hidden.
-            // When a window is set to Visible(false), OS compositors (Windows DWM,
-            // macOS WindowServer, X11) suppress redraw events, which can cause
-            // request_repaint() from background threads to stall.
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
-            return;
+        if let Some((_, deadline)) = &self.pending_clipboard_clear {
+            ctx.request_repaint_after(deadline.saturating_duration_since(Instant::now()));
         }
 
-        // Keep polling tray/hotkey events while minimized, since request_repaint()
-        // from background threads may not wake a minimized window on Windows.
-        if ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
-        }
-
-        if self.pending_clipboard_clear.is_some() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        // In eframe 0.36+, background threads calling ctx.request_repaint() wake
+        // invisible/minimized windows directly via UserEvent::RequestRepaint.
+        // Only tick briefly after hiding until the OS finishes deactivating our app
+        // so `was_inactive_since_hidden` latches; afterwards sleep at 0% idle CPU.
+        if !self.is_visible && !self.was_inactive_since_hidden {
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
 
