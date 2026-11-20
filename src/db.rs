@@ -282,72 +282,28 @@ impl Database {
         Ok(())
     }
 
-    /// Inserts a new text clipboard entry, deduplicating against history.
-    /// If an identical item was already the most recent, returns `Ok(None)`.
-    /// If an identical item exists earlier in history, deletes the stale copy and promotes
-    /// the item to the top with an updated timestamp.
-    /// Also automatically enforces the `max_history` limit.
-    pub(crate) fn insert(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
-        let conn = self.lock_conn();
-
-        // 1. Check if the most recent entry has the exact same content
-        let mut stmt =
-            conn.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
-        let mut rows = stmt.query([])?;
-        if let Some(row) = rows.next()? {
-            let last_kind: String = row.get(0)?;
-            let last_content: String = row.get(1)?;
-            if (last_kind == "text"
-                || last_kind == "url"
-                || last_kind == "code"
-                || last_kind == "color"
-                || last_kind == "secret")
-                && last_content == content
-            {
-                return Ok(None); // Exact consecutive duplicate, ignore
-            }
-        }
-
-        // 2. Remove any older duplicate so the item moves to the top of history
-        conn.execute(
-            "DELETE FROM clipboard_history
-             WHERE content = ?1 AND kind IN ('text', 'url', 'code', 'color', 'secret')",
-            params![content],
-        )?;
-
-        let is_secret = self.auto_detect_secrets.load(Ordering::Relaxed)
-            && crate::secret::is_likely_secret(content);
-        let is_url = !is_secret && is_valid_url(content);
-        let is_color = !is_secret && !is_url && crate::color::parse_color(content).is_some();
-        let is_code = !is_secret
-            && !is_url
-            && !is_color
-            && crate::code::detect_code_language(content).is_some();
-        let kind_str = if is_secret {
+    /// Classifies text content without holding the database lock.
+    fn classify_text_kind(&self, content: &str) -> &'static str {
+        if self.auto_detect_secrets.load(Ordering::Relaxed)
+            && crate::secret::is_likely_secret(content)
+        {
             "secret"
-        } else if is_url {
+        } else if is_valid_url(content) {
             "url"
-        } else if is_color {
+        } else if crate::color::parse_color(content).is_some() {
             "color"
-        } else if is_code {
+        } else if crate::code::detect_code_language(content).is_some() {
             "code"
         } else {
             "text"
-        };
+        }
+    }
 
-        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        conn.execute(
-            "INSERT INTO clipboard_history (kind, content, created_at) VALUES (?1, ?2, ?3)",
-            params![kind_str, content, now],
-        )?;
-
-        let new_id = conn.last_insert_rowid();
-
-        // 3. Automatically prune older entries beyond max_history
-        let max_limit = self.max_history.load(Ordering::Relaxed);
+    /// Prunes entries exceeding `max_limit` within an active SQLite transaction.
+    fn prune_in_tx(tx: &rusqlite::Transaction<'_>, max_limit: usize) {
         if max_limit > 0 {
             let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
-            if let Err(e) = conn.execute(
+            if let Err(e) = tx.execute(
                 "DELETE FROM clipboard_history
                  WHERE id NOT IN (
                      SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
@@ -357,6 +313,61 @@ impl Database {
                 eprintln!("⚠️ Failed to prune clipboard history: {e}");
             }
         }
+    }
+
+    /// Inserts a new text clipboard entry, deduplicating against history.
+    /// If an identical item was already the most recent, returns `Ok(None)`.
+    /// If an identical item exists earlier in history, deletes the stale copy and promotes
+    /// the item to the top with an updated timestamp.
+    /// Also automatically enforces the `max_history` limit.
+    pub(crate) fn insert(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
+        // Run CPU-bound classification (secret/URL/color/code heuristics) before
+        // acquiring the database mutex so UI reads are not blocked.
+        let kind_str = self.classify_text_kind(content);
+        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let max_limit = self.max_history.load(Ordering::Relaxed);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+
+        // 1. Check if the most recent entry has the exact same content
+        {
+            let mut stmt = tx.prepare(
+                "SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1",
+            )?;
+            let mut rows = stmt.query([])?;
+            if let Some(row) = rows.next()? {
+                let last_kind: String = row.get(0)?;
+                let last_content: String = row.get(1)?;
+                if (last_kind == "text"
+                    || last_kind == "url"
+                    || last_kind == "code"
+                    || last_kind == "color"
+                    || last_kind == "secret")
+                    && last_content == content
+                {
+                    return Ok(None); // Exact consecutive duplicate, ignore
+                }
+            }
+        }
+
+        // 2. Remove any older duplicate so the item moves to the top of history
+        tx.execute(
+            "DELETE FROM clipboard_history
+             WHERE content = ?1 AND kind IN ('text', 'url', 'code', 'color', 'secret')",
+            params![content],
+        )?;
+
+        tx.execute(
+            "INSERT INTO clipboard_history (kind, content, created_at) VALUES (?1, ?2, ?3)",
+            params![kind_str, content, now],
+        )?;
+
+        let new_id = tx.last_insert_rowid();
+
+        // 3. Automatically prune older entries beyond max_history
+        Self::prune_in_tx(&tx, max_limit);
+        tx.commit()?;
 
         Ok(Some(new_id))
     }
@@ -364,45 +375,40 @@ impl Database {
     /// Inserts a secret/sensitive text entry (e.g., generated password), deduplicating against
     /// existing secret entries and enforcing the `max_history` limit.
     pub(crate) fn insert_secret(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
-        let conn = self.lock_conn();
+        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let max_limit = self.max_history.load(Ordering::Relaxed);
 
-        let mut stmt =
-            conn.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
-        let mut rows = stmt.query([])?;
-        if let Some(row) = rows.next()? {
-            let last_kind: String = row.get(0)?;
-            let last_content: String = row.get(1)?;
-            if last_kind == "secret" && last_content == content {
-                return Ok(None);
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+
+        {
+            let mut stmt = tx.prepare(
+                "SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1",
+            )?;
+            let mut rows = stmt.query([])?;
+            if let Some(row) = rows.next()? {
+                let last_kind: String = row.get(0)?;
+                let last_content: String = row.get(1)?;
+                if last_kind == "secret" && last_content == content {
+                    return Ok(None);
+                }
             }
         }
 
-        conn.execute(
+        tx.execute(
             "DELETE FROM clipboard_history WHERE content = ?1 AND kind = 'secret'",
             params![content],
         )?;
 
-        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        conn.execute(
+        tx.execute(
             "INSERT INTO clipboard_history (kind, content, created_at) VALUES ('secret', ?1, ?2)",
             params![content, now],
         )?;
 
-        let new_id = conn.last_insert_rowid();
+        let new_id = tx.last_insert_rowid();
 
-        let max_limit = self.max_history.load(Ordering::Relaxed);
-        if max_limit > 0 {
-            let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
-            if let Err(e) = conn.execute(
-                "DELETE FROM clipboard_history
-                 WHERE id NOT IN (
-                     SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
-                 )",
-                params![limit_i64],
-            ) {
-                eprintln!("⚠️ Failed to prune clipboard history: {e}");
-            }
-        }
+        Self::prune_in_tx(&tx, max_limit);
+        tx.commit()?;
 
         Ok(Some(new_id))
     }
@@ -418,54 +424,49 @@ impl Database {
         height: u32,
         png_bytes: &[u8],
     ) -> Result<Option<i64>, rusqlite::Error> {
-        let conn = self.lock_conn();
+        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let content = format!("[Image {width}x{height}]");
+        let max_limit = self.max_history.load(Ordering::Relaxed);
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
 
         // 1. Check if the most recent entry has the exact same image content
-        let mut stmt = conn
-            .prepare("SELECT kind, image_data FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
-        let mut rows = stmt.query([])?;
-        if let Some(row) = rows.next()? {
-            let last_kind: String = row.get(0)?;
-            if last_kind == "image" {
-                if let Ok(last_bytes) = row.get::<_, Vec<u8>>(1) {
-                    if last_bytes == png_bytes {
-                        return Ok(None); // Exact consecutive duplicate, ignore
+        {
+            let mut stmt = tx.prepare(
+                "SELECT kind, image_data FROM clipboard_history ORDER BY id DESC LIMIT 1",
+            )?;
+            let mut rows = stmt.query([])?;
+            if let Some(row) = rows.next()? {
+                let last_kind: String = row.get(0)?;
+                if last_kind == "image" {
+                    if let Ok(last_bytes) = row.get::<_, Vec<u8>>(1) {
+                        if last_bytes == png_bytes {
+                            return Ok(None); // Exact consecutive duplicate, ignore
+                        }
                     }
                 }
             }
         }
 
         // 2. Remove any older duplicate image so the new copy moves to the top
-        conn.execute(
+        tx.execute(
             "DELETE FROM clipboard_history
              WHERE kind = 'image' AND width = ?1 AND height = ?2 AND image_data = ?3",
             params![width, height, png_bytes],
         )?;
 
-        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let content = format!("[Image {width}x{height}]");
-        conn.execute(
+        tx.execute(
             "INSERT INTO clipboard_history (kind, content, image_data, width, height, created_at)
              VALUES ('image', ?1, ?2, ?3, ?4, ?5)",
             params![content, png_bytes, width, height, now],
         )?;
 
-        let new_id = conn.last_insert_rowid();
+        let new_id = tx.last_insert_rowid();
 
         // 3. Automatically prune older entries beyond max_history
-        let max_limit = self.max_history.load(Ordering::Relaxed);
-        if max_limit > 0 {
-            let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
-            if let Err(e) = conn.execute(
-                "DELETE FROM clipboard_history
-                 WHERE id NOT IN (
-                     SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
-                 )",
-                params![limit_i64],
-            ) {
-                eprintln!("⚠️ Failed to prune clipboard history: {e}");
-            }
-        }
+        Self::prune_in_tx(&tx, max_limit);
+        tx.commit()?;
 
         Ok(Some(new_id))
     }
@@ -476,70 +477,100 @@ impl Database {
         limit: usize,
         filter: Option<&str>,
     ) -> Result<Vec<ClipboardItem>, rusqlite::Error> {
-        let conn = self.lock_conn();
-        let mut items = Vec::new();
+        struct RawRow {
+            id: i64,
+            kind_str: String,
+            content: String,
+            image_data: Option<Vec<u8>>,
+            width: Option<u32>,
+            height: Option<u32>,
+            created_at: String,
+        }
+
         let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
-
-        let row_to_item = |row: &rusqlite::Row| -> Result<ClipboardItem, rusqlite::Error> {
-            let kind_str: String = row.get(1).unwrap_or_else(|_| "text".to_string());
-            let content: String = row.get(2)?;
-            let kind = match kind_str.as_str() {
-                "image" => ItemKind::Image,
-                "url" => ItemKind::Url,
-                "code" => ItemKind::Code,
-                "color" => ItemKind::Color,
-                "secret" => ItemKind::Secret,
-                _ => {
-                    if is_valid_url(&content) {
-                        ItemKind::Url
-                    } else if crate::color::parse_color(&content).is_some() {
-                        ItemKind::Color
-                    } else if crate::code::detect_code_language(&content).is_some() {
-                        ItemKind::Code
-                    } else {
-                        ItemKind::Text
-                    }
-                }
-            };
-            Ok(ClipboardItem {
-                id: row.get(0)?,
-                kind,
-                content,
-                image_data: row.get(3)?,
-                width: row.get(4)?,
-                height: row.get(5)?,
-                created_at: row.get(6)?,
-            })
-        };
-
-        if let Some(search) = filter.filter(|s| !s.trim().is_empty()) {
+        let search_pattern = filter.filter(|s| !s.trim().is_empty()).map(|search| {
             let escaped = search
                 .trim()
                 .replace('\\', "\\\\")
                 .replace('%', "\\%")
                 .replace('_', "\\_");
-            let pattern = format!("%{escaped}%");
-            let mut stmt = conn.prepare(
-                "SELECT id, kind, content, image_data, width, height, created_at
-                 FROM clipboard_history
-                 WHERE kind != 'secret' AND content LIKE ?1 ESCAPE '\\'
-                 ORDER BY id DESC LIMIT ?2",
-            )?;
-            let mut rows = stmt.query(params![pattern, limit_i64])?;
-            while let Some(row) = rows.next()? {
-                items.push(row_to_item(row)?);
+            format!("%{escaped}%")
+        });
+
+        // Hold the database mutex only while reading raw rows from SQLite.
+        let raw_rows = {
+            let conn = self.lock_conn();
+            let mut raw_rows = Vec::new();
+            let extract_row = |row: &rusqlite::Row| -> Result<RawRow, rusqlite::Error> {
+                Ok(RawRow {
+                    id: row.get(0)?,
+                    kind_str: row.get(1).unwrap_or_else(|_| "text".to_string()),
+                    content: row.get(2)?,
+                    image_data: row.get(3)?,
+                    width: row.get(4)?,
+                    height: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            };
+
+            if let Some(pattern) = search_pattern {
+                let mut stmt = conn.prepare(
+                    "SELECT id, kind, content, image_data, width, height, created_at
+                     FROM clipboard_history
+                     WHERE kind != 'secret' AND content LIKE ?1 ESCAPE '\\'
+                     ORDER BY id DESC LIMIT ?2",
+                )?;
+                let mut rows = stmt.query(params![pattern, limit_i64])?;
+                while let Some(row) = rows.next()? {
+                    raw_rows.push(extract_row(row)?);
+                }
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT id, kind, content, image_data, width, height, created_at
+                     FROM clipboard_history
+                     ORDER BY id DESC LIMIT ?1",
+                )?;
+                let mut rows = stmt.query(params![limit_i64])?;
+                while let Some(row) = rows.next()? {
+                    raw_rows.push(extract_row(row)?);
+                }
             }
-        } else {
-            let mut stmt = conn.prepare(
-                "SELECT id, kind, content, image_data, width, height, created_at
-                 FROM clipboard_history
-                 ORDER BY id DESC LIMIT ?1",
-            )?;
-            let mut rows = stmt.query(params![limit_i64])?;
-            while let Some(row) = rows.next()? {
-                items.push(row_to_item(row)?);
-            }
-        }
+            raw_rows
+        };
+
+        // Classify any legacy untyped rows outside the database lock.
+        let items = raw_rows
+            .into_iter()
+            .map(|r| {
+                let kind = match r.kind_str.as_str() {
+                    "image" => ItemKind::Image,
+                    "url" => ItemKind::Url,
+                    "code" => ItemKind::Code,
+                    "color" => ItemKind::Color,
+                    "secret" => ItemKind::Secret,
+                    _ => {
+                        if is_valid_url(&r.content) {
+                            ItemKind::Url
+                        } else if crate::color::parse_color(&r.content).is_some() {
+                            ItemKind::Color
+                        } else if crate::code::detect_code_language(&r.content).is_some() {
+                            ItemKind::Code
+                        } else {
+                            ItemKind::Text
+                        }
+                    }
+                };
+                ClipboardItem {
+                    id: r.id,
+                    kind,
+                    content: r.content,
+                    image_data: r.image_data,
+                    width: r.width,
+                    height: r.height,
+                    created_at: r.created_at,
+                }
+            })
+            .collect();
 
         Ok(items)
     }

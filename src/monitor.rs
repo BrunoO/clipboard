@@ -61,16 +61,38 @@ pub(crate) fn start_clipboard_monitor(
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             }
 
+            // Fast path: when the OS exposes a monotonic clipboard change counter
+            // (macOS NSPasteboard.changeCount, Windows GetClipboardSequenceNumber),
+            // skip all clipboard reads/allocations/hashing when nothing has changed.
+            let change_token = crate::platform::clipboard_change_token();
+            if change_token.is_some() && state.change_token == change_token {
+                continue;
+            }
+
             // Skip processing if marked as concealed/transient by password managers
             if db.ignore_concealed() && crate::platform::is_clipboard_concealed() {
+                state.change_token = change_token;
                 continue;
             }
 
-            if poll_clipboard_text(&mut clipboard, &db, &notify_tx, &ctx, &mut state) {
-                continue;
+            match poll_clipboard_text(&mut clipboard, &db, &notify_tx, &ctx, &mut state) {
+                PollOutcome::Handled => {
+                    state.change_token = change_token;
+                    continue;
+                }
+                PollOutcome::Occupied => {
+                    // Clipboard is transiently locked by another process; retry next tick.
+                    continue;
+                }
+                PollOutcome::NotAvailable => {}
             }
 
-            poll_clipboard_image(&mut clipboard, &db, &notify_tx, &ctx, &mut state);
+            match poll_clipboard_image(&mut clipboard, &db, &notify_tx, &ctx, &mut state) {
+                PollOutcome::Handled | PollOutcome::NotAvailable => {
+                    state.change_token = change_token;
+                }
+                PollOutcome::Occupied => {}
+            }
         }
     });
 
@@ -81,6 +103,13 @@ pub(crate) fn start_clipboard_monitor(
 struct MonitorState {
     last_copied_text: Option<String>,
     last_copied_image_hash: Option<u64>,
+    change_token: Option<u64>,
+}
+
+enum PollOutcome {
+    Handled,
+    NotAvailable,
+    Occupied,
 }
 
 /// On Windows the clipboard can be briefly unavailable (e.g. at session logon
@@ -110,22 +139,24 @@ fn poll_clipboard_text(
     notify_tx: &Sender<()>,
     ctx: &egui::Context,
     state: &mut MonitorState,
-) -> bool {
-    let Ok(text) = clipboard.get_text() else {
-        return false;
+) -> PollOutcome {
+    let text = match clipboard.get_text() {
+        Ok(text) => text,
+        Err(arboard::Error::ClipboardOccupied) => return PollOutcome::Occupied,
+        Err(_) => return PollOutcome::NotAvailable,
     };
     if text.trim().is_empty()
         || text.len() > MAX_TEXT_LENGTH
         || state.last_copied_text.as_deref() == Some(text.as_str())
     {
-        return false;
+        return PollOutcome::NotAvailable;
     }
 
     state.last_copied_text = Some(text.clone());
     state.last_copied_image_hash = None;
 
     if db.take_if_skipped(&text) {
-        return true;
+        return PollOutcome::Handled;
     }
 
     match db.insert(&text) {
@@ -139,7 +170,7 @@ fn poll_clipboard_text(
             eprintln!("⚠️ Failed to save clipboard item to database: {e}");
         }
     }
-    true
+    PollOutcome::Handled
 }
 
 fn poll_clipboard_image(
@@ -148,9 +179,11 @@ fn poll_clipboard_image(
     notify_tx: &Sender<()>,
     ctx: &egui::Context,
     state: &mut MonitorState,
-) {
-    let Ok(img) = clipboard.get_image() else {
-        return;
+) -> PollOutcome {
+    let img = match clipboard.get_image() {
+        Ok(img) => img,
+        Err(arboard::Error::ClipboardOccupied) => return PollOutcome::Occupied,
+        Err(_) => return PollOutcome::NotAvailable,
     };
     let width = img.width;
     let height = img.height;
@@ -160,12 +193,12 @@ fn poll_clipboard_image(
         || width.saturating_mul(height) > MAX_IMAGE_PIXELS
         || img.bytes.len() != expected_len
     {
-        return;
+        return PollOutcome::NotAvailable;
     }
 
     let fingerprint = compute_image_fingerprint(width, height, &img.bytes);
     if state.last_copied_image_hash == Some(fingerprint) {
-        return;
+        return PollOutcome::Handled;
     }
     state.last_copied_image_hash = Some(fingerprint);
     state.last_copied_text = None;
@@ -174,7 +207,7 @@ fn poll_clipboard_image(
         Ok(bytes) => bytes,
         Err(e) => {
             eprintln!("⚠️ Failed to encode clipboard image to PNG: {e}");
-            return;
+            return PollOutcome::Handled;
         }
     };
 
@@ -194,6 +227,7 @@ fn poll_clipboard_image(
             eprintln!("⚠️ Failed to save image to database: {e}");
         }
     }
+    PollOutcome::Handled
 }
 
 #[cfg(debug_assertions)]

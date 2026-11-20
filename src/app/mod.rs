@@ -462,9 +462,6 @@ impl ClipboardApp {
                 if let Err(e) = self.db.insert_secret(&secret) {
                     eprintln!("Failed to save generated password to database: {e}");
                 } else {
-                    if let Err(e) = self.db.prune_history(self.settings.max_history) {
-                        eprintln!("⚠️ Failed to prune history: {e}");
-                    }
                     self.refresh_items();
                 }
             }
@@ -831,9 +828,6 @@ impl ClipboardApp {
         }
 
         if new_items_detected || self.search_query != self.last_query_cached {
-            if new_items_detected {
-                let _ = self.db.prune_history(self.settings.max_history);
-            }
             self.refresh_items();
             self.last_query_cached = self.search_query.clone();
             self.selected_index = 0;
