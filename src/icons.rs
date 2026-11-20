@@ -42,8 +42,22 @@ pub(crate) fn outlined(codepoint: &'static str) -> egui::RichText {
     MaterialIcon::new(codepoint).outlined().rich_text()
 }
 
+/// Icon-only buttons render glyphs at this size (egui's small-button text is tiny).
+pub(crate) const BUTTON_ICON_SIZE: f32 = 14.0;
+
+/// Multiplier applied to icons placed before label text so they match text visual weight.
+const LABEL_ICON_SCALE: f32 = 1.15;
+
+/// Returns an outlined icon [`egui::RichText`] sized for icon-only buttons.
+pub(crate) fn button_icon(codepoint: &'static str) -> egui::RichText {
+    MaterialIcon::new(codepoint)
+        .outlined()
+        .rich_text()
+        .size(BUTTON_ICON_SIZE)
+}
+
 /// Builds a [`LayoutJob`] combining a Material icon (explicitly `filled` or `outlined`)
-/// followed by a space and proportional label text.
+/// followed by a space and proportional label text, vertically centered.
 pub(crate) fn label_job(
     codepoint: &str,
     filled: bool,
@@ -61,8 +75,9 @@ pub(crate) fn label_job(
         codepoint,
         0.0,
         TextFormat {
-            font_id: FontId::new(size, icon_family),
+            font_id: FontId::new(size * LABEL_ICON_SCALE, icon_family),
             color,
+            valign: egui::Align::Center,
             ..Default::default()
         },
     );
@@ -72,6 +87,7 @@ pub(crate) fn label_job(
         TextFormat {
             font_id: FontId::new(size, FontFamily::Proportional),
             color,
+            valign: egui::Align::Center,
             ..Default::default()
         },
     );

@@ -429,7 +429,7 @@ impl ClipboardApp {
         is_revealed: bool,
     ) -> ItemAction {
         let mut action = if ui
-            .small_button(icons::TRASH)
+            .small_button(icons::button_icon(icons::TRASH))
             .on_hover_text("Delete entry (Delete or Cmd+Backspace)")
             .clicked()
         {
@@ -473,7 +473,11 @@ impl ClipboardApp {
             } else {
                 (icons::LOCK, "Mark as Secret (mask content)")
             };
-            if ui.small_button(lock_icon).on_hover_text(lock_tip).clicked() {
+            if ui
+                .small_button(icons::button_icon(lock_icon))
+                .on_hover_text(lock_tip)
+                .clicked()
+            {
                 action = ItemAction::ToggleSecret(item.id, !is_secret);
             }
         }
@@ -484,7 +488,11 @@ impl ClipboardApp {
             } else {
                 (icons::EYE, "Reveal secret")
             };
-            if ui.small_button(eye_icon).on_hover_text(eye_tip).clicked() {
+            if ui
+                .small_button(icons::button_icon(eye_icon))
+                .on_hover_text(eye_tip)
+                .clicked()
+            {
                 action = ItemAction::ToggleRevealSecret(item.id);
             }
         }
@@ -851,9 +859,10 @@ impl ClipboardApp {
         colors: &[crate::color::ParsedColor],
         is_dark: bool,
     ) -> ItemAction {
+        const VISIBLE: usize = 3;
         let mut action = ItemAction::None;
 
-        ui.horizontal_wrapped(|ui| {
+        ui.vertical(|ui| {
             ui.label(
                 egui::RichText::new(format!("{} Colors:", icons::PALETTE))
                     .size(11.0)
@@ -873,11 +882,24 @@ impl ClipboardApp {
                 )
             };
 
-            for &color in colors {
+            for &color in colors.iter().take(VISIBLE) {
                 let chip_action = Self::render_embedded_color_chip(ui, color, bg, stroke, is_dark);
                 if !matches!(chip_action, ItemAction::None) {
                     action = chip_action;
                 }
+            }
+            if colors.len() > VISIBLE {
+                egui::CollapsingHeader::new(format!("{} more colors", colors.len() - VISIBLE))
+                    .id_salt(("more_colors", colors.len(), colors[0].to_hex()))
+                    .show(ui, |ui| {
+                        for &color in &colors[VISIBLE..] {
+                            let chip_action =
+                                Self::render_embedded_color_chip(ui, color, bg, stroke, is_dark);
+                            if !matches!(chip_action, ItemAction::None) {
+                                action = chip_action;
+                            }
+                        }
+                    });
             }
         });
 
@@ -898,7 +920,7 @@ impl ClipboardApp {
             .corner_radius(4)
             .inner_margin(egui::Margin::symmetric(5, 2))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let swatch_res = Self::render_mini_color_swatch(ui, color);
                     if swatch_res.clicked() {
                         action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());

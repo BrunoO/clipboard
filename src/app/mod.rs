@@ -982,7 +982,7 @@ impl ClipboardApp {
 
     fn render_header_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if ui
-            .small_button(icons::X)
+            .small_button(icons::button_icon(icons::X))
             .on_hover_text("Hide window (Esc)")
             .clicked()
         {
@@ -995,7 +995,7 @@ impl ClipboardApp {
             "Quit CipherClipboard (Ctrl+Q)"
         };
         if ui
-            .small_button(icons::POWER)
+            .small_button(icons::button_icon(icons::POWER))
             .on_hover_text(quit_tooltip)
             .clicked()
         {
@@ -1030,7 +1030,7 @@ impl ClipboardApp {
 
         if self.active_view == ActiveView::History
             && ui
-                .small_button(icons::TRASH)
+                .small_button(icons::button_icon(icons::TRASH))
                 .on_hover_text("Clear clipboard history")
                 .clicked()
         {
@@ -1050,7 +1050,7 @@ impl ClipboardApp {
                     ui.label(
                         egui::RichText::new(icons::MAGNIFYING_GLASS)
                             .color(crate::theme::text_secondary(is_dark))
-                            .size(13.0_f32),
+                            .size(14.0_f32),
                     );
                     let search_box = ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
@@ -1066,7 +1066,7 @@ impl ClipboardApp {
 
                     if !self.search_query.is_empty()
                         && ui
-                            .small_button(icons::X)
+                            .small_button(icons::button_icon(icons::X))
                             .on_hover_text("Clear search")
                             .clicked()
                     {
@@ -1681,7 +1681,7 @@ fn render_view_toggle_button(
         ui.small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
             .on_hover_text("Back to clipboard history")
     } else {
-        ui.small_button(icons::outlined(inactive_icon))
+        ui.small_button(icons::button_icon(inactive_icon))
             .on_hover_text(inactive_tooltip)
     };
     response.clicked()

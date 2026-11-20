@@ -159,9 +159,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut fonts = egui::FontDefinitions::default();
             theme::setup_fonts(&mut fonts);
             cc.egui_ctx.set_fonts(fonts);
-            cc.egui_ctx
-                .add_font(egui_material_icons::font_insert_outlined());
-            cc.egui_ctx.add_font(egui_material_icons::font_insert());
+            let mut outlined = egui_material_icons::font_insert_outlined();
+            outlined.data.tweak.scale = 1.20;
+            outlined.data.tweak.y_offset_factor = 0.0;
+            let mut filled = egui_material_icons::font_insert();
+            filled.data.tweak.scale = 1.20;
+            filled.data.tweak.y_offset_factor = 0.0;
+            cc.egui_ctx.add_font(outlined);
+            cc.egui_ctx.add_font(filled);
 
             // Apply platform-adaptive HIG visuals (Dark or Light)
             let is_dark = settings.theme.resolve(&cc.egui_ctx);

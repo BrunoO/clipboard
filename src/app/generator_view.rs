@@ -121,7 +121,7 @@ impl ClipboardApp {
                     icons::EYE
                 };
                 if ui
-                    .button(eye_icon)
+                    .button(icons::button_icon(eye_icon))
                     .on_hover_text(if self.password_gen.reveal_value {
                         "Hide password"
                     } else {
