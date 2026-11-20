@@ -49,6 +49,7 @@ CipherClipboard runs quietly in the background, instantly captures copied text a
 cipherclipboard/
 ├── Cargo.toml            # Project manifest & dependencies
 ├── deny.toml             # Supply-chain security & license policy
+├── docs/                 # Bug analyses, platform reviews & testing checklists
 ├── scripts/              # Local CI pre-flight guardrails & release packaging
 ├── src/
 │   ├── main.rs           # Entry point, panic hook, single-instance lock & eframe launcher
