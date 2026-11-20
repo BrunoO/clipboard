@@ -2,7 +2,6 @@
 //! Windows 11 Fluent styling, and Linux Adwaita styling in both Dark and Light modes.
 
 use eframe::egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Stroke};
-use std::path::Path;
 
 /// Applies the platform-adaptive theme visuals (Dark or Light) to the egui context.
 pub(crate) fn setup_theme(ctx: &egui::Context, is_dark: bool) {
@@ -70,38 +69,57 @@ pub(crate) fn setup_theme(ctx: &egui::Context, is_dark: bool) {
     ctx.set_visuals(visuals);
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_font_candidates(windir: Option<&str>) -> Vec<std::path::PathBuf> {
+    let base = windir
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(r"C:\Windows");
+    let fonts_dir = std::path::PathBuf::from(base).join("Fonts");
+    ["segoeui.ttf", "segoeuil.ttf", "arial.ttf"]
+        .into_iter()
+        .map(|name| fonts_dir.join(name))
+        .collect()
+}
+
 /// Probes for native system fonts (San Francisco on macOS, Segoe UI on Windows, `DejaVu` Sans on Linux)
 /// and registers them into `FontDefinitions` as the primary proportional font family,
 /// while keeping Phosphor icon glyphs as fallbacks.
 pub(crate) fn setup_fonts(fonts: &mut FontDefinitions) {
     #[cfg(target_os = "macos")]
-    let candidate_fonts = [
+    let candidate_fonts: Vec<std::path::PathBuf> = [
         "/System/Library/Fonts/SFNS.ttf",
         "/System/Library/Fonts/SFNSText.ttf",
         "/System/Library/Fonts/SFCompact.ttf",
         "/System/Library/Fonts/HelveticaNeue.ttc",
         "/System/Library/Fonts/Helvetica.ttc",
         "/Library/Fonts/Arial.ttf",
-    ];
+    ]
+    .into_iter()
+    .map(std::path::PathBuf::from)
+    .collect();
 
     #[cfg(target_os = "windows")]
-    let candidate_fonts = [
-        "C:\\Windows\\Fonts\\segoeui.ttf",
-        "C:\\Windows\\Fonts\\segoeuil.ttf",
-        "C:\\Windows\\Fonts\\arial.ttf",
-    ];
+    let candidate_fonts: Vec<std::path::PathBuf> = {
+        let windir = std::env::var("WINDIR")
+            .ok()
+            .or_else(|| std::env::var("SystemRoot").ok());
+        windows_font_candidates(windir.as_deref())
+    };
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let candidate_fonts = [
+    let candidate_fonts: Vec<std::path::PathBuf> = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    ];
+    ]
+    .into_iter()
+    .map(std::path::PathBuf::from)
+    .collect();
 
-    for path_str in candidate_fonts {
-        let path = Path::new(path_str);
+    for path in candidate_fonts {
         if path.exists() {
-            if let Ok(bytes) = std::fs::read(path) {
+            if let Ok(bytes) = std::fs::read(&path) {
                 let font_name = "system_ui".to_owned();
                 fonts
                     .font_data
@@ -1038,5 +1056,17 @@ mod tests {
                 "Link blue on selected card must meet WCAG AA"
             );
         }
+    }
+
+    #[test]
+    fn test_windows_font_candidates_respects_windir() {
+        let custom = windows_font_candidates(Some(r"D:\WinOS"));
+        assert_eq!(custom.len(), 3);
+        assert!(custom[0].to_string_lossy().starts_with(r"D:\WinOS"));
+        assert!(custom[0].ends_with("segoeui.ttf"));
+
+        let fallback = windows_font_candidates(None);
+        assert!(fallback[0].to_string_lossy().starts_with(r"C:\Windows"));
+        assert!(fallback[2].ends_with("arial.ttf"));
     }
 }
