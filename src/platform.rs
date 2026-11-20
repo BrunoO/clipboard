@@ -805,7 +805,7 @@ mod windows {
         let fg_thread = if fg.is_null() {
             0
         } else {
-            GetWindowThreadProcessId(fg, &mut fg_pid)
+            GetWindowThreadProcessId(fg, &raw mut fg_pid)
         };
 
         let target_thread = if fg_thread != 0 && fg_pid != current_pid {
@@ -839,18 +839,24 @@ mod windows {
     fn find_main_window() -> Option<Hwnd> {
         unsafe extern "system" fn enum_proc(hwnd: Hwnd, lparam: isize) -> i32 {
             let mut pid: u32 = 0;
-            GetWindowThreadProcessId(hwnd, &mut pid);
+            GetWindowThreadProcessId(hwnd, &raw mut pid);
             if pid == GetCurrentProcessId() {
                 let mut buf = [0u16; 64];
-                let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-                if len > 0 {
-                    let title = String::from_utf16_lossy(&buf[..len as usize]);
-                    if title == "CipherClipboard" {
-                        let out = lparam as *mut Hwnd;
-                        if !out.is_null() {
-                            *out = hwnd;
+                let len = GetWindowTextW(
+                    hwnd,
+                    buf.as_mut_ptr(),
+                    i32::try_from(buf.len()).unwrap_or(0),
+                );
+                if let Ok(len_usize) = usize::try_from(len) {
+                    if len_usize > 0 {
+                        let title = String::from_utf16_lossy(&buf[..len_usize]);
+                        if title == "CipherClipboard" {
+                            let out = lparam as *mut Hwnd;
+                            if !out.is_null() {
+                                *out = hwnd;
+                            }
+                            return 0; // stop enumeration
                         }
-                        return 0; // stop enumeration
                     }
                 }
             }
@@ -886,7 +892,7 @@ mod windows {
                 0
             } else {
                 let mut fg_pid: u32 = 0;
-                GetWindowThreadProcessId(fg_hwnd, &mut fg_pid)
+                GetWindowThreadProcessId(fg_hwnd, &raw mut fg_pid)
             };
 
             if fg_thread != 0 && fg_thread != cur_thread {
@@ -908,7 +914,7 @@ mod windows {
                 return false;
             }
             let mut pid: u32 = 0;
-            GetWindowThreadProcessId(hwnd, &mut pid);
+            GetWindowThreadProcessId(hwnd, &raw mut pid);
             pid == GetCurrentProcessId()
         }
     }
@@ -918,7 +924,7 @@ mod windows {
             let hwnd = GetForegroundWindow();
             if !hwnd.is_null() {
                 let mut pid: u32 = 0;
-                GetWindowThreadProcessId(hwnd, &mut pid);
+                GetWindowThreadProcessId(hwnd, &raw mut pid);
                 if pid != 0 && pid != GetCurrentProcessId() {
                     PREVIOUS_HWND.store(hwnd as isize, Ordering::SeqCst);
                     PREVIOUS_PID.store(pid, Ordering::SeqCst);
@@ -952,7 +958,7 @@ mod windows {
             // A bare worker thread has no message queue and AttachThreadInput fails
             // unless both threads have one. PeekMessage creates it as a side effect.
             let mut msg = std::mem::zeroed::<MSG>();
-            let _ = PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
+            let _ = PeekMessageW(&raw mut msg, std::ptr::null_mut(), 0, 0, PM_NOREMOVE);
 
             let cur_thread = GetCurrentThreadId();
             let fg_hwnd = GetForegroundWindow();
@@ -1007,7 +1013,7 @@ mod windows {
                 return false;
             }
             let mut fg_pid: u32 = 0;
-            GetWindowThreadProcessId(fg, &mut fg_pid);
+            GetWindowThreadProcessId(fg, &raw mut fg_pid);
             fg_pid != 0 && fg_pid == target_pid
         }
     }
@@ -1021,19 +1027,25 @@ mod windows {
         unsafe extern "system" fn enum_proc(hwnd: Hwnd, lparam: isize) -> i32 {
             let ctx = &mut *(lparam as *mut SearchCtx);
             let mut pid: u32 = 0;
-            GetWindowThreadProcessId(hwnd, &mut pid);
+            GetWindowThreadProcessId(hwnd, &raw mut pid);
             if let Some(expected) = ctx.expected_pid {
                 if pid != expected {
                     return 1;
                 }
             }
             let mut buf = [0u16; 64];
-            let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-            if len > 0 {
-                let title = String::from_utf16_lossy(&buf[..len as usize]);
-                if title == "CipherClipboard" {
-                    ctx.found = hwnd;
-                    return 0;
+            let len = GetWindowTextW(
+                hwnd,
+                buf.as_mut_ptr(),
+                i32::try_from(buf.len()).unwrap_or(0),
+            );
+            if let Ok(len_usize) = usize::try_from(len) {
+                if len_usize > 0 {
+                    let title = String::from_utf16_lossy(&buf[..len_usize]);
+                    if title == "CipherClipboard" {
+                        ctx.found = hwnd;
+                        return 0;
+                    }
                 }
             }
             1
@@ -1045,7 +1057,9 @@ mod windows {
         };
         unsafe {
             EnumWindows(enum_proc, std::ptr::addr_of_mut!(ctx) as isize);
-            if !ctx.found.is_null() {
+            if ctx.found.is_null() {
+                false
+            } else {
                 // SW_RESTORE on a maximized/snapped window would un-maximize it.
                 if IsIconic(ctx.found) != 0 {
                     ShowWindow(ctx.found, SW_RESTORE);
@@ -1055,8 +1069,6 @@ mod windows {
                 BringWindowToTop(ctx.found);
                 SetForegroundWindow(ctx.found);
                 true
-            } else {
-                false
             }
         }
     }
@@ -1064,15 +1076,6 @@ mod windows {
     pub(super) fn show_error_dialog(message: &str) {
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
-
-        let msg_wide: Vec<u16> = OsStr::new(message)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let title_wide: Vec<u16> = OsStr::new("CipherClipboard Error")
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
 
         extern "system" {
             fn MessageBoxW(
@@ -1085,6 +1088,15 @@ mod windows {
 
         const MB_OK: u32 = 0x0000_0000;
         const MB_ICONERROR: u32 = 0x0000_0010;
+
+        let msg_wide: Vec<u16> = OsStr::new(message)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let title_wide: Vec<u16> = OsStr::new("CipherClipboard Error")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
 
         unsafe {
             MessageBoxW(
@@ -1196,7 +1208,11 @@ mod windows {
                 },
             ];
 
-            let inserted = SendInput(4, inputs.as_ptr(), std::mem::size_of::<Input>() as i32);
+            let inserted = SendInput(
+                4,
+                inputs.as_ptr(),
+                i32::try_from(std::mem::size_of::<Input>()).unwrap_or(0),
+            );
             let ok = inserted == 4;
             if !ok {
                 log_message(
@@ -1213,187 +1229,79 @@ mod windows {
         fn IsClipboardFormatAvailable(format: u32) -> i32;
     }
 
-    pub(super) fn is_clipboard_concealed() -> bool {
-        static EXCLUDE_FMT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        static IGNORE_FMT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    fn cached_clipboard_format(cache: &AtomicU32, name: &str) -> u32 {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
 
-        const EXCLUDE_NAME: &[u16] = &[
-            b'E' as u16,
-            b'x' as u16,
-            b'c' as u16,
-            b'l' as u16,
-            b'u' as u16,
-            b'd' as u16,
-            b'e' as u16,
-            b'C' as u16,
-            b'l' as u16,
-            b'i' as u16,
-            b'p' as u16,
-            b'b' as u16,
-            b'o' as u16,
-            b'a' as u16,
-            b'r' as u16,
-            b'd' as u16,
-            b'C' as u16,
-            b'o' as u16,
-            b'n' as u16,
-            b't' as u16,
-            b'e' as u16,
-            b'n' as u16,
-            b't' as u16,
-            b'F' as u16,
-            b'r' as u16,
-            b'o' as u16,
-            b'm' as u16,
-            b'M' as u16,
-            b'o' as u16,
-            b'n' as u16,
-            b'i' as u16,
-            b't' as u16,
-            b'o' as u16,
-            b'r' as u16,
-            b'P' as u16,
-            b'r' as u16,
-            b'o' as u16,
-            b'c' as u16,
-            b'e' as u16,
-            b's' as u16,
-            b's' as u16,
-            b'i' as u16,
-            b'n' as u16,
-            b'g' as u16,
-            0,
-        ];
-        const IGNORE_NAME: &[u16] = &[
-            b'C' as u16,
-            b'l' as u16,
-            b'i' as u16,
-            b'p' as u16,
-            b'b' as u16,
-            b'o' as u16,
-            b'a' as u16,
-            b'r' as u16,
-            b'd' as u16,
-            b' ' as u16,
-            b'V' as u16,
-            b'i' as u16,
-            b'e' as u16,
-            b'w' as u16,
-            b'e' as u16,
-            b'r' as u16,
-            b' ' as u16,
-            b'I' as u16,
-            b'g' as u16,
-            b'n' as u16,
-            b'o' as u16,
-            b'r' as u16,
-            b'e' as u16,
-            0,
-        ];
+        let id = cache.load(Ordering::Relaxed);
+        if id != 0 {
+            return id;
+        }
+        let wide: Vec<u16> = OsStr::new(name)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let registered = unsafe { RegisterClipboardFormatW(wide.as_ptr()) };
+        if registered != 0 {
+            cache.store(registered, Ordering::Relaxed);
+        }
+        registered
+    }
 
-        let mut exclude_id = EXCLUDE_FMT.load(Ordering::Relaxed);
-        if exclude_id == 0 {
-            unsafe {
-                exclude_id = RegisterClipboardFormatW(EXCLUDE_NAME.as_ptr());
-                if exclude_id != 0 {
-                    EXCLUDE_FMT.store(exclude_id, Ordering::Relaxed);
+    fn is_clipboard_history_excluded(history_id: u32) -> bool {
+        #[link(name = "user32")]
+        extern "system" {
+            fn OpenClipboard(hWndNewOwner: Hwnd) -> i32;
+            fn CloseClipboard() -> i32;
+            fn GetClipboardData(uFormat: u32) -> *mut std::ffi::c_void;
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GlobalLock(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            fn GlobalUnlock(hMem: *mut std::ffi::c_void) -> i32;
+            fn GlobalSize(hMem: *mut std::ffi::c_void) -> usize;
+        }
+
+        unsafe {
+            if OpenClipboard(std::ptr::null_mut()) == 0 {
+                return false;
+            }
+            let hmem = GetClipboardData(history_id);
+            let mut excluded = false;
+            if !hmem.is_null() && GlobalSize(hmem) >= std::mem::size_of::<u32>() {
+                let ptr = GlobalLock(hmem).cast::<u32>();
+                if !ptr.is_null() {
+                    excluded = *ptr == 0;
+                    let _ = GlobalUnlock(hmem);
                 }
             }
+            let _ = CloseClipboard();
+            excluded
         }
+    }
+
+    pub(super) fn is_clipboard_concealed() -> bool {
+        static EXCLUDE_FMT: AtomicU32 = AtomicU32::new(0);
+        static IGNORE_FMT: AtomicU32 = AtomicU32::new(0);
+        static HISTORY_FMT: AtomicU32 = AtomicU32::new(0);
+
+        let exclude_id =
+            cached_clipboard_format(&EXCLUDE_FMT, "ExcludeClipboardContentFromMonitorProcessing");
         if exclude_id != 0 && unsafe { IsClipboardFormatAvailable(exclude_id) } != 0 {
             return true;
         }
 
-        let mut ignore_id = IGNORE_FMT.load(Ordering::Relaxed);
-        if ignore_id == 0 {
-            unsafe {
-                ignore_id = RegisterClipboardFormatW(IGNORE_NAME.as_ptr());
-                if ignore_id != 0 {
-                    IGNORE_FMT.store(ignore_id, Ordering::Relaxed);
-                }
-            }
-        }
+        let ignore_id = cached_clipboard_format(&IGNORE_FMT, "Clipboard Viewer Ignore");
         if ignore_id != 0 && unsafe { IsClipboardFormatAvailable(ignore_id) } != 0 {
             return true;
         }
 
         // Windows 10/11 Clipboard History API: apps set CanIncludeInClipboardHistory = DWORD(0)
         // to mark sensitive items as excluded from clipboard history.
-        static HISTORY_FMT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        const HISTORY_NAME: &[u16] = &[
-            b'C' as u16,
-            b'a' as u16,
-            b'n' as u16,
-            b'I' as u16,
-            b'n' as u16,
-            b'c' as u16,
-            b'l' as u16,
-            b'u' as u16,
-            b'd' as u16,
-            b'e' as u16,
-            b'I' as u16,
-            b'n' as u16,
-            b'C' as u16,
-            b'l' as u16,
-            b'i' as u16,
-            b'p' as u16,
-            b'b' as u16,
-            b'o' as u16,
-            b'a' as u16,
-            b'r' as u16,
-            b'd' as u16,
-            b'H' as u16,
-            b'i' as u16,
-            b's' as u16,
-            b't' as u16,
-            b'o' as u16,
-            b'r' as u16,
-            b'y' as u16,
-            0,
-        ];
-
-        let mut history_id = HISTORY_FMT.load(Ordering::Relaxed);
-        if history_id == 0 {
-            unsafe {
-                history_id = RegisterClipboardFormatW(HISTORY_NAME.as_ptr());
-                if history_id != 0 {
-                    HISTORY_FMT.store(history_id, Ordering::Relaxed);
-                }
-            }
-        }
-        if history_id != 0 && unsafe { IsClipboardFormatAvailable(history_id) } != 0 {
-            #[link(name = "user32")]
-            extern "system" {
-                fn OpenClipboard(hWndNewOwner: Hwnd) -> i32;
-                fn CloseClipboard() -> i32;
-                fn GetClipboardData(uFormat: u32) -> *mut std::ffi::c_void;
-            }
-            #[link(name = "kernel32")]
-            extern "system" {
-                fn GlobalLock(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-                fn GlobalUnlock(hMem: *mut std::ffi::c_void) -> i32;
-                fn GlobalSize(hMem: *mut std::ffi::c_void) -> usize;
-            }
-            unsafe {
-                if OpenClipboard(std::ptr::null_mut()) != 0 {
-                    let hmem = GetClipboardData(history_id);
-                    let mut excluded = false;
-                    if !hmem.is_null() && GlobalSize(hmem) >= std::mem::size_of::<u32>() {
-                        let ptr = GlobalLock(hmem).cast::<u32>();
-                        if !ptr.is_null() {
-                            excluded = *ptr == 0;
-                            let _ = GlobalUnlock(hmem);
-                        }
-                    }
-                    let _ = CloseClipboard();
-                    if excluded {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
+        let history_id = cached_clipboard_format(&HISTORY_FMT, "CanIncludeInClipboardHistory");
+        history_id != 0
+            && unsafe { IsClipboardFormatAvailable(history_id) } != 0
+            && is_clipboard_history_excluded(history_id)
     }
 
     /// Appends Windows privacy clipboard formats without clearing the text just written:
@@ -1477,13 +1385,15 @@ mod windows {
                 0x0028,
                 key_state.as_ptr(),
                 buf.as_mut_ptr(),
-                buf.len() as i32,
+                i32::try_from(buf.len()).unwrap_or(0),
                 0,
                 hkl,
             );
-            if rc > 0 {
-                let text = String::from_utf16_lossy(&buf[..rc as usize]);
-                return text.chars().any(|c| c == 'ù' || c == 'Ù');
+            if let Ok(rc_usize) = usize::try_from(rc) {
+                if rc_usize > 0 {
+                    let text = String::from_utf16_lossy(&buf[..rc_usize]);
+                    return text.chars().any(|c| c == 'ù' || c == 'Ù');
+                }
             }
             false
         }
@@ -1495,7 +1405,7 @@ mod windows {
             let hwnd = hwnd_raw as Hwnd;
             if IsWindow(hwnd) != 0 {
                 let mut pid = 0u32;
-                GetWindowThreadProcessId(hwnd, &mut pid);
+                GetWindowThreadProcessId(hwnd, &raw mut pid);
                 if pid != 0 && pid != GetCurrentProcessId() {
                     return pid;
                 }
@@ -1568,7 +1478,8 @@ mod windows {
                 return None;
             }
             let mut token: *mut std::ffi::c_void = std::ptr::null_mut();
-            let opened = OpenProcessToken(proc, TOKEN_QUERY, &mut token) != 0 && !token.is_null();
+            let opened =
+                OpenProcessToken(proc, TOKEN_QUERY, &raw mut token) != 0 && !token.is_null();
             let mut level = None;
             if opened {
                 let mut buf = TokenIntegrityBuf([0u8; 256]);
@@ -1578,10 +1489,10 @@ mod windows {
                     TOKEN_INTEGRITY_LEVEL_CLASS,
                     buf.0.as_mut_ptr().cast::<std::ffi::c_void>(),
                     u32::try_from(buf.0.len()).unwrap_or(256),
-                    &mut ret_len,
+                    &raw mut ret_len,
                 );
                 if ok != 0 {
-                    let info = &*buf.0.as_ptr().cast::<SidAndAttributes>();
+                    let info = &*std::ptr::addr_of!(buf).cast::<SidAndAttributes>();
                     if !info.sid.is_null() {
                         let count = GetSidSubAuthorityCount(info.sid);
                         if !count.is_null() && *count > 0 {
@@ -1605,13 +1516,10 @@ mod windows {
             }
             let self_level =
                 integrity_level(GetCurrentProcessId()).unwrap_or(SECURITY_MANDATORY_MEDIUM_RID);
-            match integrity_level(target_pid) {
-                Some(level) => level > self_level,
-                // Protected / higher-integrity processes often refuse TOKEN_QUERY.
-                // Fail closed: asking the user to paste manually is safer than a
-                // silent drop by UIPI.
-                None => true,
-            }
+            // Protected / higher-integrity processes often refuse TOKEN_QUERY.
+            // Fail closed: asking the user to paste manually is safer than a
+            // silent drop by UIPI.
+            integrity_level(target_pid).is_none_or(|level| level > self_level)
         }
     }
 

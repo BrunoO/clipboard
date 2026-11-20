@@ -334,7 +334,7 @@ pub(crate) fn set_restricted_dir_permissions(path: &Path) {
 }
 
 #[cfg(not(unix))]
-pub(crate) fn set_restricted_dir_permissions(_path: &Path) {}
+pub(crate) const fn set_restricted_dir_permissions(_path: &Path) {}
 
 #[cfg(unix)]
 fn set_restricted_permissions(path: &Path) {

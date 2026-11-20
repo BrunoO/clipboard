@@ -16,7 +16,7 @@ pub(crate) enum TrayAction {
 /// even when the window is hidden or global hotkey registration fails.
 pub(crate) struct TrayService {
     #[cfg(target_os = "windows")]
-    _tray_icon: tray_icon::TrayIcon,
+    tray_icon: tray_icon::TrayIcon,
 }
 
 impl std::fmt::Debug for TrayService {
@@ -141,16 +141,14 @@ impl TrayService {
             }
         }));
 
-        Ok(Self {
-            _tray_icon: tray_icon,
-        })
+        Ok(Self { tray_icon })
     }
 
     /// True only while the shell still has a registered notification-area icon.
     /// Rechecked when hiding in case Explorer restarted or the icon was removed.
     #[cfg(target_os = "windows")]
     pub(crate) fn is_live(&self) -> bool {
-        self._tray_icon.rect().is_some()
+        self.tray_icon.rect().is_some()
     }
 
     #[cfg(not(target_os = "windows"))]
