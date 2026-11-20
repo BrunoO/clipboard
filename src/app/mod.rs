@@ -555,149 +555,33 @@ impl ClipboardApp {
 
     /// Handles key input during custom hotkey recording mode.
     /// Uses raw events to reliably capture modifier+key combinations.
-    #[allow(clippy::too_many_lines)]
     fn handle_custom_hotkey_recording(&mut self, ctx: &egui::Context) {
         ctx.input(|i| {
-            // Process raw key events which include modifier state at time of event
             for event in &i.events {
-                if let egui::Event::Key {
+                let egui::Event::Key {
                     key,
                     pressed: true,
                     modifiers,
                     repeat: false,
                     ..
                 } = event
-                {
-                    // Cancel on Escape
-                    if *key == egui::Key::Escape {
-                        self.recording_custom_hotkey = false;
-                        self.pending_custom_hotkey.clear();
-                        return;
-                    }
+                else {
+                    continue;
+                };
 
-                    // Clear on Backspace
-                    if *key == egui::Key::Backspace {
-                        self.pending_custom_hotkey.clear();
-                        return;
-                    }
+                if *key == egui::Key::Escape {
+                    self.recording_custom_hotkey = false;
+                    self.pending_custom_hotkey.clear();
+                    return;
+                }
 
-                    // Build hotkey string from event's modifiers + key.
-                    // Note: in egui, `modifiers.command` aliases `ctrl` on Linux/Windows,
-                    // so only treat `mac_cmd` / `command` as Cmd on macOS.
-                    let mut parts = Vec::new();
-                    if modifiers.ctrl {
-                        parts.push("Ctrl");
-                    }
-                    if modifiers.alt {
-                        parts.push("Alt");
-                    }
-                    if modifiers.shift {
-                        parts.push("Shift");
-                    }
-                    #[cfg(target_os = "macos")]
-                    if modifiers.mac_cmd || modifiers.command {
-                        parts.push("Cmd");
-                    }
+                if *key == egui::Key::Backspace {
+                    self.pending_custom_hotkey.clear();
+                    return;
+                }
 
-                    // Map key to display name
-                    let key_name = match key {
-                        egui::Key::Space => "Space",
-                        egui::Key::Enter => "Enter",
-                        egui::Key::Tab => "Tab",
-                        egui::Key::Escape => "Esc",
-                        egui::Key::Backspace => "Backspace",
-                        egui::Key::Delete => "Delete",
-                        egui::Key::Home => "Home",
-                        egui::Key::End => "End",
-                        egui::Key::PageUp => "PageUp",
-                        egui::Key::PageDown => "PageDown",
-                        egui::Key::ArrowUp => "Up",
-                        egui::Key::ArrowDown => "Down",
-                        egui::Key::ArrowLeft => "Left",
-                        egui::Key::ArrowRight => "Right",
-                        egui::Key::Insert => "Insert",
-                        egui::Key::F1 => "F1",
-                        egui::Key::F2 => "F2",
-                        egui::Key::F3 => "F3",
-                        egui::Key::F4 => "F4",
-                        egui::Key::F5 => "F5",
-                        egui::Key::F6 => "F6",
-                        egui::Key::F7 => "F7",
-                        egui::Key::F8 => "F8",
-                        egui::Key::F9 => "F9",
-                        egui::Key::F10 => "F10",
-                        egui::Key::F11 => "F11",
-                        egui::Key::F12 => "F12",
-                        egui::Key::F13 => "F13",
-                        egui::Key::F14 => "F14",
-                        egui::Key::F15 => "F15",
-                        egui::Key::F16 => "F16",
-                        egui::Key::F17 => "F17",
-                        egui::Key::F18 => "F18",
-                        egui::Key::F19 => "F19",
-                        egui::Key::F20 => "F20",
-                        egui::Key::F21 => "F21",
-                        egui::Key::F22 => "F22",
-                        egui::Key::F23 => "F23",
-                        egui::Key::F24 => "F24",
-                        egui::Key::A => "A",
-                        egui::Key::B => "B",
-                        egui::Key::C => "C",
-                        egui::Key::D => "D",
-                        egui::Key::E => "E",
-                        egui::Key::F => "F",
-                        egui::Key::G => "G",
-                        egui::Key::H => "H",
-                        egui::Key::I => "I",
-                        egui::Key::J => "J",
-                        egui::Key::K => "K",
-                        egui::Key::L => "L",
-                        egui::Key::M => "M",
-                        egui::Key::N => "N",
-                        egui::Key::O => "O",
-                        egui::Key::P => "P",
-                        egui::Key::Q => "Q",
-                        egui::Key::R => "R",
-                        egui::Key::S => "S",
-                        egui::Key::T => "T",
-                        egui::Key::U => "U",
-                        egui::Key::V => "V",
-                        egui::Key::W => "W",
-                        egui::Key::X => "X",
-                        egui::Key::Y => "Y",
-                        egui::Key::Z => "Z",
-                        egui::Key::Num0 => "0",
-                        egui::Key::Num1 => "1",
-                        egui::Key::Num2 => "2",
-                        egui::Key::Num3 => "3",
-                        egui::Key::Num4 => "4",
-                        egui::Key::Num5 => "5",
-                        egui::Key::Num6 => "6",
-                        egui::Key::Num7 => "7",
-                        egui::Key::Num8 => "8",
-                        egui::Key::Num9 => "9",
-                        egui::Key::Quote => {
-                            if crate::platform::windows_quote_key_is_ugrave() {
-                                "ù"
-                            } else {
-                                "Quote"
-                            }
-                        }
-                        egui::Key::Comma => "Comma",
-                        egui::Key::Minus => "Minus",
-                        egui::Key::Equals | egui::Key::Plus => "Equal",
-                        egui::Key::Period => "Period",
-                        egui::Key::Slash | egui::Key::Questionmark => "Slash",
-                        egui::Key::Semicolon | egui::Key::Colon => "Semicolon",
-                        egui::Key::Backslash | egui::Key::Pipe => "Backslash",
-                        egui::Key::OpenBracket => "BracketLeft",
-                        egui::Key::CloseBracket => "BracketRight",
-                        egui::Key::Backtick => "Grave",
-                        _ => continue, // Skip unhandled keys (modifiers, etc.)
-                    };
-
-                    parts.push(key_name);
-                    self.pending_custom_hotkey = parts.join("+");
+                if let Some(combo) = format_recorded_hotkey(*modifiers, *key) {
+                    self.pending_custom_hotkey = combo;
                     self.apply_custom_hotkey();
                     return;
                 }
@@ -705,9 +589,7 @@ impl ClipboardApp {
         });
     }
 
-    #[allow(clippy::too_many_lines)]
     fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
-        // Handle custom hotkey recording
         if self.recording_custom_hotkey {
             self.handle_custom_hotkey_recording(ctx);
             return;
@@ -738,113 +620,56 @@ impl ClipboardApp {
             self.selected_index = filtered_indices.len() - 1;
         }
 
-        let mut move_down = false;
-        let mut move_up = false;
-        let mut wrap_down = false;
-        let mut wrap_up = false;
-        let mut copy_selected = false;
-        let mut delete_selected = false;
-        let mut copy_shortcut_slot: Option<usize> = None;
+        let nav = read_history_nav_input(ctx);
 
-        ctx.input_mut(|i| {
-            // 1. Direct number shortcuts (Cmd+1..9 on macOS, Ctrl+1..9 on Win/Linux)
-            let num_keys = [
-                egui::Key::Num1,
-                egui::Key::Num2,
-                egui::Key::Num3,
-                egui::Key::Num4,
-                egui::Key::Num5,
-                egui::Key::Num6,
-                egui::Key::Num7,
-                egui::Key::Num8,
-                egui::Key::Num9,
-            ];
-            for (idx, &k) in num_keys.iter().enumerate() {
-                if i.consume_key(egui::Modifiers::COMMAND, k) {
-                    copy_shortcut_slot = Some(idx);
-                    return;
-                }
-            }
-
-            // 2. Down navigation (ArrowDown, Tab without Shift, Ctrl+N, Ctrl+J)
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::N)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::J)
-            {
-                move_down = true;
-            } else if i.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
-                wrap_down = true;
-            }
-
-            // 3. Up navigation (ArrowUp, Shift+Tab, Ctrl+P, Ctrl+K)
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::P)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::K)
-            {
-                move_up = true;
-            } else if i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab) {
-                wrap_up = true;
-            }
-
-            // 4. Enter to copy selected
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
-                copy_selected = true;
-            }
-
-            // 5. Delete or Cmd+Backspace / Ctrl+Backspace to delete selected
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
-                || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Backspace)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::Backspace)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::D)
-            {
-                delete_selected = true;
-            }
-        });
-
-        if let Some(slot) = copy_shortcut_slot {
+        if let Some(slot) = nav.copy_shortcut_slot {
             self.selected_index = slot;
             self.copy_filtered_item(&filtered_indices, slot, ctx);
             return;
         }
 
-        if move_down {
-            if self.selected_index + 1 < filtered_indices.len() {
+        self.apply_history_nav_step(nav, filtered_indices.len(), ctx);
+
+        if nav.copy_selected {
+            self.copy_filtered_item(&filtered_indices, self.selected_index, ctx);
+        }
+
+        if nav.delete_selected {
+            self.delete_filtered_item(&filtered_indices, ctx);
+        }
+    }
+
+    fn apply_history_nav_step(&mut self, nav: HistoryNavInput, len: usize, ctx: &egui::Context) {
+        match nav.down {
+            Some(NavStep::Clamp) if self.selected_index + 1 < len => {
                 self.selected_index += 1;
                 self.scroll_to_selected = true;
                 ctx.request_repaint();
             }
-        } else if wrap_down {
-            self.selected_index = if self.selected_index + 1 < filtered_indices.len() {
-                self.selected_index + 1
-            } else {
-                0
-            };
-            self.scroll_to_selected = true;
-            ctx.request_repaint();
+            Some(NavStep::Wrap) => {
+                self.selected_index = (self.selected_index + 1) % len;
+                self.scroll_to_selected = true;
+                ctx.request_repaint();
+            }
+            _ => {}
         }
 
-        if move_up {
-            if self.selected_index > 0 {
+        match nav.up {
+            Some(NavStep::Clamp) if self.selected_index > 0 => {
                 self.selected_index -= 1;
                 self.scroll_to_selected = true;
                 ctx.request_repaint();
             }
-        } else if wrap_up {
-            self.selected_index = if self.selected_index > 0 {
-                self.selected_index - 1
-            } else {
-                filtered_indices.len().saturating_sub(1)
-            };
-            self.scroll_to_selected = true;
-            ctx.request_repaint();
-        }
-
-        if copy_selected {
-            self.copy_filtered_item(&filtered_indices, self.selected_index, ctx);
-        }
-
-        if delete_selected {
-            self.delete_filtered_item(&filtered_indices, ctx);
+            Some(NavStep::Wrap) => {
+                self.selected_index = if self.selected_index > 0 {
+                    self.selected_index - 1
+                } else {
+                    len.saturating_sub(1)
+                };
+                self.scroll_to_selected = true;
+                ctx.request_repaint();
+            }
+            _ => {}
         }
     }
 
@@ -1132,67 +957,67 @@ impl ClipboardApp {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .small_button(icons::X)
-                    .on_hover_text("Hide window (Esc)")
-                    .clicked()
-                {
-                    self.hide_window(ctx, self.settings.restore_focus, false);
-                }
-
-                let quit_tooltip = if cfg!(target_os = "macos") {
-                    "Quit CipherClipboard (Cmd+Q)"
-                } else {
-                    "Quit CipherClipboard (Ctrl+Q)"
-                };
-                if ui
-                    .small_button(icons::POWER)
-                    .on_hover_text(quit_tooltip)
-                    .clicked()
-                {
-                    self.quit(ctx);
-                }
-
-                let settings_btn = match self.active_view {
-                    ActiveView::Settings => ui
-                        .small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
-                        .on_hover_text("Back to clipboard history"),
-                    ActiveView::History | ActiveView::Generator => ui
-                        .small_button(icons::GEAR)
-                        .on_hover_text("Preferences & Settings"),
-                };
-                if settings_btn.clicked() {
-                    self.active_view = match self.active_view {
-                        ActiveView::Settings => ActiveView::History,
-                        ActiveView::History | ActiveView::Generator => ActiveView::Settings,
-                    };
-                }
-
-                let gen_btn = match self.active_view {
-                    ActiveView::Generator => ui
-                        .small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
-                        .on_hover_text("Back to clipboard history"),
-                    ActiveView::History | ActiveView::Settings => ui
-                        .small_button(icons::KEY)
-                        .on_hover_text("Generate random password or passphrase"),
-                };
-                if gen_btn.clicked() {
-                    self.active_view = match self.active_view {
-                        ActiveView::Generator => ActiveView::History,
-                        ActiveView::History | ActiveView::Settings => ActiveView::Generator,
-                    };
-                }
-
-                if self.active_view == ActiveView::History
-                    && ui
-                        .small_button(icons::TRASH)
-                        .on_hover_text("Clear clipboard history")
-                        .clicked()
-                {
-                    self.show_clear_confirm_dialog = true;
-                }
+                self.render_header_actions(ui, ctx);
             });
         });
+    }
+
+    fn render_header_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if ui
+            .small_button(icons::X)
+            .on_hover_text("Hide window (Esc)")
+            .clicked()
+        {
+            self.hide_window(ctx, self.settings.restore_focus, false);
+        }
+
+        let quit_tooltip = if cfg!(target_os = "macos") {
+            "Quit CipherClipboard (Cmd+Q)"
+        } else {
+            "Quit CipherClipboard (Ctrl+Q)"
+        };
+        if ui
+            .small_button(icons::POWER)
+            .on_hover_text(quit_tooltip)
+            .clicked()
+        {
+            self.quit(ctx);
+        }
+
+        if render_view_toggle_button(
+            ui,
+            self.active_view == ActiveView::Settings,
+            icons::GEAR,
+            "Preferences & Settings",
+        ) {
+            self.active_view = if self.active_view == ActiveView::Settings {
+                ActiveView::History
+            } else {
+                ActiveView::Settings
+            };
+        }
+
+        if render_view_toggle_button(
+            ui,
+            self.active_view == ActiveView::Generator,
+            icons::KEY,
+            "Generate random password or passphrase",
+        ) {
+            self.active_view = if self.active_view == ActiveView::Generator {
+                ActiveView::History
+            } else {
+                ActiveView::Generator
+            };
+        }
+
+        if self.active_view == ActiveView::History
+            && ui
+                .small_button(icons::TRASH)
+                .on_hover_text("Clear clipboard history")
+                .clicked()
+        {
+            self.show_clear_confirm_dialog = true;
+        }
     }
 
     fn render_search_bar(&mut self, ui: &mut egui::Ui, is_dark: bool) {
@@ -1592,6 +1417,214 @@ impl Drop for ClipboardApp {
         }
         let _ = self.monitor_shutdown_tx.send(());
     }
+}
+
+#[derive(Clone, Copy)]
+enum NavStep {
+    Clamp,
+    Wrap,
+}
+
+#[derive(Default, Clone, Copy)]
+struct HistoryNavInput {
+    down: Option<NavStep>,
+    up: Option<NavStep>,
+    copy_selected: bool,
+    delete_selected: bool,
+    copy_shortcut_slot: Option<usize>,
+}
+
+fn read_history_nav_input(ctx: &egui::Context) -> HistoryNavInput {
+    const NUM_KEYS: [egui::Key; 9] = [
+        egui::Key::Num1,
+        egui::Key::Num2,
+        egui::Key::Num3,
+        egui::Key::Num4,
+        egui::Key::Num5,
+        egui::Key::Num6,
+        egui::Key::Num7,
+        egui::Key::Num8,
+        egui::Key::Num9,
+    ];
+
+    let mut nav = HistoryNavInput::default();
+    ctx.input_mut(|i| {
+        for (idx, &k) in NUM_KEYS.iter().enumerate() {
+            if i.consume_key(egui::Modifiers::COMMAND, k) {
+                nav.copy_shortcut_slot = Some(idx);
+                return;
+            }
+        }
+
+        if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+            || i.consume_key(egui::Modifiers::CTRL, egui::Key::N)
+            || i.consume_key(egui::Modifiers::CTRL, egui::Key::J)
+        {
+            nav.down = Some(NavStep::Clamp);
+        } else if i.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
+            nav.down = Some(NavStep::Wrap);
+        }
+
+        if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+            || i.consume_key(egui::Modifiers::CTRL, egui::Key::P)
+            || i.consume_key(egui::Modifiers::CTRL, egui::Key::K)
+        {
+            nav.up = Some(NavStep::Clamp);
+        } else if i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab) {
+            nav.up = Some(NavStep::Wrap);
+        }
+
+        if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+            nav.copy_selected = true;
+        }
+
+        if i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+            || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Backspace)
+            || i.consume_key(egui::Modifiers::CTRL, egui::Key::Backspace)
+            || i.consume_key(egui::Modifiers::CTRL, egui::Key::D)
+        {
+            nav.delete_selected = true;
+        }
+    });
+    nav
+}
+
+fn format_recorded_hotkey(modifiers: egui::Modifiers, key: egui::Key) -> Option<String> {
+    let key_name = egui_key_to_hotkey_name(key)?;
+    // Note: in egui, `modifiers.command` aliases `ctrl` on Linux/Windows,
+    // so only treat `mac_cmd` / `command` as Cmd on macOS.
+    let mut parts = Vec::with_capacity(5);
+    if modifiers.ctrl {
+        parts.push("Ctrl");
+    }
+    if modifiers.alt {
+        parts.push("Alt");
+    }
+    if modifiers.shift {
+        parts.push("Shift");
+    }
+    #[cfg(target_os = "macos")]
+    if modifiers.mac_cmd || modifiers.command {
+        parts.push("Cmd");
+    }
+    parts.push(key_name);
+    Some(parts.join("+"))
+}
+
+#[allow(clippy::too_many_lines)]
+fn egui_key_to_hotkey_name(key: egui::Key) -> Option<&'static str> {
+    let name = match key {
+        egui::Key::Space => "Space",
+        egui::Key::Enter => "Enter",
+        egui::Key::Tab => "Tab",
+        egui::Key::Escape => "Esc",
+        egui::Key::Backspace => "Backspace",
+        egui::Key::Delete => "Delete",
+        egui::Key::Home => "Home",
+        egui::Key::End => "End",
+        egui::Key::PageUp => "PageUp",
+        egui::Key::PageDown => "PageDown",
+        egui::Key::ArrowUp => "Up",
+        egui::Key::ArrowDown => "Down",
+        egui::Key::ArrowLeft => "Left",
+        egui::Key::ArrowRight => "Right",
+        egui::Key::Insert => "Insert",
+        egui::Key::F1 => "F1",
+        egui::Key::F2 => "F2",
+        egui::Key::F3 => "F3",
+        egui::Key::F4 => "F4",
+        egui::Key::F5 => "F5",
+        egui::Key::F6 => "F6",
+        egui::Key::F7 => "F7",
+        egui::Key::F8 => "F8",
+        egui::Key::F9 => "F9",
+        egui::Key::F10 => "F10",
+        egui::Key::F11 => "F11",
+        egui::Key::F12 => "F12",
+        egui::Key::F13 => "F13",
+        egui::Key::F14 => "F14",
+        egui::Key::F15 => "F15",
+        egui::Key::F16 => "F16",
+        egui::Key::F17 => "F17",
+        egui::Key::F18 => "F18",
+        egui::Key::F19 => "F19",
+        egui::Key::F20 => "F20",
+        egui::Key::F21 => "F21",
+        egui::Key::F22 => "F22",
+        egui::Key::F23 => "F23",
+        egui::Key::F24 => "F24",
+        egui::Key::A => "A",
+        egui::Key::B => "B",
+        egui::Key::C => "C",
+        egui::Key::D => "D",
+        egui::Key::E => "E",
+        egui::Key::F => "F",
+        egui::Key::G => "G",
+        egui::Key::H => "H",
+        egui::Key::I => "I",
+        egui::Key::J => "J",
+        egui::Key::K => "K",
+        egui::Key::L => "L",
+        egui::Key::M => "M",
+        egui::Key::N => "N",
+        egui::Key::O => "O",
+        egui::Key::P => "P",
+        egui::Key::Q => "Q",
+        egui::Key::R => "R",
+        egui::Key::S => "S",
+        egui::Key::T => "T",
+        egui::Key::U => "U",
+        egui::Key::V => "V",
+        egui::Key::W => "W",
+        egui::Key::X => "X",
+        egui::Key::Y => "Y",
+        egui::Key::Z => "Z",
+        egui::Key::Num0 => "0",
+        egui::Key::Num1 => "1",
+        egui::Key::Num2 => "2",
+        egui::Key::Num3 => "3",
+        egui::Key::Num4 => "4",
+        egui::Key::Num5 => "5",
+        egui::Key::Num6 => "6",
+        egui::Key::Num7 => "7",
+        egui::Key::Num8 => "8",
+        egui::Key::Num9 => "9",
+        egui::Key::Quote => {
+            if crate::platform::windows_quote_key_is_ugrave() {
+                "ù"
+            } else {
+                "Quote"
+            }
+        }
+        egui::Key::Comma => "Comma",
+        egui::Key::Minus => "Minus",
+        egui::Key::Equals | egui::Key::Plus => "Equal",
+        egui::Key::Period => "Period",
+        egui::Key::Slash | egui::Key::Questionmark => "Slash",
+        egui::Key::Semicolon | egui::Key::Colon => "Semicolon",
+        egui::Key::Backslash | egui::Key::Pipe => "Backslash",
+        egui::Key::OpenBracket => "BracketLeft",
+        egui::Key::CloseBracket => "BracketRight",
+        egui::Key::Backtick => "Grave",
+        _ => return None,
+    };
+    Some(name)
+}
+
+fn render_view_toggle_button(
+    ui: &mut egui::Ui,
+    is_active: bool,
+    inactive_icon: &str,
+    inactive_tooltip: &str,
+) -> bool {
+    let response = if is_active {
+        ui.small_button(format!("{} History", icons::CLOCK_COUNTER_CLOCKWISE))
+            .on_hover_text("Back to clipboard history")
+    } else {
+        ui.small_button(inactive_icon)
+            .on_hover_text(inactive_tooltip)
+    };
+    response.clicked()
 }
 
 #[cfg(test)]
