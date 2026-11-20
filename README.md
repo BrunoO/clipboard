@@ -2,17 +2,17 @@
 
 A fast, encrypted cross-platform clipboard manager written in Rust.
 
-CipherClipboard runs quietly in the background, instantly captures copied text and images, and stores everything in an AES-256 encrypted database secured by your operating system's native keyring.
+CipherClipboard runs quietly in the background, instantly captures copied text and images, and stores everything in an AES-256 encrypted database secured primarily by your operating system's native keyring (with a restricted local-key fallback when the keyring is unavailable).
 
 ### Key Features
 * **Full-Database Encryption at Rest:** Zero-knowledge 256-bit AES encryption powered by **SQLCipher** (`rusqlite` bundled build).
-* **Native Keyring Security:** Automatic key generation and storage in macOS Keychain, Windows Credential Manager, or Linux Secret Service via [`keyring`](https://github.com/hwchen/keyring-rs).
+* **Native Keyring Security (with fallback):** Automatic key generation and storage in macOS Keychain, Windows Credential Manager, or Linux Secret Service via [`keyring`](https://github.com/hwchen/keyring-rs), with a restricted local `.encryption_key` fallback if the keyring is unavailable.
 * **Smart Secret Detection & Masking:** Automatically detects and masks API tokens, private keys, JWTs, database URLs, and high-entropy passwords with toggleable visibility.
 * **Transient & Password Manager Protection:** Automatically respects conceal flags from password managers (1Password, Bitwarden, KeePass, Apple Keychain).
 * **Cross-Platform Immediate-Mode GUI:** Responsive interface built with [`egui`](https://github.com/emilk/egui) / [`eframe`](https://github.com/emilk/egui) with Direct3D 12 / WGPU acceleration on Windows and high WCAG contrast themes (Dark, Light, System).
-* **Developer Utilities:** In-line syntax highlighting for 7+ languages, interactive CSS/Hex/RGB/HSL color palette extraction, and built-in cryptographically secure password & passphrase generator.
+* **Developer Utilities:** In-line syntax highlighting for 11 languages, interactive CSS/Hex/RGB/HSL color palette extraction, and built-in cryptographically secure password & passphrase generator.
 * **Global Hotkey & Fast Recall:** Configurable global summon shortcut (`Ctrl+Shift+V` / `Cmd+Shift+V`) with single-instance window restoration and optional auto-paste.
-* **Lossless Image Compression:** Efficient PNG compression for clipboard images via [`image`](https://crates.io/crates/image).
+* **Lossless PNG Image Storage:** Efficient PNG encoding for clipboard images via [`image`](https://crates.io/crates/image).
 
 ---
 
@@ -20,8 +20,8 @@ CipherClipboard runs quietly in the background, instantly captures copied text a
 
 ```
                       ┌──────────────────────────────────────┐
-                      │          OS Keyring (keyring)        │
-                      │   (macOS Keychain / Win Credential)  │
+                      │   OS Keyring or local key fallback   │
+                      │   (Keychain / Credential / Secret)   │
                       └──────────────────┬───────────────────┘
                                          │ 256-bit Key
                                          ▼
@@ -49,7 +49,9 @@ CipherClipboard runs quietly in the background, instantly captures copied text a
 cipherclipboard/
 ├── Cargo.toml            # Project manifest & dependencies
 ├── deny.toml             # Supply-chain security & license policy
-├── docs/                 # Bug analyses, platform reviews & testing checklists
+├── WINDOWS_REVIEW.md     # Windows readiness review notes
+├── WINDOWS_TESTING.md    # Windows manual testing checklist
+├── docs/                 # Bug analyses and platform-specific docs (e.g. docs/windows/)
 ├── scripts/              # Local CI pre-flight guardrails & release packaging
 ├── src/
 │   ├── main.rs           # Entry point, panic hook, single-instance lock & eframe launcher
@@ -129,9 +131,9 @@ The installer runs the bundled **Visual C++ redistributable (x64)** when the run
 **Uninstalling on Windows:** Uninstalling removes the application binaries and shortcuts only; your encrypted database, settings, and log (`%LOCALAPPDATA%\cipherclipboard\`) as well as the encryption key in **Windows Credential Manager** (under `cipherclipboard`) are preserved so upgrades and reinstalls never wipe your history. To perform a complete removal, delete `%LOCALAPPDATA%\cipherclipboard\` and remove the `cipherclipboard` generic credential in Windows Credential Manager.
 
 On first launch:
-1. It automatically generates a secure 256-bit encryption key and registers it with your **OS Keyring** (under service `cipherclipboard`).
-2. Creates an encrypted database `clipboard_history.db` in `~/Library/Application Support/cipherclipboard/` (or `%LOCALAPPDATA%\cipherclipboard\` on Windows).
-3. Opens the UI and starts monitoring copied text in the background.
+1. It automatically generates a secure 256-bit encryption key and stores it in your **OS Keyring** (under service `cipherclipboard`), falling back to a restricted local `.encryption_key` file if the keyring is unavailable.
+2. Creates an encrypted database `clipboard_history.db` in your app data directory: `~/Library/Application Support/cipherclipboard/` (macOS), `%LOCALAPPDATA%\cipherclipboard\` (Windows), or `~/.local/share/cipherclipboard/` (Linux).
+3. Opens the UI and starts monitoring copied text and images in the background.
 
 ---
 
