@@ -249,7 +249,7 @@ impl ClipboardApp {
             ui.label(egui::RichText::new("Words:").color(crate::theme::text_primary(is_dark)));
             changed |= ui
                 .add(
-                    egui::Slider::new(&mut self.password_gen.config.word_count, 3..=8)
+                    egui::Slider::new(&mut self.password_gen.config.word_count, 4..=10)
                         .suffix(" words"),
                 )
                 .changed();
