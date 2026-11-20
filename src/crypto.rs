@@ -3,12 +3,13 @@ use keyring::Entry;
 use rand::Rng;
 use std::fs;
 use std::path::Path;
+use zeroize::{Zeroize, Zeroizing};
 
 const SERVICE_NAME: &str = "cipherclipboard";
 const LEGACY_SERVICE_NAME: &str = "rusty_clipboard";
 const KEY_NAME: &str = "db_encryption_key";
 
-/// Retrieves or securely generates a 256-bit encryption key.
+/// Retrieves or securely generates a 256-bit encryption key wrapped in [`Zeroizing`].
 ///
 /// Strategy:
 /// - **Debug builds** (`cfg!(debug_assertions)`): Checks `data_dir/.encryption_key` first so
@@ -21,7 +22,7 @@ const KEY_NAME: &str = "db_encryption_key";
 pub(crate) fn get_or_create_encryption_key(
     data_dir: &Path,
     db_exists: bool,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
     get_or_create_encryption_key_with_mode(data_dir, db_exists, cfg!(debug_assertions))
 }
 
@@ -29,7 +30,7 @@ fn get_or_create_encryption_key_with_mode(
     data_dir: &Path,
     db_exists: bool,
     allow_key_file_cache: bool,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
     let key_file = data_dir.join(".encryption_key");
 
     if allow_key_file_cache {
@@ -132,12 +133,12 @@ fn get_or_create_encryption_key_with_mode(
     Ok(new_key)
 }
 
-fn read_key_file(path: &Path) -> Result<Option<String>, std::io::Error> {
+fn read_key_file(path: &Path) -> Result<Option<Zeroizing<String>>, std::io::Error> {
     if !path.exists() {
         return Ok(None);
     }
-    let key = fs::read_to_string(path)?;
-    let trimmed = key.trim().to_string();
+    let key = Zeroizing::new(fs::read_to_string(path)?);
+    let trimmed = Zeroizing::new(key.trim().to_string());
     if trimmed.is_empty() {
         Ok(None)
     } else {
@@ -146,11 +147,12 @@ fn read_key_file(path: &Path) -> Result<Option<String>, std::io::Error> {
 }
 
 #[cfg(not(test))]
-fn read_from_keyring() -> Option<(String, &'static str)> {
+fn read_from_keyring() -> Option<(Zeroizing<String>, &'static str)> {
     for service in [SERVICE_NAME, LEGACY_SERVICE_NAME] {
         if let Ok(entry) = Entry::new(service, KEY_NAME) {
             if let Ok(key) = entry.get_password() {
-                let trimmed = key.trim().to_string();
+                let key = Zeroizing::new(key);
+                let trimmed = Zeroizing::new(key.trim().to_string());
                 if !trimmed.is_empty() {
                     return Some((trimmed, service));
                 }
@@ -219,10 +221,10 @@ pub(crate) mod mock_keyring {
 }
 
 #[cfg(test)]
-fn read_from_keyring() -> Option<(String, &'static str)> {
+fn read_from_keyring() -> Option<(Zeroizing<String>, &'static str)> {
     for service in [SERVICE_NAME, LEGACY_SERVICE_NAME] {
         if let Some(key) = mock_keyring::get(service, KEY_NAME) {
-            let trimmed = key.trim().to_string();
+            let trimmed = Zeroizing::new(key.trim().to_string());
             if !trimmed.is_empty() {
                 return Some((trimmed, service));
             }
@@ -268,11 +270,11 @@ fn save_key_file(path: &Path, key: &str) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-fn generate_random_hex_key() -> String {
+fn generate_random_hex_key() -> Zeroizing<String> {
     let mut key_bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut key_bytes);
-    let hex_key = hex::encode(key_bytes);
-    key_bytes.fill(0);
+    let hex_key = Zeroizing::new(hex::encode(key_bytes));
+    key_bytes.zeroize();
     hex_key
 }
 
@@ -355,7 +357,7 @@ mod tests {
         }
 
         let loaded = get_or_create_encryption_key(dir.path(), false).unwrap();
-        assert_eq!(loaded, test_key);
+        assert_eq!(loaded.as_str(), test_key);
     }
 
     #[test]
@@ -389,7 +391,7 @@ mod tests {
         save_key_file(&key_file, test_key).unwrap();
 
         let loaded = get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
-        assert_eq!(loaded, test_key);
+        assert_eq!(loaded.as_str(), test_key);
         // Since write_to_keyring failed, the key_file should remain on disk
         assert!(key_file.exists());
     }
@@ -404,7 +406,7 @@ mod tests {
         save_key_file(&key_file, test_key).unwrap();
 
         let loaded = get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
-        assert_eq!(loaded, test_key);
+        assert_eq!(loaded.as_str(), test_key);
         // Successful migration should remove the key file and persist into keyring
         assert!(!key_file.exists());
         assert_eq!(
@@ -422,7 +424,7 @@ mod tests {
         let dir = tempdir().unwrap();
 
         let loaded = get_or_create_encryption_key_with_mode(dir.path(), false, false).unwrap();
-        assert_eq!(loaded, legacy_key);
+        assert_eq!(loaded.as_str(), legacy_key);
         // Should have migrated into current SERVICE_NAME
         assert_eq!(
             mock_keyring::get(SERVICE_NAME, KEY_NAME),
@@ -438,7 +440,7 @@ mod tests {
         write_to_keyring("abc123mockkey").unwrap();
         assert_eq!(
             read_from_keyring(),
-            Some(("abc123mockkey".to_string(), SERVICE_NAME))
+            Some((Zeroizing::new("abc123mockkey".to_string()), SERVICE_NAME))
         );
         mock_keyring::reset();
         assert_eq!(read_from_keyring(), None);

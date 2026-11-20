@@ -65,15 +65,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // 2. Resolve database path and check if it already exists
-    let db_path = data_dir.join("clipboard_history.db");
-    let db_exists = db_path.exists();
-
-    // 3. Fetch or initialize the 256-bit encryption key
-    let encryption_key = crypto::get_or_create_encryption_key(&data_dir, db_exists)?;
-
-    // 4. Open or initialize the SQLCipher encrypted database
-    let db = Database::open(&db_path, &encryption_key)?;
+    // 2. Open or initialize the SQLCipher encrypted database (key is zeroized on scope exit)
+    let db = open_encrypted_database(&data_dir)?;
     #[cfg(debug_assertions)]
     println!("🛡️  Database opened & verified with SQLCipher.");
 
@@ -176,6 +169,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     result?;
 
     Ok(())
+}
+
+/// Opens or initializes the `SQLCipher` database, ensuring the in-memory encryption key
+/// is zeroized and dropped before returning.
+fn open_encrypted_database(
+    data_dir: &std::path::Path,
+) -> Result<Database, Box<dyn std::error::Error>> {
+    let db_path = data_dir.join("clipboard_history.db");
+    let db_exists = db_path.exists();
+    let encryption_key = crypto::get_or_create_encryption_key(data_dir, db_exists)?;
+    Database::open(&db_path, &encryption_key)
 }
 
 /// Computes the OS-appropriate local application data directory.
