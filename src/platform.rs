@@ -137,7 +137,7 @@ pub(crate) fn log_message(level: &str, message: &str) {
 }
 
 /// Checks if the current clipboard content is marked as concealed or transient
-/// by password managers (e.g. 1Password, Bitwarden, `KeePass`, macOS Keychain).
+/// by password managers (e.g. 1Password, Bitwarden, `KeePass`, `KeePassXC`, macOS Keychain).
 #[must_use]
 pub(crate) fn is_clipboard_concealed() -> bool {
     #[cfg(target_os = "macos")]
@@ -148,7 +148,11 @@ pub(crate) fn is_clipboard_concealed() -> bool {
     {
         windows::is_clipboard_concealed()
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::is_clipboard_concealed()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         false
     }
@@ -1262,6 +1266,82 @@ mod windows {
             return true;
         }
 
+        // Windows 10/11 Clipboard History API: apps set CanIncludeInClipboardHistory = DWORD(0)
+        // to mark sensitive items as excluded from clipboard history.
+        static HISTORY_FMT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        const HISTORY_NAME: &[u16] = &[
+            b'C' as u16,
+            b'a' as u16,
+            b'n' as u16,
+            b'I' as u16,
+            b'n' as u16,
+            b'c' as u16,
+            b'l' as u16,
+            b'u' as u16,
+            b'd' as u16,
+            b'e' as u16,
+            b'I' as u16,
+            b'n' as u16,
+            b'C' as u16,
+            b'l' as u16,
+            b'i' as u16,
+            b'p' as u16,
+            b'b' as u16,
+            b'o' as u16,
+            b'a' as u16,
+            b'r' as u16,
+            b'd' as u16,
+            b'H' as u16,
+            b'i' as u16,
+            b's' as u16,
+            b't' as u16,
+            b'o' as u16,
+            b'r' as u16,
+            b'y' as u16,
+            0,
+        ];
+
+        let mut history_id = HISTORY_FMT.load(Ordering::Relaxed);
+        if history_id == 0 {
+            unsafe {
+                history_id = RegisterClipboardFormatW(HISTORY_NAME.as_ptr());
+                if history_id != 0 {
+                    HISTORY_FMT.store(history_id, Ordering::Relaxed);
+                }
+            }
+        }
+        if history_id != 0 && unsafe { IsClipboardFormatAvailable(history_id) } != 0 {
+            #[link(name = "user32")]
+            extern "system" {
+                fn OpenClipboard(hWndNewOwner: HWND) -> i32;
+                fn CloseClipboard() -> i32;
+                fn GetClipboardData(uFormat: u32) -> *mut std::ffi::c_void;
+            }
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn GlobalLock(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+                fn GlobalUnlock(hMem: *mut std::ffi::c_void) -> i32;
+                fn GlobalSize(hMem: *mut std::ffi::c_void) -> usize;
+            }
+            unsafe {
+                if OpenClipboard(std::ptr::null_mut()) != 0 {
+                    let hmem = GetClipboardData(history_id);
+                    let mut excluded = false;
+                    if !hmem.is_null() && GlobalSize(hmem) >= std::mem::size_of::<u32>() {
+                        let ptr = GlobalLock(hmem).cast::<u32>();
+                        if !ptr.is_null() {
+                            excluded = *ptr == 0;
+                            let _ = GlobalUnlock(hmem);
+                        }
+                    }
+                    let _ = CloseClipboard();
+                    if excluded {
+                        return true;
+                    }
+                }
+            }
+        }
+
         false
     }
 
@@ -1679,6 +1759,114 @@ mod linux {
         let _ = conn.xtest_fake_input(KEY_RELEASE, v_kc, 0, root, 0, 0, 0);
         let _ = conn.xtest_fake_input(KEY_RELEASE, ctrl_kc, 0, root, 0, 0, 0);
         let _ = conn.flush();
+    }
+
+    /// Detects concealed clipboard entries on X11 (e.g. `KeePassXC`, Bitwarden, 1Password)
+    /// by inspecting the `CLIPBOARD` selection's advertised `TARGETS` for
+    /// `x-kde-passwordManagerHint`.
+    pub(super) fn is_clipboard_concealed() -> bool {
+        use std::time::{Duration, Instant};
+        use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
+        use x11rb::protocol::Event;
+
+        let Ok((conn, screen_num)) = x11rb::connect(None) else {
+            return false;
+        };
+        let Some(screen) = conn.setup().roots.get(screen_num) else {
+            return false;
+        };
+        let root = screen.root;
+
+        let intern = |name: &[u8]| -> Option<u32> {
+            let atom = conn.intern_atom(false, name).ok()?.reply().ok()?.atom;
+            (atom != 0).then_some(atom)
+        };
+
+        let Some(clipboard_atom) = intern(b"CLIPBOARD") else {
+            return false;
+        };
+        let Some(targets_atom) = intern(b"TARGETS") else {
+            return false;
+        };
+        let Some(hint_atom) = intern(b"x-kde-passwordManagerHint") else {
+            return false;
+        };
+        let Some(prop_atom) = intern(b"_CIPHERCLIPBOARD_TARGETS") else {
+            return false;
+        };
+
+        // Fast path: if nobody owns CLIPBOARD, there's nothing concealed.
+        let Ok(owner_cookie) = conn.get_selection_owner(clipboard_atom) else {
+            return false;
+        };
+        let Ok(owner_reply) = owner_cookie.reply() else {
+            return false;
+        };
+        if owner_reply.owner == 0 {
+            return false;
+        }
+
+        let Ok(win) = conn.generate_id() else {
+            return false;
+        };
+        if conn
+            .create_window(
+                0,
+                win,
+                root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .is_err()
+        {
+            return false;
+        }
+
+        let mut concealed = false;
+        if conn
+            .convert_selection(
+                win,
+                clipboard_atom,
+                targets_atom,
+                prop_atom,
+                x11rb::CURRENT_TIME,
+            )
+            .is_ok()
+            && conn.flush().is_ok()
+        {
+            let deadline = Instant::now() + Duration::from_millis(50);
+            while Instant::now() < deadline {
+                match conn.poll_for_event() {
+                    Ok(Some(Event::SelectionNotify(ev))) => {
+                        if ev.property != 0 {
+                            if let Ok(cookie) =
+                                conn.get_property(true, win, ev.property, AtomEnum::ATOM, 0, 1024)
+                            {
+                                if let Ok(reply) = cookie.reply() {
+                                    if let Some(mut atoms) = reply.value32() {
+                                        concealed = atoms.any(|a| a == hint_atom);
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) => std::thread::sleep(Duration::from_millis(2)),
+                    Err(_) => break,
+                }
+            }
+        }
+
+        let _ = conn.destroy_window(win);
+        let _ = conn.flush();
+        concealed
     }
 }
 
