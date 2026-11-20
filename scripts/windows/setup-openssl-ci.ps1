@@ -64,23 +64,23 @@ if (-not $libDir) {
 }
 
 # Resolve the exact runtime DLL name (e.g. libcrypto-4-x64.dll for OpenSSL 4.x
-# or libcrypto-3-x64.dll for OpenSSL 3.x) instead of hardcoding a major version.
+# or libcrypto-3-x64.dll for OpenSSL 3.x) directly from the linked import
+# library (libcrypto.lib), since GitHub-hosted runners may retain an older DLL
+# alongside a newly installed version in C:\Program Files\OpenSSL.
+$importLibPath = Join-Path $libDir "libcrypto.lib"
+$importLibText = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($importLibPath))
+$dllMatches = @([regex]::Matches($importLibText, 'libcrypto-\d+-x64\.dll') | ForEach-Object { $_.Value } | Select-Object -Unique)
+if ($dllMatches.Count -eq 1) {
+    $runtimeDll = $dllMatches[0]
+} else {
+    throw "Could not uniquely determine runtime DLL name from $importLibPath (found: $($dllMatches -join ', '))"
+}
+
 $binDir = Join-Path $opensslDir "bin"
-$dllCandidates = @()
-if (Test-Path $binDir -PathType Container) {
-    $dllCandidates = @(Get-ChildItem -Path $binDir -Filter "libcrypto-*-x64.dll" -File)
+$stagedMatches = @(Get-ChildItem -Path $opensslDir -Filter $runtimeDll -File -Recurse)
+if ($stagedMatches.Count -eq 0) {
+    throw "Import library $importLibPath references $runtimeDll, but it was not found under $opensslDir"
 }
-if ($dllCandidates.Count -eq 0) {
-    $dllCandidates = @(Get-ChildItem -Path $opensslDir -Filter "libcrypto-*-x64.dll" -File -Recurse)
-}
-$dllNames = @($dllCandidates | Select-Object -ExpandProperty Name -Unique)
-if ($dllNames.Count -eq 0) {
-    throw "No libcrypto-*-x64.dll runtime DLL found under $opensslDir"
-}
-if ($dllNames.Count -gt 1) {
-    throw "Multiple libcrypto runtime DLLs found under $opensslDir ($($dllNames -join ', ')); refusing to guess"
-}
-$runtimeDll = $dllNames[0]
 
 # Ensure the OpenSSL runtime DLL directory is on PATH for test binaries.
 if (Test-Path $binDir -PathType Container) {
