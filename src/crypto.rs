@@ -100,14 +100,7 @@ fn get_or_create_encryption_key_with_mode(
 
     // Safety Check: If the database already exists on disk, we MUST NOT generate a new random key!
     if db_exists {
-        return Err(format!(
-            "An existing encrypted database was found in '{}', but its encryption key could not be found.\n\
-             Generating a new random key would fail to decrypt the existing database.\n\
-             If you want to start fresh with a new database, delete the directory and restart:\n\
-             rm -rf '{}'",
-            data_dir.display(),
-            data_dir.display()
-        ).into());
+        return Err(missing_key_error_message(data_dir).into());
     }
 
     // Fresh setup: Generate a new random 256-bit key
@@ -146,6 +139,28 @@ fn get_or_create_encryption_key_with_mode(
     };
 
     Ok((new_key, storage_mode))
+}
+
+fn missing_key_error_message(data_dir: &Path) -> String {
+    let dir = data_dir.display();
+    #[cfg(target_os = "windows")]
+    {
+        format!(
+            "An existing encrypted database was found in '{dir}', but its encryption key could not be found.\n\
+             Generating a new random key would fail to decrypt the existing database.\n\
+             If you want to start fresh with a new database, delete that folder in File Explorer \
+             (or run in PowerShell: Remove-Item -Recurse -Force '{dir}') and restart."
+        )
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        format!(
+            "An existing encrypted database was found in '{dir}', but its encryption key could not be found.\n\
+             Generating a new random key would fail to decrypt the existing database.\n\
+             If you want to start fresh with a new database, delete the directory and restart:\n\
+             rm -rf '{dir}'"
+        )
+    }
 }
 
 fn read_key_file(path: &Path) -> Result<Option<Zeroizing<String>>, std::io::Error> {
