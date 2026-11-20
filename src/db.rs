@@ -138,11 +138,13 @@ impl Database {
         // or another process briefly accessing the database).
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
-        // Enable WAL mode and normal synchronous writing for maximum responsiveness and concurrency
+        // Enable WAL mode, normal synchronous writing, foreign keys, and secure_delete
+        // so deleted rows/secrets are immediately zero-overwritten on disk.
         let _: String = conn.query_row("PRAGMA journal_mode = WAL;", [], |r| r.get(0))?;
         conn.execute_batch(
             "PRAGMA synchronous = NORMAL;
-             PRAGMA foreign_keys = ON;",
+             PRAGMA foreign_keys = ON;
+             PRAGMA secure_delete = ON;",
         )?;
 
         // Initialize schema
@@ -267,6 +269,7 @@ impl Database {
     }
 
     /// Compacts and defragments the encrypted database to reclaim free disk space.
+    #[cfg(test)]
     pub(crate) fn vacuum(&self) -> Result<(), rusqlite::Error> {
         let conn = self.lock_conn();
         conn.execute_batch("VACUUM;")?;
@@ -572,12 +575,16 @@ impl Database {
         Ok(())
     }
 
-    /// Clears all clipboard history and compacts the database to reclaim disk space.
+    /// Clears all clipboard history, compacts the database, and truncates the WAL file
+    /// so previously deleted secrets do not linger on disk.
     pub(crate) fn clear(&self) -> Result<(), rusqlite::Error> {
         let conn = self.lock_conn();
         conn.execute("DELETE FROM clipboard_history", [])?;
         if let Err(e) = conn.execute_batch("VACUUM;") {
             eprintln!("⚠️ Failed to VACUUM database after clear: {e}");
+        }
+        if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+            eprintln!("⚠️ Failed to truncate WAL after clear: {e}");
         }
         Ok(())
     }
@@ -923,5 +930,30 @@ mod tests {
         db.insert(token2).unwrap().expect("Should insert token2");
         let items = db.get_recent(10, None).unwrap();
         assert_ne!(items[0].kind, ItemKind::Secret);
+    }
+
+    #[test]
+    fn test_secure_delete_and_wal_truncate_on_clear() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("secure_delete_test.db");
+        let db = Database::open(&db_path, TEST_KEY).unwrap();
+
+        let secure_delete: i64 = db
+            .lock_conn()
+            .query_row("PRAGMA secure_delete;", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(secure_delete, 1, "PRAGMA secure_delete must be ON");
+
+        db.insert_secret("super-secret-value-12345!").unwrap();
+        db.clear().unwrap();
+
+        let wal_path = dir.path().join("secure_delete_test.db-wal");
+        if let Ok(meta) = std::fs::metadata(&wal_path) {
+            assert_eq!(
+                meta.len(),
+                0,
+                "WAL file must be truncated to 0 bytes after clear()"
+            );
+        }
     }
 }

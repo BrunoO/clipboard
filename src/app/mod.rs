@@ -1378,7 +1378,6 @@ impl ClipboardApp {
 
                         if ui.add_sized([btn_width, btn_height], clear_btn).clicked() {
                             let _ = self.db.clear();
-                            let _ = self.db.vacuum();
                             self.texture_cache.clear();
                             self.refresh_items();
                             self.show_clear_confirm_dialog = false;
