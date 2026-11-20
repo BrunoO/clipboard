@@ -199,7 +199,7 @@ pub(super) fn teardown_reopen_observer() {
         });
     }
     // Release the cloned egui::Context held in the global static on shutdown.
-    let mut lock = super::REPAINT_CTX
+    let mut lock = REPAINT_CTX
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *lock = None;
