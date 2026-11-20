@@ -111,7 +111,7 @@ impl Default for PasswordConfig {
 #[derive(Debug, Clone)]
 pub(crate) struct PasswordGeneratorState {
     pub(crate) config: PasswordConfig,
-    pub(crate) current_value: String,
+    pub(crate) current_value: zeroize::Zeroizing<String>,
     pub(crate) reveal_value: bool,
     pub(crate) skip_history: bool,
 }
@@ -129,7 +129,7 @@ impl PasswordGeneratorState {
         skip_history: bool,
         reveal_value: bool,
     ) -> Self {
-        let current_value = generate(&config);
+        let current_value = zeroize::Zeroizing::new(generate(&config));
         Self {
             config,
             current_value,
@@ -139,7 +139,7 @@ impl PasswordGeneratorState {
     }
 
     pub(crate) fn regenerate(&mut self) {
-        self.current_value = generate(&self.config);
+        self.current_value = zeroize::Zeroizing::new(generate(&self.config));
     }
 }
 

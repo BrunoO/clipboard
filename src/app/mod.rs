@@ -451,7 +451,7 @@ impl ClipboardApp {
             self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
             return;
         };
-        if let Err(e) = cb.set_text(secret.clone()) {
+        if let Err(e) = cb.set_text(secret.as_str()) {
             self.db.clear_skip_capture();
             eprintln!("Failed to write generated password to clipboard: {e}");
             self.show_toast(&format!(

@@ -65,7 +65,7 @@ impl ClipboardApp {
     ) {
         ui.group(|ui| {
             let display_text = if self.password_gen.reveal_value {
-                self.password_gen.current_value.clone()
+                self.password_gen.current_value.as_str().to_owned()
             } else {
                 "•".repeat(self.password_gen.current_value.chars().count().min(32))
             };
