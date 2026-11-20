@@ -107,7 +107,7 @@ pub(crate) struct Database {
     max_history: Arc<AtomicUsize>,
     ignore_concealed: Arc<AtomicBool>,
     auto_detect_secrets: Arc<AtomicBool>,
-    transient_text: Arc<Mutex<Option<String>>>,
+    transient_text: Arc<Mutex<Option<zeroize::Zeroizing<String>>>>,
 }
 
 impl std::fmt::Debug for Database {
@@ -198,7 +198,7 @@ impl Database {
     }
 
     /// Acquires the transient text mutex, recovering from poison if a previous thread panicked.
-    fn lock_transient(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+    fn lock_transient(&self) -> std::sync::MutexGuard<'_, Option<zeroize::Zeroizing<String>>> {
         self.transient_text.lock().unwrap_or_else(|poisoned| {
             eprintln!("⚠️ Transient text mutex recovered from poison");
             poisoned.into_inner()
@@ -236,14 +236,20 @@ impl Database {
     /// Marks the given text to be ignored once by the background clipboard monitor.
     pub(crate) fn skip_next_capture(&self, text: &str) {
         let mut guard = self.lock_transient();
-        *guard = Some(text.to_string());
+        *guard = Some(zeroize::Zeroizing::new(text.to_string()));
+    }
+
+    /// Clears any pending transient skip marker (e.g. if a clipboard write failed).
+    pub(crate) fn clear_skip_capture(&self) {
+        let mut guard = self.lock_transient();
+        *guard = None;
     }
 
     /// Returns true (and clears the marker) if `text` matches a pending transient copy.
     #[must_use]
     pub(crate) fn take_if_skipped(&self, text: &str) -> bool {
         let mut guard = self.lock_transient();
-        if guard.as_deref() == Some(text) {
+        if guard.as_deref().map(String::as_str) == Some(text) {
             *guard = None;
             return true;
         }

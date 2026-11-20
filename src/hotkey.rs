@@ -411,13 +411,32 @@ mod linux_x11_fallback {
         loop {
             poll_x11_key_events(&conn, &grabs, full_mask, hotkey_tx, ctx);
 
-            while let Ok(msg) = rx.try_recv() {
-                if !handle_x11_msg(&conn, root, &mut grabs, msg) {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(msg) => {
+                    if !handle_x11_msg(&conn, root, &mut grabs, msg) {
+                        return;
+                    }
+                    loop {
+                        match rx.try_recv() {
+                            Ok(msg) => {
+                                if !handle_x11_msg(&conn, root, &mut grabs, msg) {
+                                    return;
+                                }
+                            }
+                            Err(mpsc::TryRecvError::Empty) => break,
+                            Err(mpsc::TryRecvError::Disconnected) => {
+                                ungrab_all(&conn, root, &mut grabs);
+                                return;
+                            }
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    ungrab_all(&conn, root, &mut grabs);
                     return;
                 }
             }
-
-            thread::sleep(Duration::from_millis(50));
         }
     }
 }

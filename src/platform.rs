@@ -112,31 +112,55 @@ pub(crate) fn windows_set_title_bar_dark_mode(is_dark: bool) {
 
 const MAX_LOG_BYTES: u64 = 1024 * 1024; // Rotate app.log once it reaches 1 MiB
 
+static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static LOG_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+
 pub(crate) fn log_message(level: &str, message: &str) {
     use std::io::Write;
-    if let Some(base) = dirs::data_local_dir() {
-        let dir = base.join("cipherclipboard");
+
+    let dir = LOG_DIR.get_or_init(|| {
+        let dir = dirs::data_local_dir()?.join("cipherclipboard");
         let _ = std::fs::create_dir_all(&dir);
         crate::crypto::set_restricted_dir_permissions(&dir);
-        let path = dir.join("app.log");
-        if let Ok(meta) = std::fs::metadata(&path) {
-            if meta.len() >= MAX_LOG_BYTES {
-                let backup = dir.join("app.log.old");
-                let _ = std::fs::remove_file(&backup);
-                let _ = std::fs::rename(&path, &backup);
-            }
+        Some(dir)
+    });
+    let Some(dir) = dir.as_ref() else {
+        return;
+    };
+
+    // Guard rotation and appends against concurrent writers.
+    // Inside a panic hook, use try_lock() so we never self-deadlock if the
+    // panicking thread was already holding LOG_LOCK.
+    let _guard = if std::thread::panicking() {
+        match LOG_LOCK.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return,
         }
-        let mut opts = std::fs::OpenOptions::new();
-        opts.create(true).append(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
+    } else {
+        LOG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+
+    let path = dir.join("app.log");
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() >= MAX_LOG_BYTES {
+            let backup = dir.join("app.log.old");
+            let _ = std::fs::remove_file(&backup);
+            let _ = std::fs::rename(&path, &backup);
         }
-        if let Ok(mut file) = opts.open(&path) {
-            let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-            let _ = writeln!(file, "[{ts}] [{level}] {message}");
-        }
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    if let Ok(mut file) = opts.open(&path) {
+        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let _ = writeln!(file, "[{ts}] [{level}] {message}");
     }
 }
 
@@ -239,6 +263,117 @@ pub(crate) fn capture_active_window() {
     linux::capture_frontmost();
 }
 
+#[derive(Clone, Copy)]
+struct PasteRequest {
+    restore_focus: bool,
+    auto_paste: bool,
+    auto_paste_delay_ms: u64,
+}
+
+fn restore_focus_platform() {
+    #[cfg(target_os = "macos")]
+    macos::restore_focus();
+
+    #[cfg(target_os = "windows")]
+    windows::restore_focus();
+
+    #[cfg(target_os = "linux")]
+    linux::restore_focus();
+}
+
+fn simulate_paste_if_foreground() {
+    #[cfg(target_os = "macos")]
+    {
+        if !macos::is_target_foreground() {
+            crate::platform::log_message(
+                "WARN",
+                "Auto-paste skipped: captured target application is not frontmost",
+            );
+            return;
+        }
+        macos::simulate_paste();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if !windows::is_target_foreground() {
+            crate::platform::log_message(
+                "WARN",
+                "Auto-paste skipped: captured target window is not in the foreground",
+            );
+            return;
+        }
+        let _ = windows::simulate_paste();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if !linux::is_target_foreground() {
+            crate::platform::log_message(
+                "WARN",
+                "Auto-paste skipped: captured target window is not active",
+            );
+            return;
+        }
+        linux::simulate_paste();
+    }
+}
+
+fn paste_worker_loop(rx: &std::sync::mpsc::Receiver<PasteRequest>) {
+    let mut pending: Option<PasteRequest> = None;
+    loop {
+        let mut req = if let Some(r) = pending.take() {
+            r
+        } else {
+            let Ok(r) = rx.recv() else {
+                break;
+            };
+            r
+        };
+        // Coalesce any burst of queued requests, keeping only the latest.
+        while let Ok(newer) = rx.try_recv() {
+            req = newer;
+        }
+
+        // If auto_paste is active, focus MUST be switched to the target application
+        // so the simulated keystrokes are received by that application.
+        if req.restore_focus || req.auto_paste {
+            restore_focus_platform();
+        }
+
+        if req.auto_paste {
+            // Give the OS window server time to switch key focus to the target
+            // application before dispatching keystrokes. If a newer request arrives
+            // during this window, supersede this paste immediately.
+            match rx.recv_timeout(Duration::from_millis(req.auto_paste_delay_ms)) {
+                Ok(newer) => {
+                    pending = Some(newer);
+                    continue;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            }
+
+            simulate_paste_if_foreground();
+        }
+    }
+}
+
+fn paste_worker_tx() -> &'static std::sync::mpsc::Sender<PasteRequest> {
+    static TX: std::sync::OnceLock<std::sync::mpsc::Sender<PasteRequest>> =
+        std::sync::OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<PasteRequest>();
+        if let Err(e) = std::thread::Builder::new()
+            .name("focus-paste-worker".to_string())
+            .spawn(move || paste_worker_loop(&rx))
+        {
+            log_message("ERROR", &format!("Failed to spawn focus-paste worker: {e}"));
+        }
+        tx
+    })
+}
+
 /// Restores focus to the previous application and optionally simulates a paste keystroke.
 pub(crate) fn restore_focus_and_paste(
     restore_focus: bool,
@@ -249,63 +384,10 @@ pub(crate) fn restore_focus_and_paste(
         return;
     }
 
-    std::thread::spawn(move || {
-        // If auto_paste is active, focus MUST be switched to the target application
-        // so the simulated keystrokes are received by that application.
-        let should_restore = restore_focus || auto_paste;
-
-        if should_restore {
-            #[cfg(target_os = "macos")]
-            macos::restore_focus();
-
-            #[cfg(target_os = "windows")]
-            windows::restore_focus();
-
-            #[cfg(target_os = "linux")]
-            linux::restore_focus();
-        }
-
-        if auto_paste {
-            // Give the OS window server time to switch key focus
-            // to the target application before dispatching keystrokes.
-            std::thread::sleep(Duration::from_millis(auto_paste_delay_ms));
-
-            #[cfg(target_os = "macos")]
-            {
-                if !macos::is_target_foreground() {
-                    crate::platform::log_message(
-                        "WARN",
-                        "Auto-paste skipped: captured target application is not frontmost",
-                    );
-                    return;
-                }
-                macos::simulate_paste();
-            }
-
-            #[cfg(target_os = "windows")]
-            {
-                if !windows::is_target_foreground() {
-                    crate::platform::log_message(
-                        "WARN",
-                        "Auto-paste skipped: captured target window is not in the foreground",
-                    );
-                    return;
-                }
-                let _ = windows::simulate_paste();
-            }
-
-            #[cfg(target_os = "linux")]
-            {
-                if !linux::is_target_foreground() {
-                    crate::platform::log_message(
-                        "WARN",
-                        "Auto-paste skipped: captured target window is not active",
-                    );
-                    return;
-                }
-                linux::simulate_paste();
-            }
-        }
+    let _ = paste_worker_tx().send(PasteRequest {
+        restore_focus,
+        auto_paste,
+        auto_paste_delay_ms,
     });
 }
 
@@ -757,12 +839,39 @@ mod macos {
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "windows")]
 mod windows {
-    use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
 
     use super::log_message;
 
-    static PREVIOUS_HWND: AtomicIsize = AtomicIsize::new(0);
-    static PREVIOUS_PID: AtomicU32 = AtomicU32::new(0);
+    #[derive(Clone, Copy)]
+    struct CapturedWindow {
+        hwnd: isize,
+        pid: u32,
+    }
+
+    static PREVIOUS_WINDOW: Mutex<Option<CapturedWindow>> = Mutex::new(None);
+
+    fn load_previous_window() -> Option<CapturedWindow> {
+        *PREVIOUS_WINDOW
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn store_previous_window(hwnd: isize, pid: u32) {
+        *PREVIOUS_WINDOW
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(CapturedWindow { hwnd, pid });
+    }
+
+    fn clear_previous_window_if_matches(stale_hwnd: isize) {
+        let mut guard = PREVIOUS_WINDOW
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.is_some_and(|w| w.hwnd == stale_hwnd) {
+            *guard = None;
+        }
+    }
 
     type Hwnd = *mut std::ffi::c_void;
 
@@ -838,18 +947,15 @@ mod windows {
 
         let target_thread = if fg_thread != 0 && fg_pid != current_pid {
             fg_thread
-        } else {
-            let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
-            if hwnd_raw != 0 {
-                let hwnd = hwnd_raw as Hwnd;
-                if IsWindow(hwnd) != 0 {
-                    GetWindowThreadProcessId(hwnd, std::ptr::null_mut())
-                } else {
-                    0
-                }
+        } else if let Some(prev) = load_previous_window() {
+            let hwnd = prev.hwnd as Hwnd;
+            if IsWindow(hwnd) != 0 {
+                GetWindowThreadProcessId(hwnd, std::ptr::null_mut())
             } else {
                 0
             }
+        } else {
+            0
         };
 
         let hkl = if target_thread != 0 {
@@ -923,14 +1029,15 @@ mod windows {
                 GetWindowThreadProcessId(fg_hwnd, &raw mut fg_pid)
             };
 
-            if fg_thread != 0 && fg_thread != cur_thread {
-                AttachThreadInput(cur_thread, fg_thread, 1);
-                BringWindowToTop(target_hwnd);
-                SetForegroundWindow(target_hwnd);
-                AttachThreadInput(cur_thread, fg_thread, 0);
-            } else {
-                BringWindowToTop(target_hwnd);
-                SetForegroundWindow(target_hwnd);
+            let attached = fg_thread != 0
+                && fg_thread != cur_thread
+                && AttachThreadInput(cur_thread, fg_thread, 1) != 0;
+
+            BringWindowToTop(target_hwnd);
+            SetForegroundWindow(target_hwnd);
+
+            if attached {
+                let _ = AttachThreadInput(cur_thread, fg_thread, 0);
             }
         }
     }
@@ -954,28 +1061,26 @@ mod windows {
                 let mut pid: u32 = 0;
                 GetWindowThreadProcessId(hwnd, &raw mut pid);
                 if pid != 0 && pid != GetCurrentProcessId() {
-                    PREVIOUS_HWND.store(hwnd as isize, Ordering::SeqCst);
-                    PREVIOUS_PID.store(pid, Ordering::SeqCst);
+                    store_previous_window(hwnd as isize, pid);
                 }
             }
         }
     }
 
     pub(super) fn restore_focus() {
-        let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
-        if hwnd_raw == 0 {
+        let Some(prev) = load_previous_window() else {
             log_message(
                 "WARN",
                 "Focus restore skipped: no previously captured window",
             );
             return;
-        }
+        };
+        let hwnd_raw = prev.hwnd;
 
         unsafe {
             let target_hwnd = hwnd_raw as Hwnd;
             if IsWindow(target_hwnd) == 0 {
-                PREVIOUS_HWND.store(0, Ordering::SeqCst);
-                PREVIOUS_PID.store(0, Ordering::SeqCst);
+                clear_previous_window_if_matches(hwnd_raw);
                 log_message(
                     "WARN",
                     "Focus restore skipped: captured target window no longer exists",
@@ -1022,27 +1127,25 @@ mod windows {
 
     /// Confirms the captured target is in the foreground before synthetic keys are sent.
     pub(super) fn is_target_foreground() -> bool {
-        let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
-        if hwnd_raw == 0 {
+        let Some(prev) = load_previous_window() else {
             return false;
-        }
+        };
         unsafe {
             let fg = GetForegroundWindow();
             if fg.is_null() {
                 return false;
             }
-            if fg == hwnd_raw as Hwnd {
+            if fg == prev.hwnd as Hwnd {
                 return true;
             }
             // Some apps replace their top-level Hwnd between capture and paste.
             // Accepting the captured process is still safe: never another app.
-            let target_pid = PREVIOUS_PID.load(Ordering::SeqCst);
-            if target_pid == 0 {
+            if prev.pid == 0 {
                 return false;
             }
             let mut fg_pid: u32 = 0;
             GetWindowThreadProcessId(fg, &raw mut fg_pid);
-            fg_pid != 0 && fg_pid == target_pid
+            fg_pid != 0 && fg_pid == prev.pid
         }
     }
 
@@ -1428,20 +1531,19 @@ mod windows {
     }
 
     unsafe fn captured_target_pid() -> u32 {
-        let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
-        if hwnd_raw != 0 {
-            let hwnd = hwnd_raw as Hwnd;
-            if IsWindow(hwnd) != 0 {
-                let mut pid = 0u32;
-                GetWindowThreadProcessId(hwnd, &raw mut pid);
-                if pid != 0 && pid != GetCurrentProcessId() {
-                    return pid;
-                }
+        let Some(prev) = load_previous_window() else {
+            return 0;
+        };
+        let hwnd = prev.hwnd as Hwnd;
+        if IsWindow(hwnd) != 0 {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, &raw mut pid);
+            if pid != 0 && pid != GetCurrentProcessId() {
+                return pid;
             }
         }
-        let stored = PREVIOUS_PID.load(Ordering::SeqCst);
-        if stored != 0 && stored != GetCurrentProcessId() {
-            stored
+        if prev.pid != 0 && prev.pid != GetCurrentProcessId() {
+            prev.pid
         } else {
             0
         }

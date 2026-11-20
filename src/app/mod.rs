@@ -353,7 +353,6 @@ impl ClipboardApp {
         if let Some(cb) = &mut self.clipboard_writer {
             if let Ok(current) = cb.get_text() {
                 if current == *expected_secret {
-                    self.db.skip_next_capture("");
                     let _ = cb.clear();
                 }
             }
@@ -409,10 +408,12 @@ impl ClipboardApp {
     fn copy_secret_to_clipboard(&mut self, secret: &str, ctx: &egui::Context) {
         self.db.skip_next_capture(secret);
         let Some(cb) = self.ensure_clipboard_writer() else {
+            self.db.clear_skip_capture();
             self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
             return;
         };
         if let Err(e) = cb.set_text(secret.to_string()) {
+            self.db.clear_skip_capture();
             eprintln!("Failed to write secret to clipboard: {e}");
             self.show_toast(&format!(
                 "{} Failed to copy secret to clipboard",
@@ -443,10 +444,12 @@ impl ClipboardApp {
         self.db.skip_next_capture(&secret);
 
         let Some(cb) = self.ensure_clipboard_writer() else {
+            self.db.clear_skip_capture();
             self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
             return;
         };
         if let Err(e) = cb.set_text(secret.clone()) {
+            self.db.clear_skip_capture();
             eprintln!("Failed to write generated password to clipboard: {e}");
             self.show_toast(&format!(
                 "{} Failed to copy password to clipboard",

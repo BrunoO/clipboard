@@ -92,9 +92,12 @@ fn init_clipboard_with_retry(shutdown_rx: &std::sync::mpsc::Receiver<()>) -> Opt
             Ok(cb) => return Some(cb),
             Err(e) => {
                 eprintln!("⚠️ Failed to initialize clipboard monitor: {e}");
-                if shutdown_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
-                    println!("👀 Clipboard monitor shutting down...");
-                    return None;
+                match shutdown_rx.recv_timeout(Duration::from_secs(2)) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        println!("👀 Clipboard monitor shutting down...");
+                        return None;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 }
             }
         }
