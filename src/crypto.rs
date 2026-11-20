@@ -265,8 +265,27 @@ fn save_key_file(path: &Path, key: &str) -> Result<(), std::io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, key)?;
-    set_restricted_permissions(path);
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(key.as_bytes())?;
+        file.sync_all()?;
+        // Also tighten permissions if the file already existed with broader mode.
+        set_restricted_permissions(path);
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, key)?;
+        set_restricted_permissions(path);
+    }
     Ok(())
 }
 
@@ -277,6 +296,15 @@ fn generate_random_hex_key() -> Zeroizing<String> {
     key_bytes.zeroize();
     hex_key
 }
+
+#[cfg(unix)]
+pub(crate) fn set_restricted_dir_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+pub(crate) fn set_restricted_dir_permissions(_path: &Path) {}
 
 #[cfg(unix)]
 fn set_restricted_permissions(path: &Path) {
@@ -444,5 +472,21 @@ mod tests {
         );
         mock_keyring::reset();
         assert_eq!(read_from_keyring(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_restricted_dir_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let sub = dir.path().join("secure_data");
+        fs::create_dir_all(&sub).unwrap();
+        set_restricted_dir_permissions(&sub);
+        let mode = fs::metadata(&sub).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "Data directory permissions must be 0700 on Unix"
+        );
     }
 }

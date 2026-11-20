@@ -41,6 +41,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Resolve application data directory (cross-platform: macOS, Windows, Linux)
     let data_dir = get_app_data_dir();
     fs::create_dir_all(&data_dir)?;
+    crypto::set_restricted_dir_permissions(&data_dir);
     #[cfg(debug_assertions)]
     println!("📁 Data directory: {}", data_dir.display());
 

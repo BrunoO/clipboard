@@ -113,6 +113,7 @@ pub(crate) fn log_message(level: &str, message: &str) {
     if let Some(base) = dirs::data_local_dir() {
         let dir = base.join("cipherclipboard");
         let _ = std::fs::create_dir_all(&dir);
+        crate::crypto::set_restricted_dir_permissions(&dir);
         let path = dir.join("app.log");
         if let Ok(meta) = std::fs::metadata(&path) {
             if meta.len() >= MAX_LOG_BYTES {
@@ -121,11 +122,14 @@ pub(crate) fn log_message(level: &str, message: &str) {
                 let _ = std::fs::rename(&path, &backup);
             }
         }
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        if let Ok(mut file) = opts.open(&path) {
             let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
             let _ = writeln!(file, "[{ts}] [{level}] {message}");
         }
