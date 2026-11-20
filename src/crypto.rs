@@ -9,7 +9,18 @@ const SERVICE_NAME: &str = "cipherclipboard";
 const LEGACY_SERVICE_NAME: &str = "rusty_clipboard";
 const KEY_NAME: &str = "db_encryption_key";
 
-/// Retrieves or securely generates a 256-bit encryption key wrapped in [`Zeroizing`].
+/// Indicates where the active database encryption key is currently stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyStorageMode {
+    /// Key is stored securely in the OS Keyring (Keychain / Credential Manager / Secret Service).
+    OsKeyring,
+    /// Key is stored in a restricted local `.encryption_key` file (debug cache or keyring unavailable).
+    LocalFileFallback,
+}
+
+/// Retrieves or securely generates a 256-bit encryption key wrapped in [`Zeroizing`],
+/// along with the [`KeyStorageMode`] indicating whether it is backed by the OS Keyring
+/// or a local fallback file.
 ///
 /// Strategy:
 /// - **Debug builds** (`cfg!(debug_assertions)`): Checks `data_dir/.encryption_key` first so
@@ -22,7 +33,7 @@ const KEY_NAME: &str = "db_encryption_key";
 pub(crate) fn get_or_create_encryption_key(
     data_dir: &Path,
     db_exists: bool,
-) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
+) -> Result<(Zeroizing<String>, KeyStorageMode), Box<dyn std::error::Error>> {
     get_or_create_encryption_key_with_mode(data_dir, db_exists, cfg!(debug_assertions))
 }
 
@@ -30,7 +41,7 @@ fn get_or_create_encryption_key_with_mode(
     data_dir: &Path,
     db_exists: bool,
     allow_key_file_cache: bool,
-) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
+) -> Result<(Zeroizing<String>, KeyStorageMode), Box<dyn std::error::Error>> {
     let key_file = data_dir.join(".encryption_key");
 
     if allow_key_file_cache {
@@ -42,7 +53,7 @@ fn get_or_create_encryption_key_with_mode(
                 "🔐 Loaded encryption key from local key store: {}",
                 key_file.display()
             );
-            return Ok(key);
+            return Ok((key, KeyStorageMode::LocalFileFallback));
         }
 
         if let Some((key, service)) = read_from_keyring() {
@@ -51,7 +62,7 @@ fn get_or_create_encryption_key_with_mode(
             #[cfg(not(debug_assertions))]
             let _ = service;
             save_key_file(&key_file, &key)?;
-            return Ok(key);
+            return Ok((key, KeyStorageMode::OsKeyring));
         }
     } else {
         // Release mode: prefer OS Keyring exclusively and clean up any plaintext key file.
@@ -66,7 +77,7 @@ fn get_or_create_encryption_key_with_mode(
                 #[cfg(debug_assertions)]
                 println!("🧹 Removed legacy plaintext key file from disk.");
             }
-            return Ok(key);
+            return Ok((key, KeyStorageMode::OsKeyring));
         }
 
         // Migration path: if an older version stored .encryption_key, move it into the OS Keyring.
@@ -75,15 +86,15 @@ fn get_or_create_encryption_key_with_mode(
                 remove_key_file(&key_file);
                 #[cfg(debug_assertions)]
                 println!("🔐 Migrated encryption key into OS Keyring and removed local key file.");
-            } else {
-                set_restricted_permissions(&key_file);
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "ℹ️ OS Keyring unavailable; continuing with restricted local key file: {}",
-                    key_file.display()
-                );
+                return Ok((key, KeyStorageMode::OsKeyring));
             }
-            return Ok(key);
+            set_restricted_permissions(&key_file);
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "ℹ️ OS Keyring unavailable; continuing with restricted local key file: {}",
+                key_file.display()
+            );
+            return Ok((key, KeyStorageMode::LocalFileFallback));
         }
     }
 
@@ -104,7 +115,7 @@ fn get_or_create_encryption_key_with_mode(
     #[cfg(debug_assertions)]
     println!("🔑 Generating new 256-bit encryption key for first-time setup...");
 
-    if allow_key_file_cache {
+    let storage_mode = if allow_key_file_cache {
         save_key_file(&key_file, &new_key)?;
         if let Err(e) = write_to_keyring(&new_key) {
             #[cfg(debug_assertions)]
@@ -113,9 +124,11 @@ fn get_or_create_encryption_key_with_mode(
             );
             #[cfg(not(debug_assertions))]
             let _ = e;
+            KeyStorageMode::LocalFileFallback
         } else {
             #[cfg(debug_assertions)]
             println!("🔑 Backed up encryption key to OS Keyring.");
+            KeyStorageMode::OsKeyring
         }
     } else if let Err(e) = write_to_keyring(&new_key) {
         #[cfg(debug_assertions)]
@@ -125,12 +138,14 @@ fn get_or_create_encryption_key_with_mode(
         #[cfg(not(debug_assertions))]
         let _ = e;
         save_key_file(&key_file, &new_key)?;
+        KeyStorageMode::LocalFileFallback
     } else {
         #[cfg(debug_assertions)]
         println!("🔑 Stored encryption key in OS Keyring (Keyring-only release mode).");
-    }
+        KeyStorageMode::OsKeyring
+    };
 
-    Ok(new_key)
+    Ok((new_key, storage_mode))
 }
 
 fn read_key_file(path: &Path) -> Result<Option<Zeroizing<String>>, std::io::Error> {
@@ -422,8 +437,9 @@ mod tests {
             assert_eq!(mode, 0o600, "Key file permissions must be 0600 on Unix");
         }
 
-        let loaded = get_or_create_encryption_key(dir.path(), false).unwrap();
+        let (loaded, mode) = get_or_create_encryption_key(dir.path(), false).unwrap();
         assert_eq!(loaded.as_str(), test_key);
+        assert_eq!(mode, KeyStorageMode::LocalFileFallback);
     }
 
     #[test]
@@ -456,8 +472,10 @@ mod tests {
         let test_key = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
         save_key_file(&key_file, test_key).unwrap();
 
-        let loaded = get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
+        let (loaded, mode) =
+            get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
         assert_eq!(loaded.as_str(), test_key);
+        assert_eq!(mode, KeyStorageMode::LocalFileFallback);
         // Since write_to_keyring failed, the key_file should remain on disk
         assert!(key_file.exists());
     }
@@ -471,8 +489,10 @@ mod tests {
         let test_key = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
         save_key_file(&key_file, test_key).unwrap();
 
-        let loaded = get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
+        let (loaded, mode) =
+            get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
         assert_eq!(loaded.as_str(), test_key);
+        assert_eq!(mode, KeyStorageMode::OsKeyring);
         // Successful migration should remove the key file and persist into keyring
         assert!(!key_file.exists());
         assert_eq!(
@@ -489,8 +509,10 @@ mod tests {
         mock_keyring::insert(LEGACY_SERVICE_NAME, KEY_NAME, legacy_key);
         let dir = tempdir().unwrap();
 
-        let loaded = get_or_create_encryption_key_with_mode(dir.path(), false, false).unwrap();
+        let (loaded, mode) =
+            get_or_create_encryption_key_with_mode(dir.path(), false, false).unwrap();
         assert_eq!(loaded.as_str(), legacy_key);
+        assert_eq!(mode, KeyStorageMode::OsKeyring);
         // Should have migrated into current SERVICE_NAME
         assert_eq!(
             mock_keyring::get(SERVICE_NAME, KEY_NAME),

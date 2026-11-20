@@ -185,10 +185,11 @@ pub(crate) fn order_front_main_window() {
     windows::order_front_main_window();
 }
 
-/// On Windows, activates and brings to front any existing running instance window.
+/// On Windows, activates and brings to front any existing running instance window,
+/// matching `expected_pid` when known to prevent title-based window spoofing.
 #[cfg(target_os = "windows")]
-pub(crate) fn activate_existing_instance() -> bool {
-    windows::activate_existing_instance()
+pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
+    windows::activate_existing_instance(expected_pid)
 }
 
 /// Displays a native modal error dialog on Windows before terminating.
@@ -1011,30 +1012,48 @@ mod windows {
         }
     }
 
-    pub(super) fn activate_existing_instance() -> bool {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-
-        let title_wide: Vec<u16> = OsStr::new("CipherClipboard")
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-
-        extern "system" {
-            fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> HWND;
+    pub(super) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
+        struct SearchCtx {
+            expected_pid: Option<u32>,
+            found: HWND,
         }
 
-        unsafe {
-            let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
-            if !hwnd.is_null() {
-                // SW_RESTORE on a maximized/snapped window would un-maximize it.
-                if IsIconic(hwnd) != 0 {
-                    ShowWindow(hwnd, SW_RESTORE);
-                } else {
-                    ShowWindow(hwnd, SW_SHOW);
+        unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: isize) -> i32 {
+            let ctx = &mut *(lparam as *mut SearchCtx);
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if let Some(expected) = ctx.expected_pid {
+                if pid != expected {
+                    return 1;
                 }
-                BringWindowToTop(hwnd);
-                SetForegroundWindow(hwnd);
+            }
+            let mut buf = [0u16; 64];
+            let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+            if len > 0 {
+                let title = String::from_utf16_lossy(&buf[..len as usize]);
+                if title == "CipherClipboard" {
+                    ctx.found = hwnd;
+                    return 0;
+                }
+            }
+            1
+        }
+
+        let mut ctx = SearchCtx {
+            expected_pid,
+            found: std::ptr::null_mut(),
+        };
+        unsafe {
+            EnumWindows(enum_proc, std::ptr::addr_of_mut!(ctx) as isize);
+            if !ctx.found.is_null() {
+                // SW_RESTORE on a maximized/snapped window would un-maximize it.
+                if IsIconic(ctx.found) != 0 {
+                    ShowWindow(ctx.found, SW_RESTORE);
+                } else {
+                    ShowWindow(ctx.found, SW_SHOW);
+                }
+                BringWindowToTop(ctx.found);
+                SetForegroundWindow(ctx.found);
                 true
             } else {
                 false

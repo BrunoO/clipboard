@@ -424,6 +424,17 @@ impl ClipboardApp {
                 .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );
+            if self.key_storage_mode == crate::crypto::KeyStorageMode::LocalFileFallback {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} Keyring fallback active: the encryption key is stored in a restricted local file (.encryption_key) because the OS Keyring was unavailable.",
+                        icons::WARNING
+                    ))
+                    .color(crate::theme::warning_color(is_dark))
+                    .size(11.0),
+                );
+            }
 
             ui.add_space(6.0);
             if ui

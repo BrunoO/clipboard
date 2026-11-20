@@ -51,7 +51,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         AcquireResult::Acquired(lock) => lock,
         AcquireResult::AlreadyRunning { pid } => {
             #[cfg(target_os = "windows")]
-            platform::activate_existing_instance();
+            platform::activate_existing_instance(pid);
 
             if let Some(pid) = pid {
                 println!(
@@ -67,7 +67,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // 2. Open or initialize the SQLCipher encrypted database (key is zeroized on scope exit)
-    let db = open_encrypted_database(&data_dir)?;
+    let (db, key_storage_mode) = open_encrypted_database(&data_dir)?;
     #[cfg(debug_assertions)]
     println!("🛡️  Database opened & verified with SQLCipher.");
 
@@ -153,6 +153,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(Box::new(ClipboardApp::new(
                 cc,
                 db,
+                key_storage_mode,
                 notify_rx,
                 hotkey_rx,
                 hotkey_service,
@@ -176,11 +177,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// is zeroized and dropped before returning.
 fn open_encrypted_database(
     data_dir: &std::path::Path,
-) -> Result<Database, Box<dyn std::error::Error>> {
+) -> Result<(Database, crypto::KeyStorageMode), Box<dyn std::error::Error>> {
     let db_path = data_dir.join("clipboard_history.db");
     let db_exists = db_path.exists();
-    let encryption_key = crypto::get_or_create_encryption_key(data_dir, db_exists)?;
-    Database::open(&db_path, &encryption_key)
+    let (encryption_key, storage_mode) = crypto::get_or_create_encryption_key(data_dir, db_exists)?;
+    let db = Database::open(&db_path, &encryption_key)?;
+    Ok((db, storage_mode))
 }
 
 /// Computes the OS-appropriate local application data directory.

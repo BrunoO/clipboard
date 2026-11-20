@@ -110,6 +110,7 @@ pub(crate) enum ActiveView {
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct ClipboardApp {
     db: Database,
+    key_storage_mode: crate::crypto::KeyStorageMode,
     search_query: String,
     content_filter: ContentFilter,
     items: Vec<ClipboardItem>,
@@ -154,6 +155,7 @@ impl ClipboardApp {
     pub(crate) fn new(
         _cc: &eframe::CreationContext<'_>,
         db: Database,
+        key_storage_mode: crate::crypto::KeyStorageMode,
         notify_rx: Receiver<()>,
         hotkey_rx: Receiver<()>,
         hotkey_service: Option<HotkeyService>,
@@ -196,6 +198,7 @@ impl ClipboardApp {
         );
         Self {
             db,
+            key_storage_mode,
             search_query: String::new(),
             content_filter: ContentFilter::All,
             items: initial_items,
@@ -1259,14 +1262,34 @@ impl ClipboardApp {
                             self.toast = None;
                         }
                     } else {
+                        let key_status = match self.key_storage_mode {
+                            crate::crypto::KeyStorageMode::OsKeyring => {
+                                format!(
+                                    "{} {} entries • SQLCipher encrypted",
+                                    icons::SHIELD_CHECK,
+                                    self.items.len()
+                                )
+                            }
+                            crate::crypto::KeyStorageMode::LocalFileFallback => {
+                                format!(
+                                    "{} {} entries • Local key file (keyring unavailable)",
+                                    icons::WARNING,
+                                    self.items.len()
+                                )
+                            }
+                        };
+                        let status_color = match self.key_storage_mode {
+                            crate::crypto::KeyStorageMode::OsKeyring => {
+                                crate::theme::text_secondary(is_dark)
+                            }
+                            crate::crypto::KeyStorageMode::LocalFileFallback => {
+                                crate::theme::warning_color(is_dark)
+                            }
+                        };
                         ui.label(
-                            egui::RichText::new(format!(
-                                "{} {} entries • SQLCipher encrypted",
-                                icons::SHIELD_CHECK,
-                                self.items.len()
-                            ))
-                            .color(crate::theme::text_secondary(is_dark))
-                            .size(11.0_f32),
+                            egui::RichText::new(key_status)
+                                .color(status_color)
+                                .size(11.0_f32),
                         );
                     }
 
@@ -1606,6 +1629,7 @@ mod tests {
         .unwrap();
         let mut app = ClipboardApp {
             db,
+            key_storage_mode: crate::crypto::KeyStorageMode::OsKeyring,
             search_query: String::new(),
             content_filter: super::ContentFilter::All,
             items: Vec::new(),
