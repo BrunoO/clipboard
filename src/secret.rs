@@ -1,3 +1,18 @@
+const MAX_SCAN_BYTES: usize = 65_536;
+const MAX_ENV_SCAN_LINES: usize = 200;
+
+/// Truncates `s` to at most `max_bytes` on a valid UTF-8 character boundary.
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Heuristic and pattern-based detector for secrets, API keys, tokens, and credentials.
 ///
 /// Designed to run on clipboard text before saving to history so sensitive items
@@ -5,37 +20,71 @@
 #[must_use]
 pub(crate) fn is_likely_secret(content: &str) -> bool {
     let trimmed = content.trim();
-    if trimmed.is_empty() || trimmed.len() > 8192 {
+    if trimmed.is_empty() {
         return false;
     }
+    let scan_slice = truncate_utf8(trimmed, MAX_SCAN_BYTES);
 
     // 1. PEM private keys / PGP private key blocks
-    if is_pem_private_key(trimmed) {
+    if is_pem_private_key(scan_slice) {
         return true;
     }
 
-    // 2. Authorization Bearer tokens
-    if is_bearer_token(trimmed) {
+    // 2. Authorization Bearer tokens (standalone or inline in e.g. curl commands)
+    if is_bearer_token(scan_slice) {
         return true;
     }
 
     // 3. Credentials embedded in URLs (e.g., postgres://user:pass@host)
-    if has_url_credentials(trimmed) {
+    if has_url_credentials(scan_slice) {
         return true;
     }
 
-    // 4. Known token / API key prefixes & JWTs (single-line tokens without whitespace)
-    if !trimmed.chars().any(char::is_whitespace) && is_known_token_format(trimmed) {
+    // 4. Known token / API key prefixes, JWTs, & inline Bearer/URL credentials
+    if contains_inline_known_secret(scan_slice) {
         return true;
     }
 
     // 5. .env / key-value secret assignments (e.g., API_KEY=..., PASSWORD=...)
-    if is_secret_env_assignment(trimmed) {
+    if is_secret_env_assignment(scan_slice) {
         return true;
     }
 
     // 6. High-entropy standalone password/secret heuristic
-    is_high_entropy_secret(trimmed)
+    is_high_entropy_secret(scan_slice)
+}
+
+fn contains_inline_known_secret(text: &str) -> bool {
+    let mut prev_was_bearer = false;
+    for raw_token in text.split_whitespace().take(1024) {
+        let cleaned = raw_token.trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '`' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+            )
+        });
+        if cleaned.is_empty() {
+            prev_was_bearer = false;
+            continue;
+        }
+        if prev_was_bearer && cleaned.len() >= 16 && !is_placeholder_value(cleaned) {
+            return true;
+        }
+        prev_was_bearer = cleaned.eq_ignore_ascii_case("bearer");
+
+        if is_known_token_format(cleaned) || has_url_credentials(cleaned) {
+            return true;
+        }
+
+        // Handle key=value or key:value tokens like `--token=ghp_...` or `"key":"sk-proj-..."`
+        if let Some((_, rhs)) = cleaned.split_once('=').or_else(|| cleaned.split_once(':')) {
+            let rhs_clean = rhs.trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | ',' | ';'));
+            if is_known_token_format(rhs_clean) || has_url_credentials(rhs_clean) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn is_pem_private_key(text: &str) -> bool {
@@ -146,12 +195,7 @@ fn is_known_token_format(token: &str) -> bool {
 }
 
 fn is_secret_env_assignment(text: &str) -> bool {
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.is_empty() || lines.len() > 10 {
-        return false;
-    }
-
-    for line in lines {
+    for line in text.lines().take(MAX_ENV_SCAN_LINES) {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -166,7 +210,7 @@ fn is_secret_env_assignment(text: &str) -> bool {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
         {
-            return false;
+            continue;
         }
 
         let is_sensitive_key = [
@@ -426,5 +470,33 @@ mod tests {
         // path-like name.ext tail) must still be classified as a secret.
         let pw = "K9#mP2$vL8@qR4!x\\Yw7Zn";
         assert!(is_likely_secret(pw));
+    }
+
+    #[test]
+    fn test_detects_large_env_and_mixed_lines() {
+        use std::fmt::Write;
+        let mut env_block = String::from("not an env = line with spaces\n");
+        for i in 0..15 {
+            let _ = writeln!(env_block, "APP_SETTING_{i}=normal_value_{i}");
+        }
+        env_block.push_str("DATABASE_PASSWORD=\"MyProdPass2026!\"\n");
+        assert!(is_likely_secret(&env_block));
+    }
+
+    #[test]
+    fn test_detects_inline_tokens_and_large_payloads() {
+        let curl = r#"curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc" https://api.example.com"#;
+        assert!(is_likely_secret(curl));
+
+        let json = format!(
+            "{{\"token\": \"{}\"}}",
+            ["ghp", "1234567890abcdef1234567890abcdef1234"].join("_")
+        );
+        assert!(is_likely_secret(&json));
+
+        // > 8192 bytes payload containing a private key block
+        let mut large = "x".repeat(9000);
+        large.push_str("\n-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n");
+        assert!(is_likely_secret(&large));
     }
 }
