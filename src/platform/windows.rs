@@ -1,7 +1,42 @@
 #![allow(unsafe_code)]
 
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
+
+use windows_sys::core::BOOL;
+use windows_sys::Win32::Foundation::{CloseHandle, GlobalFree, LocalFree, HANDLE, HWND, LPARAM};
+use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+use windows_sys::Win32::Security::Cryptography::{
+    CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+};
+use windows_sys::Win32::Security::{
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel,
+    TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+};
+use windows_sys::Win32::System::DataExchange::{
+    CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
+    OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+};
+use windows_sys::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+};
+use windows_sys::Win32::System::SystemServices::SECURITY_MANDATORY_MEDIUM_RID;
+use windows_sys::Win32::System::Threading::{
+    AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyboardLayout, MapVirtualKeyExW, SendInput, ToUnicodeEx, HKL, INPUT, INPUT_0,
+    INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MAPVK_VSC_TO_VK, VK_CONTROL,
+    VK_V,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+    IsIconic, IsWindow, MessageBoxW, PeekMessageW, SetForegroundWindow, ShowWindow, MB_ICONERROR,
+    MB_OK, MSG, PM_NOREMOVE, SW_RESTORE, SW_SHOW,
+};
 
 use crate::logging::log_message;
 
@@ -34,67 +69,10 @@ fn clear_previous_window_if_matches(stale_hwnd: isize) {
     }
 }
 
-type Hwnd = *mut std::ffi::c_void;
-
-// Calling PeekMessage on a thread creates its message queue. This is a
-// prerequisite for AttachThreadInput, which a bare std::thread lacks.
-#[allow(clippy::upper_case_acronyms)]
-#[repr(C)]
-struct MSG {
-    hwnd: Hwnd,
-    message: u32,
-    w_param: usize,
-    l_param: isize,
-    time: u32,
-    pt_x: i32,
-    pt_y: i32,
-    l_private: u32,
-}
-
-const PM_NOREMOVE: u32 = 0;
-const SW_SHOW: i32 = 5;
-const SW_RESTORE: i32 = 9;
-const MAPVK_VK_TO_VSC: u32 = 0;
-const MAPVK_VSC_TO_VK: u32 = 1;
-
-extern "system" {
-    fn GetForegroundWindow() -> Hwnd;
-    fn SetForegroundWindow(hwnd: Hwnd) -> i32;
-    fn BringWindowToTop(hwnd: Hwnd) -> i32;
-    fn ShowWindow(hwnd: Hwnd, nCmdShow: i32) -> i32;
-    fn IsIconic(hwnd: Hwnd) -> i32;
-    fn IsWindow(hwnd: Hwnd) -> i32;
-    fn PeekMessageW(
-        lpMsg: *mut MSG,
-        hWnd: Hwnd,
-        wMsgFilterMin: u32,
-        wMsgFilterMax: u32,
-        wRemoveMsg: u32,
-    ) -> i32;
-    fn GetCurrentProcessId() -> u32;
-    fn GetCurrentThreadId() -> u32;
-    fn GetWindowThreadProcessId(hwnd: Hwnd, lpdwProcessId: *mut u32) -> u32;
-    fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
-    fn EnumWindows(lpEnumFunc: unsafe extern "system" fn(Hwnd, isize) -> i32, lParam: isize)
-        -> i32;
-    fn GetWindowTextW(hwnd: Hwnd, lpString: *mut u16, nMaxCount: i32) -> i32;
-    fn GetKeyboardLayout(idThread: u32) -> *mut std::ffi::c_void;
-    fn MapVirtualKeyExW(uCode: u32, uMapType: u32, dwhkl: *mut std::ffi::c_void) -> u32;
-    fn ToUnicodeEx(
-        wVirtKey: u32,
-        wScanCode: u32,
-        lpKeyState: *const u8,
-        pwszBuff: *mut u16,
-        cchBuff: i32,
-        wFlags: u32,
-        dwhkl: *mut std::ffi::c_void,
-    ) -> i32;
-}
-
 /// Resolves the keyboard layout (HKL) for the thread whose layout the user is
 /// currently typing with, preferring the foreground window's thread (or the
 /// captured target window when our own window is foreground) over our UI thread.
-unsafe fn target_keyboard_layout() -> *mut std::ffi::c_void {
+unsafe fn target_keyboard_layout() -> HKL {
     let current_pid = GetCurrentProcessId();
     let fg = GetForegroundWindow();
     let mut fg_pid = 0u32;
@@ -107,7 +85,7 @@ unsafe fn target_keyboard_layout() -> *mut std::ffi::c_void {
     let target_thread = if fg_thread != 0 && fg_pid != current_pid {
         fg_thread
     } else if let Some(prev) = load_previous_window() {
-        let hwnd = prev.hwnd as Hwnd;
+        let hwnd = prev.hwnd as HWND;
         if IsWindow(hwnd) != 0 {
             GetWindowThreadProcessId(hwnd, std::ptr::null_mut())
         } else {
@@ -129,8 +107,8 @@ unsafe fn target_keyboard_layout() -> *mut std::ffi::c_void {
     }
 }
 
-fn find_main_window() -> Option<Hwnd> {
-    unsafe extern "system" fn enum_proc(hwnd: Hwnd, lparam: isize) -> i32 {
+fn find_main_window() -> Option<HWND> {
+    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, &raw mut pid);
         if pid == GetCurrentProcessId() {
@@ -144,7 +122,7 @@ fn find_main_window() -> Option<Hwnd> {
                 if len_usize > 0 {
                     let title = String::from_utf16_lossy(&buf[..len_usize]);
                     if title == "CipherClipboard" {
-                        let out = lparam as *mut Hwnd;
+                        let out = lparam as *mut HWND;
                         if !out.is_null() {
                             *out = hwnd;
                         }
@@ -156,9 +134,12 @@ fn find_main_window() -> Option<Hwnd> {
         1
     }
 
-    let mut target_hwnd: Hwnd = std::ptr::null_mut();
+    let mut target_hwnd: HWND = std::ptr::null_mut();
     unsafe {
-        EnumWindows(enum_proc, std::ptr::addr_of_mut!(target_hwnd) as isize);
+        EnumWindows(
+            Some(enum_proc),
+            std::ptr::addr_of_mut!(target_hwnd) as LPARAM,
+        );
     }
     if target_hwnd.is_null() {
         None
@@ -237,7 +218,7 @@ pub(super) fn restore_focus() {
     let hwnd_raw = prev.hwnd;
 
     unsafe {
-        let target_hwnd = hwnd_raw as Hwnd;
+        let target_hwnd = hwnd_raw as HWND;
         if IsWindow(target_hwnd) == 0 {
             clear_previous_window_if_matches(hwnd_raw);
             log_message(
@@ -294,10 +275,10 @@ pub(super) fn is_target_foreground() -> bool {
         if fg.is_null() {
             return false;
         }
-        if fg == prev.hwnd as Hwnd {
+        if fg == prev.hwnd as HWND {
             return true;
         }
-        // Some apps replace their top-level Hwnd between capture and paste.
+        // Some apps replace their top-level HWND between capture and paste.
         // Accepting the captured process is still safe: never another app.
         if prev.pid == 0 {
             return false;
@@ -311,10 +292,10 @@ pub(super) fn is_target_foreground() -> bool {
 pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
     struct SearchCtx {
         expected_pid: Option<u32>,
-        found: Hwnd,
+        found: HWND,
     }
 
-    unsafe extern "system" fn enum_proc(hwnd: Hwnd, lparam: isize) -> i32 {
+    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let ctx = &mut *(lparam as *mut SearchCtx);
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, &raw mut pid);
@@ -346,7 +327,7 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
         found: std::ptr::null_mut(),
     };
     unsafe {
-        EnumWindows(enum_proc, std::ptr::addr_of_mut!(ctx) as isize);
+        EnumWindows(Some(enum_proc), std::ptr::addr_of_mut!(ctx) as LPARAM);
         if ctx.found.is_null() {
             false
         } else {
@@ -364,16 +345,6 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
 }
 
 pub(crate) fn show_error_dialog(message: &str) {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-
-    extern "system" {
-        fn MessageBoxW(hwnd: Hwnd, lpText: *const u16, lpCaption: *const u16, uType: u32) -> i32;
-    }
-
-    const MB_OK: u32 = 0x0000_0000;
-    const MB_ICONERROR: u32 = 0x0000_0010;
-
     let msg_wide: Vec<u16> = OsStr::new(message)
         .encode_wide()
         .chain(std::iter::once(0))
@@ -395,39 +366,20 @@ pub(crate) fn show_error_dialog(message: &str) {
 
 /// Returns `true` only when all four keyboard events were inserted.
 pub(super) fn simulate_paste() -> bool {
-    #[allow(non_snake_case)]
-    #[repr(C)]
-    struct KeybdInput {
-        wVk: u16,
-        wScan: u16,
-        dwFlags: u32,
-        time: u32,
-        dwExtraInfo: usize,
+    const fn key_event(vk: u16, scan: u16, flags: u32) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: scan,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
     }
-
-    // Win32 INPUT union is sized to MOUSEINPUT (32 bytes on x64, 24 bytes on x86),
-    // making sizeof(Input) == 40 bytes on x64 (4 + 4 align + 24 KeybdInput + 8 pad)
-    // and 28 bytes on x86 (4 + 16 KeybdInput + 8 pad).
-    #[repr(C)]
-    struct Input {
-        r#type: u32,
-        u: KeybdInput,
-        _pad: [u8; 8],
-    }
-
-    const _: () = assert!(
-        (cfg!(target_pointer_width = "64") && std::mem::size_of::<Input>() == 40)
-            || (cfg!(target_pointer_width = "32") && std::mem::size_of::<Input>() == 28)
-    );
-
-    extern "system" {
-        fn SendInput(cInputs: u32, pInputs: *const Input, cbSize: i32) -> u32;
-    }
-
-    const INPUT_KEYBOARD: u32 = 1;
-    const KEYEVENTF_KEYUP: u32 = 0x0002;
-    const VK_CONTROL: u16 = 0x11;
-    const VK_V: u16 = 0x56;
 
     unsafe {
         // Raw Input / Windows Terminal-style handlers read hardware scan codes
@@ -443,60 +395,16 @@ pub(super) fn simulate_paste() -> bool {
             u16::try_from(MapVirtualKeyExW(u32::from(VK_V), MAPVK_VK_TO_VSC, hkl)).unwrap_or(0);
 
         let inputs = [
-            // Ctrl Down
-            Input {
-                r#type: INPUT_KEYBOARD,
-                u: KeybdInput {
-                    wVk: VK_CONTROL,
-                    wScan: ctrl_scan,
-                    dwFlags: 0,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-                _pad: [0; 8],
-            },
-            // V Down
-            Input {
-                r#type: INPUT_KEYBOARD,
-                u: KeybdInput {
-                    wVk: VK_V,
-                    wScan: v_scan,
-                    dwFlags: 0,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-                _pad: [0; 8],
-            },
-            // V Up
-            Input {
-                r#type: INPUT_KEYBOARD,
-                u: KeybdInput {
-                    wVk: VK_V,
-                    wScan: v_scan,
-                    dwFlags: KEYEVENTF_KEYUP,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-                _pad: [0; 8],
-            },
-            // Ctrl Up
-            Input {
-                r#type: INPUT_KEYBOARD,
-                u: KeybdInput {
-                    wVk: VK_CONTROL,
-                    wScan: ctrl_scan,
-                    dwFlags: KEYEVENTF_KEYUP,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-                _pad: [0; 8],
-            },
+            key_event(VK_CONTROL, ctrl_scan, 0),
+            key_event(VK_V, v_scan, 0),
+            key_event(VK_V, v_scan, KEYEVENTF_KEYUP),
+            key_event(VK_CONTROL, ctrl_scan, KEYEVENTF_KEYUP),
         ];
 
         let inserted = SendInput(
             4,
             inputs.as_ptr(),
-            i32::try_from(std::mem::size_of::<Input>()).unwrap_or(0),
+            i32::try_from(std::mem::size_of::<INPUT>()).unwrap_or(0),
         );
         let ok = inserted == 4;
         if !ok {
@@ -511,15 +419,7 @@ pub(super) fn simulate_paste() -> bool {
     }
 }
 
-extern "system" {
-    fn RegisterClipboardFormatW(lpszFormat: *const u16) -> u32;
-    fn IsClipboardFormatAvailable(format: u32) -> i32;
-}
-
 fn cached_clipboard_format(cache: &AtomicU32, name: &str) -> u32 {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-
     let id = cache.load(Ordering::Relaxed);
     if id != 0 {
         return id;
@@ -536,19 +436,6 @@ fn cached_clipboard_format(cache: &AtomicU32, name: &str) -> u32 {
 }
 
 fn is_clipboard_history_excluded(history_id: u32) -> bool {
-    #[link(name = "user32")]
-    extern "system" {
-        fn OpenClipboard(hWndNewOwner: Hwnd) -> i32;
-        fn CloseClipboard() -> i32;
-        fn GetClipboardData(uFormat: u32) -> *mut std::ffi::c_void;
-    }
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GlobalLock(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-        fn GlobalUnlock(hMem: *mut std::ffi::c_void) -> i32;
-        fn GlobalSize(hMem: *mut std::ffi::c_void) -> usize;
-    }
-
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
             return false;
@@ -568,10 +455,6 @@ fn is_clipboard_history_excluded(history_id: u32) -> bool {
 }
 
 pub(super) fn clipboard_change_token() -> Option<u64> {
-    #[link(name = "user32")]
-    extern "system" {
-        fn GetClipboardSequenceNumber() -> u32;
-    }
     let seq = unsafe { GetClipboardSequenceNumber() };
     (seq != 0).then(|| u64::from(seq))
 }
@@ -605,23 +488,6 @@ pub(super) fn is_clipboard_concealed() -> bool {
 /// - `CanIncludeInClipboardHistory` = 0 (blocks Win+V local history)
 /// - `CanUploadClipboardContentToCloud` = 0 (blocks Windows Cloud Clipboard sync)
 pub(super) fn mark_clipboard_concealed() {
-    #[link(name = "user32")]
-    extern "system" {
-        fn OpenClipboard(hWndNewOwner: Hwnd) -> i32;
-        fn CloseClipboard() -> i32;
-        fn SetClipboardData(uFormat: u32, hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-    }
-
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> *mut std::ffi::c_void;
-        fn GlobalLock(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-        fn GlobalUnlock(hMem: *mut std::ffi::c_void) -> i32;
-        fn GlobalFree(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-    }
-
-    const GMEM_MOVEABLE: u32 = 0x0002;
-
     static EXCLUDE_FMT: AtomicU32 = AtomicU32::new(0);
     static HISTORY_FMT: AtomicU32 = AtomicU32::new(0);
     static CLOUD_FMT: AtomicU32 = AtomicU32::new(0);
@@ -695,7 +561,7 @@ unsafe fn captured_target_pid() -> u32 {
     let Some(prev) = load_previous_window() else {
         return 0;
     };
-    let hwnd = prev.hwnd as Hwnd;
+    let hwnd = prev.hwnd as HWND;
     if IsWindow(hwnd) != 0 {
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, &raw mut pid);
@@ -714,51 +580,11 @@ unsafe fn captured_target_pid() -> u32 {
 /// than us (normally: it runs as Administrator). UIPI silently discards the
 /// injected Ctrl+V across that boundary, so auto-paste must be skipped.
 pub(crate) fn target_is_elevated() -> bool {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn OpenProcess(
-            dwDesiredAccess: u32,
-            bInheritHandle: i32,
-            dwProcessId: u32,
-        ) -> *mut std::ffi::c_void;
-        fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
-    }
-
-    #[link(name = "advapi32")]
-    extern "system" {
-        fn OpenProcessToken(
-            ProcessHandle: *mut std::ffi::c_void,
-            DesiredAccess: u32,
-            TokenHandle: *mut *mut std::ffi::c_void,
-        ) -> i32;
-        fn GetTokenInformation(
-            TokenHandle: *mut std::ffi::c_void,
-            TokenInformationClass: i32,
-            TokenInformation: *mut std::ffi::c_void,
-            TokenInformationLength: u32,
-            ReturnLength: *mut u32,
-        ) -> i32;
-        fn GetSidSubAuthorityCount(pSid: *mut std::ffi::c_void) -> *mut u8;
-        fn GetSidSubAuthority(pSid: *mut std::ffi::c_void, nSubAuthority: u32) -> *mut u32;
-    }
-
     // TOKEN_MANDATORY_LABEL = SID_AND_ATTRIBUTES followed inline by the SID bytes.
     // Allocate a properly aligned 256-byte buffer so GetTokenInformation can store
     // both the header and the inline integrity SID without ERROR_INSUFFICIENT_BUFFER.
-    #[allow(dead_code)]
-    #[repr(C)]
-    struct SidAndAttributes {
-        sid: *mut std::ffi::c_void,
-        attributes: u32,
-    }
-
     #[repr(C, align(8))]
     struct TokenIntegrityBuf([u8; 256]);
-
-    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-    const TOKEN_QUERY: u32 = 0x0008;
-    const TOKEN_INTEGRITY_LEVEL_CLASS: i32 = 25;
-    const SECURITY_MANDATORY_MEDIUM_RID: u32 = 0x2000;
 
     unsafe fn integrity_level(pid: u32) -> Option<u32> {
         if pid == 0 {
@@ -768,7 +594,7 @@ pub(crate) fn target_is_elevated() -> bool {
         if proc.is_null() {
             return None;
         }
-        let mut token: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut token: HANDLE = std::ptr::null_mut();
         let opened = OpenProcessToken(proc, TOKEN_QUERY, &raw mut token) != 0 && !token.is_null();
         let mut level = None;
         if opened {
@@ -776,17 +602,17 @@ pub(crate) fn target_is_elevated() -> bool {
             let mut ret_len = 0u32;
             let ok = GetTokenInformation(
                 token,
-                TOKEN_INTEGRITY_LEVEL_CLASS,
+                TokenIntegrityLevel,
                 buf.0.as_mut_ptr().cast::<std::ffi::c_void>(),
                 u32::try_from(buf.0.len()).unwrap_or(256),
                 &raw mut ret_len,
             );
             if ok != 0 {
-                let info = &*std::ptr::addr_of!(buf).cast::<SidAndAttributes>();
-                if !info.sid.is_null() {
-                    let count = GetSidSubAuthorityCount(info.sid);
+                let info = &*std::ptr::addr_of!(buf).cast::<TOKEN_MANDATORY_LABEL>();
+                if !info.Label.Sid.is_null() {
+                    let count = GetSidSubAuthorityCount(info.Label.Sid);
                     if !count.is_null() && *count > 0 {
-                        let rid = GetSidSubAuthority(info.sid, u32::from(*count - 1));
+                        let rid = GetSidSubAuthority(info.Label.Sid, u32::from(*count - 1));
                         if !rid.is_null() {
                             level = Some(*rid);
                         }
@@ -804,8 +630,8 @@ pub(crate) fn target_is_elevated() -> bool {
         if target_pid == 0 {
             return false;
         }
-        let self_level =
-            integrity_level(GetCurrentProcessId()).unwrap_or(SECURITY_MANDATORY_MEDIUM_RID);
+        let self_level = integrity_level(GetCurrentProcessId())
+            .unwrap_or(SECURITY_MANDATORY_MEDIUM_RID.cast_unsigned());
         // Protected / higher-integrity processes often refuse TOKEN_QUERY.
         // Fail closed: asking the user to paste manually is safer than a
         // silent drop by UIPI.
@@ -814,17 +640,7 @@ pub(crate) fn target_is_elevated() -> bool {
 }
 
 pub(super) fn set_title_bar_dark_mode(is_dark: bool) {
-    #[link(name = "dwmapi")]
-    extern "system" {
-        fn DwmSetWindowAttribute(
-            hwnd: Hwnd,
-            dwAttribute: u32,
-            pvAttribute: *const std::ffi::c_void,
-            cbAttribute: u32,
-        ) -> i32;
-    }
     const DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1: u32 = 19;
-    const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
 
     let Some(target_hwnd) = find_main_window() else {
         return;
@@ -832,9 +648,10 @@ pub(super) fn set_title_bar_dark_mode(is_dark: bool) {
 
     unsafe {
         let value: i32 = i32::from(is_dark);
+        let attr = DWMWA_USE_IMMERSIVE_DARK_MODE.cast_unsigned();
         if DwmSetWindowAttribute(
             target_hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            attr,
             std::ptr::addr_of!(value).cast::<std::ffi::c_void>(),
             4,
         ) != 0
@@ -849,41 +666,6 @@ pub(super) fn set_title_bar_dark_mode(is_dark: bool) {
     }
 }
 
-#[repr(C)]
-struct DataBlob {
-    cb_data: u32,
-    pb_data: *mut u8,
-}
-
-#[link(name = "crypt32")]
-extern "system" {
-    fn CryptProtectData(
-        p_data_in: *const DataBlob,
-        sz_data_descr: *const u16,
-        p_optional_entropy: *const DataBlob,
-        pv_reserved: *mut std::ffi::c_void,
-        p_prompt_struct: *mut std::ffi::c_void,
-        dw_flags: u32,
-        p_data_out: *mut DataBlob,
-    ) -> i32;
-
-    fn CryptUnprotectData(
-        p_data_in: *const DataBlob,
-        ppsz_data_descr: *mut *mut u16,
-        p_optional_entropy: *const DataBlob,
-        pv_reserved: *mut std::ffi::c_void,
-        p_prompt_struct: *mut std::ffi::c_void,
-        dw_flags: u32,
-        p_data_out: *mut DataBlob,
-    ) -> i32;
-}
-
-#[link(name = "kernel32")]
-extern "system" {
-    fn LocalFree(h_mem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-}
-
-const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x01;
 const DPAPI_ENTROPY: &[u8] = b"CipherClipboard-DPAPI-v1";
 
 pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
@@ -892,17 +674,17 @@ pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let entropy_len = u32::try_from(DPAPI_ENTROPY.len())
         .map_err(|_| "DPAPI entropy length invalid".to_string())?;
 
-    let in_blob = DataBlob {
-        cb_data: in_len,
-        pb_data: plaintext.as_ptr().cast_mut(),
+    let in_blob = CRYPT_INTEGER_BLOB {
+        cbData: in_len,
+        pbData: plaintext.as_ptr().cast_mut(),
     };
-    let entropy_blob = DataBlob {
-        cb_data: entropy_len,
-        pb_data: DPAPI_ENTROPY.as_ptr().cast_mut(),
+    let entropy_blob = CRYPT_INTEGER_BLOB {
+        cbData: entropy_len,
+        pbData: DPAPI_ENTROPY.as_ptr().cast_mut(),
     };
-    let mut out_blob = DataBlob {
-        cb_data: 0,
-        pb_data: std::ptr::null_mut(),
+    let mut out_blob = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
     };
 
     let ok = unsafe {
@@ -910,21 +692,21 @@ pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
             &raw const in_blob,
             std::ptr::null(),
             &raw const entropy_blob,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
             CRYPTPROTECT_UI_FORBIDDEN,
             &raw mut out_blob,
         )
     };
-    if ok == 0 || out_blob.pb_data.is_null() {
+    if ok == 0 || out_blob.pbData.is_null() {
         return Err("Windows DPAPI CryptProtectData failed".to_string());
     }
 
-    let out_len = usize::try_from(out_blob.cb_data).unwrap_or(0);
+    let out_len = usize::try_from(out_blob.cbData).unwrap_or(0);
     let ciphertext = unsafe {
-        let slice = std::slice::from_raw_parts(out_blob.pb_data, out_len);
+        let slice = std::slice::from_raw_parts(out_blob.pbData, out_len);
         let copied = slice.to_vec();
-        let _ = LocalFree(out_blob.pb_data.cast::<std::ffi::c_void>());
+        let _ = LocalFree(out_blob.pbData.cast::<std::ffi::c_void>());
         copied
     };
     Ok(ciphertext)
@@ -938,17 +720,17 @@ pub(crate) fn dpapi_unprotect(ciphertext: &[u8]) -> Result<zeroize::Zeroizing<Ve
     let entropy_len = u32::try_from(DPAPI_ENTROPY.len())
         .map_err(|_| "DPAPI entropy length invalid".to_string())?;
 
-    let in_blob = DataBlob {
-        cb_data: in_len,
-        pb_data: ciphertext.as_ptr().cast_mut(),
+    let in_blob = CRYPT_INTEGER_BLOB {
+        cbData: in_len,
+        pbData: ciphertext.as_ptr().cast_mut(),
     };
-    let entropy_blob = DataBlob {
-        cb_data: entropy_len,
-        pb_data: DPAPI_ENTROPY.as_ptr().cast_mut(),
+    let entropy_blob = CRYPT_INTEGER_BLOB {
+        cbData: entropy_len,
+        pbData: DPAPI_ENTROPY.as_ptr().cast_mut(),
     };
-    let mut out_blob = DataBlob {
-        cb_data: 0,
-        pb_data: std::ptr::null_mut(),
+    let mut out_blob = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
     };
 
     let ok = unsafe {
@@ -956,22 +738,22 @@ pub(crate) fn dpapi_unprotect(ciphertext: &[u8]) -> Result<zeroize::Zeroizing<Ve
             &raw const in_blob,
             std::ptr::null_mut(),
             &raw const entropy_blob,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
             CRYPTPROTECT_UI_FORBIDDEN,
             &raw mut out_blob,
         )
     };
-    if ok == 0 || out_blob.pb_data.is_null() {
+    if ok == 0 || out_blob.pbData.is_null() {
         return Err("Windows DPAPI CryptUnprotectData failed".to_string());
     }
 
-    let out_len = usize::try_from(out_blob.cb_data).unwrap_or(0);
+    let out_len = usize::try_from(out_blob.cbData).unwrap_or(0);
     let plaintext = unsafe {
-        let slice = std::slice::from_raw_parts_mut(out_blob.pb_data, out_len);
+        let slice = std::slice::from_raw_parts_mut(out_blob.pbData, out_len);
         let copied = zeroize::Zeroizing::new(slice.to_vec());
         slice.zeroize();
-        let _ = LocalFree(out_blob.pb_data.cast::<std::ffi::c_void>());
+        let _ = LocalFree(out_blob.pbData.cast::<std::ffi::c_void>());
         copied
     };
     Ok(plaintext)
