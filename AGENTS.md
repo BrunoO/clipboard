@@ -2,13 +2,20 @@
 
 ## Security & Platform Hardening
 
-Before modifying crypto, database, clipboard monitoring, FFI (`src/platform.rs`), packaging, or CI workflows, read [`docs/SECURITY_LESSONS.md`](docs/SECURITY_LESSONS.md) and preserve all invariants documented there:
+Before modifying crypto, database, clipboard monitoring, FFI (`src/platform/`), packaging, or CI workflows, read [`docs/SECURITY_LESSONS.md`](docs/SECURITY_LESSONS.md) and preserve all invariants documented there:
 
-- Keep `unsafe_code = "deny"` crate-wide; confine all FFI `unsafe` code to `src/platform.rs`.
+- Keep `unsafe_code = "deny"` crate-wide; confine all FFI `unsafe` code strictly to `src/platform/macos.rs` and `src/platform/windows.rs`.
 - Never log clipboard contents or secrets in release builds; wrap in-memory secrets in `zeroize::Zeroizing`.
 - Validate URLs (`http`/`https` with host) before `webbrowser::open` and bound PNG dimensions/allocations before decoding.
 - On macOS, guard `NSApplication` calls with `is_main_thread()`, wrap ObjC calls in `autoreleasepool`, filter `[ns_app windows]` with `canBecomeMainWindow`, and never mutate windows re-entrantly inside `NSNotificationCenter` callbacks.
 - Pin all GitHub Actions to full commit SHAs with least-privilege job-level `permissions:`.
+
+## Multiplatform Organization
+
+Before adding OS-specific behavior, FFI bindings, or cross-platform UI/dependency upgrades, read [`docs/MULTIPLATFORM_LESSONS.md`](docs/MULTIPLATFORM_LESSONS.md) and preserve all invariants documented there:
+
+- Keep `src/platform/mod.rs` and `src/platform/linux.rs` 100% safe Rust; expose single-OS APIs via `platform::windows::*` / `platform::macos::*` and use OS-agnostic names for cross-platform capabilities.
+- Standardize on `#[cfg(target_os = "windows")]` (use `#[cfg(unix)]` only for POSIX APIs), collapse repetitive theme `#[cfg]` blocks via `platform_select`, and keep unit tests host/layout-agnostic.
 
 ## Concurrency & Performance
 

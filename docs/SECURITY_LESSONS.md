@@ -33,7 +33,7 @@ Distilled from the CipherClipboard security & cross-platform hardening reviews. 
 
 ## 4. Platform FFI, `unsafe`, & Window Lifecycle Safety
 
-- **Isolate `unsafe` behind crate-wide `#![deny(unsafe_code)]`.** Allow `unsafe_code` only in the single FFI boundary module (`src/platform.rs`), keeping application/UI/DB logic 100% safe Rust.
+- **Isolate `unsafe` behind crate-wide `#![deny(unsafe_code)]`.** Allow `unsafe_code` only in the OS FFI backend modules (`src/platform/macos.rs` and `src/platform/windows.rs`), keeping `src/platform/mod.rs`, `src/platform/linux.rs`, and all application/UI/DB logic 100% safe Rust.
 - **Never mutate private OS windows or call AppKit re-entrantly.** On macOS, `[NSApplication windows]` includes AppKit's private internal windows (Touch Bar panels, tooltips, popovers). Filter with `canBecomeMainWindow` before ordering front, guard `NSApplication` calls with `is_main_thread()`, wrap ObjC allocations in `objc::rc::autoreleasepool`, and defer window ordering out of `NSNotificationCenter` callbacks to avoid `_NSTouchBarFinderObservation` KVO crashes.
 - **Use checked integer conversions and explicit raw pointers (`&raw mut`) at FFI boundaries** to prevent truncation, sign-loss, and alignment UB.
 
