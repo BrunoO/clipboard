@@ -107,6 +107,40 @@ pub(crate) enum ActiveView {
     Settings,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct FilterCounts {
+    all: usize,
+    text: usize,
+    links: usize,
+    code: usize,
+    colors: usize,
+    secrets: usize,
+    images: usize,
+}
+
+impl FilterCounts {
+    fn from_items(items: &[ClipboardItem]) -> Self {
+        let mut counts = Self {
+            all: items.len(),
+            ..Self::default()
+        };
+        for item in items {
+            match item.kind {
+                ItemKind::Text => counts.text += 1,
+                ItemKind::Url => counts.links += 1,
+                ItemKind::Code => counts.code += 1,
+                ItemKind::Color => counts.colors += 1,
+                ItemKind::Secret => counts.secrets += 1,
+                ItemKind::Image => counts.images += 1,
+            }
+            if item.kind != ItemKind::Color && !item.embedded_colors().is_empty() {
+                counts.colors += 1;
+            }
+        }
+        counts
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct ClipboardApp {
     db: Database,
@@ -114,6 +148,7 @@ pub(crate) struct ClipboardApp {
     search_query: String,
     content_filter: ContentFilter,
     items: Vec<ClipboardItem>,
+    filter_counts: FilterCounts,
     clipboard_writer: Option<Clipboard>,
     toast: Option<(String, Instant)>,
     pending_toast: Option<String>,
@@ -198,12 +233,14 @@ impl ClipboardApp {
             settings.generator_skip_history,
             settings.generator_reveal_value,
         );
+        let filter_counts = FilterCounts::from_items(&initial_items);
         Self {
             db,
             key_storage_mode,
             search_query: String::new(),
             content_filter: ContentFilter::All,
             items: initial_items,
+            filter_counts,
             clipboard_writer,
             toast: startup_toast,
             pending_toast: None,
@@ -255,6 +292,7 @@ impl ClipboardApp {
             .db
             .get_recent(self.settings.max_history, filter)
             .unwrap_or_default();
+        self.filter_counts = FilterCounts::from_items(&self.items);
         let active_ids: HashSet<i64> = self.items.iter().map(|it| it.id).collect();
         self.texture_cache.retain_active(&active_ids);
     }
@@ -861,47 +899,32 @@ impl ClipboardApp {
 
     fn render_filter_tabs(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         let old_filter = self.content_filter;
-        let all_count = self.items.len();
-        let text_count = self
-            .items
-            .iter()
-            .filter(|i| i.kind == ItemKind::Text)
-            .count();
-        let link_count = self
-            .items
-            .iter()
-            .filter(|i| i.kind == ItemKind::Url)
-            .count();
-        let code_count = self
-            .items
-            .iter()
-            .filter(|i| i.kind == ItemKind::Code)
-            .count();
-        let color_count = self
-            .items
-            .iter()
-            .filter(|i| i.kind == ItemKind::Color || !i.embedded_colors().is_empty())
-            .count();
-        let secret_count = self
-            .items
-            .iter()
-            .filter(|i| i.kind == ItemKind::Secret)
-            .count();
-        let img_count = self
-            .items
-            .iter()
-            .filter(|i| i.kind == ItemKind::Image)
-            .count();
+        let counts = self.filter_counts;
 
         ui.horizontal_wrapped(|ui| {
             let tabs = [
-                (ContentFilter::All, icons::STACK, "All", all_count),
-                (ContentFilter::Text, icons::FILE_TEXT, "Text", text_count),
-                (ContentFilter::Links, icons::LINK, "Links", link_count),
-                (ContentFilter::Code, icons::CODE, "Code", code_count),
-                (ContentFilter::Colors, icons::PALETTE, "Colors", color_count),
-                (ContentFilter::Secrets, icons::LOCK, "Secrets", secret_count),
-                (ContentFilter::Image, icons::IMAGE, "Images", img_count),
+                (ContentFilter::All, icons::STACK, "All", counts.all),
+                (ContentFilter::Text, icons::FILE_TEXT, "Text", counts.text),
+                (ContentFilter::Links, icons::LINK, "Links", counts.links),
+                (ContentFilter::Code, icons::CODE, "Code", counts.code),
+                (
+                    ContentFilter::Colors,
+                    icons::PALETTE,
+                    "Colors",
+                    counts.colors,
+                ),
+                (
+                    ContentFilter::Secrets,
+                    icons::LOCK,
+                    "Secrets",
+                    counts.secrets,
+                ),
+                (
+                    ContentFilter::Image,
+                    icons::IMAGE,
+                    "Images",
+                    counts.images,
+                ),
             ];
 
             for (target, icon, label, count) in tabs {
@@ -1674,6 +1697,7 @@ mod tests {
             search_query: String::new(),
             content_filter: super::ContentFilter::All,
             items: Vec::new(),
+            filter_counts: super::FilterCounts::default(),
             clipboard_writer: None,
             toast: None,
             pending_toast: None,

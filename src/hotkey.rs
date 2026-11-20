@@ -412,9 +412,18 @@ mod linux_x11_fallback {
             KeyButMask::CONTROL | KeyButMask::SHIFT | KeyButMask::MOD4 | KeyButMask::MOD1;
 
         loop {
-            poll_x11_key_events(&conn, &grabs, full_mask, hotkey_tx, ctx);
+            if !grabs.is_empty() {
+                poll_x11_key_events(&conn, &grabs, full_mask, hotkey_tx, ctx);
+            }
 
-            match rx.recv_timeout(Duration::from_millis(50)) {
+            let next_msg = if grabs.is_empty() {
+                // Zero idle wakeups while no fallback Quote hotkey is registered.
+                rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+            } else {
+                rx.recv_timeout(Duration::from_millis(50))
+            };
+
+            match next_msg {
                 Ok(msg) => {
                     if !handle_x11_msg(&conn, root, &mut grabs, msg) {
                         return;

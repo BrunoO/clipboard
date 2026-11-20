@@ -148,11 +148,11 @@ fn poll_clipboard_text(
         Err(arboard::Error::ClipboardOccupied) => return PollOutcome::Occupied,
         Err(_) => return PollOutcome::NotAvailable,
     };
-    if text.trim().is_empty()
-        || text.len() > MAX_TEXT_LENGTH
-        || state.last_copied_text.as_deref() == Some(text.as_str())
-    {
+    if text.trim().is_empty() {
         return PollOutcome::NotAvailable;
+    }
+    if text.len() > MAX_TEXT_LENGTH || state.last_copied_text.as_deref() == Some(text.as_str()) {
+        return PollOutcome::Handled;
     }
 
     state.last_copied_text = Some(text.clone());
