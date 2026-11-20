@@ -148,17 +148,7 @@ impl ClipboardApp {
                     ItemAction::CopyImage(png_bytes) => {
                         self.copy_image_to_clipboard(&png_bytes, ctx);
                     }
-                    ItemAction::OpenBrowser(url) => {
-                        if let Err(e) = webbrowser::open(&url) {
-                            eprintln!("Failed to open link in browser: {e}");
-                            self.show_toast(&format!("{} Failed to open browser.", icons::WARNING));
-                        } else {
-                            self.show_toast(&format!(
-                                "{} Opened in default browser!",
-                                icons::ARROW_SQUARE_OUT
-                            ));
-                        }
-                    }
+                    ItemAction::OpenBrowser(url) => self.open_url_in_browser(&url),
                     ItemAction::ToggleSecret(id, make_secret) => {
                         let _ = self.db.set_item_secret(id, make_secret);
                         if !make_secret {
@@ -187,6 +177,25 @@ impl ClipboardApp {
                     ItemAction::None => {}
                 }
             });
+    }
+
+    fn open_url_in_browser(&mut self, raw_url: &str) {
+        let Some(safe_url) = sanitize_browser_url(raw_url) else {
+            self.show_toast(&format!(
+                "{} Blocked invalid or unsupported URL scheme.",
+                icons::WARNING
+            ));
+            return;
+        };
+        if let Err(e) = webbrowser::open(&safe_url) {
+            eprintln!("Failed to open link in browser: {e}");
+            self.show_toast(&format!("{} Failed to open browser.", icons::WARNING));
+        } else {
+            self.show_toast(&format!(
+                "{} Opened in default browser!",
+                icons::ARROW_SQUARE_OUT
+            ));
+        }
     }
 
     fn render_clipboard_item(
@@ -989,5 +998,43 @@ impl ClipboardApp {
         }
 
         ItemAction::None
+    }
+}
+
+/// Validates and normalizes a URL before passing it to the OS browser launcher.
+/// Only `http` and `https` URLs with a non-empty host are permitted.
+fn sanitize_browser_url(raw: &str) -> Option<String> {
+    let parsed = url::Url::parse(raw.trim()).ok()?;
+    if matches!(parsed.scheme(), "http" | "https") && parsed.has_host() {
+        Some(parsed.into())
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_browser_url;
+
+    #[test]
+    fn test_sanitize_browser_url_allows_http_and_https() {
+        assert_eq!(
+            sanitize_browser_url("  https://github.com/BrunoO/clipboard  ").as_deref(),
+            Some("https://github.com/BrunoO/clipboard")
+        );
+        assert_eq!(
+            sanitize_browser_url("http://localhost:8080/path?a=1").as_deref(),
+            Some("http://localhost:8080/path?a=1")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_browser_url_blocks_non_http_schemes() {
+        assert!(sanitize_browser_url("file:///etc/passwd").is_none());
+        assert!(sanitize_browser_url("javascript:alert(1)").is_none());
+        assert!(sanitize_browser_url("ms-msdt:/id PCWDiagnostic").is_none());
+        assert!(sanitize_browser_url("ftp://files.example.com/archive.zip").is_none());
+        assert!(sanitize_browser_url("--new-window https://example.com").is_none());
+        assert!(sanitize_browser_url("https://").is_none());
     }
 }
