@@ -140,38 +140,29 @@ pub(crate) fn setup_fonts(fonts: &mut FontDefinitions) {
 // Platform-Adaptive Color Palette (Dark & Light)
 // ---------------------------------------------------------------------------
 
+const fn platform_select<T: Copy>(macos: T, windows: T, other: T) -> T {
+    let _ = (macos, windows, other);
+    #[cfg(target_os = "macos")]
+    {
+        macos
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        other
+    }
+}
+
 const fn themed_platform_color(
     is_dark: bool,
     dark: (Color32, Color32, Color32),
     light: (Color32, Color32, Color32),
 ) -> Color32 {
-    if is_dark {
-        #[cfg(target_os = "macos")]
-        {
-            dark.0
-        }
-        #[cfg(target_os = "windows")]
-        {
-            dark.1
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            dark.2
-        }
-    } else {
-        #[cfg(target_os = "macos")]
-        {
-            light.0
-        }
-        #[cfg(target_os = "windows")]
-        {
-            light.1
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            light.2
-        }
-    }
+    let palette = if is_dark { dark } else { light };
+    platform_select(palette.0, palette.1, palette.2)
 }
 
 /// Primary window and panel background color.
@@ -195,48 +186,27 @@ pub(crate) const fn panel_background(is_dark: bool) -> Color32 {
 /// Background fill for item cards.
 #[must_use]
 pub(crate) const fn card_fill(is_dark: bool, is_selected: bool) -> Color32 {
-    if is_dark {
-        if is_selected {
-            #[cfg(target_os = "macos")]
-            {
-                Color32::from_rgb(30, 58, 95)
-            }
-            #[cfg(target_os = "windows")]
-            {
-                Color32::from_rgb(29, 54, 74)
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            {
-                Color32::from_rgb(31, 56, 88)
-            }
-        } else {
-            #[cfg(target_os = "macos")]
-            {
-                Color32::from_rgb(40, 40, 43)
-            }
-            #[cfg(target_os = "windows")]
-            {
-                Color32::from_rgb(43, 43, 43)
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            {
-                Color32::from_rgb(46, 46, 48)
-            }
-        }
-    } else if is_selected {
-        #[cfg(target_os = "macos")]
-        {
-            // Soft Apple blue selection in light mode (#E5F0FF)
-            Color32::from_rgb(229, 240, 255)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Color32::from_rgb(232, 242, 251)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Color32::from_rgb(228, 240, 255)
-        }
+    if is_selected {
+        themed_platform_color(
+            is_dark,
+            (
+                Color32::from_rgb(30, 58, 95),
+                Color32::from_rgb(29, 54, 74),
+                Color32::from_rgb(31, 56, 88),
+            ),
+            (
+                // Soft Apple blue selection in light mode (#E5F0FF)
+                Color32::from_rgb(229, 240, 255),
+                Color32::from_rgb(232, 242, 251),
+                Color32::from_rgb(228, 240, 255),
+            ),
+        )
+    } else if is_dark {
+        platform_select(
+            Color32::from_rgb(40, 40, 43),
+            Color32::from_rgb(43, 43, 43),
+            Color32::from_rgb(46, 46, 48),
+        )
     } else {
         // Pure crisp white card in light mode (#FFFFFF)
         Color32::WHITE
@@ -248,32 +218,23 @@ pub(crate) const fn card_fill(is_dark: bool, is_selected: bool) -> Color32 {
 pub(crate) fn card_stroke(is_dark: bool, is_selected: bool) -> Stroke {
     if is_selected {
         Stroke::new(1.5_f32, accent_color(is_dark))
-    } else if is_dark {
-        #[cfg(target_os = "macos")]
-        {
-            Stroke::new(1.0_f32, Color32::from_rgb(72, 72, 78))
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Stroke::new(1.0_f32, Color32::from_rgb(64, 64, 68))
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Stroke::new(1.0_f32, Color32::from_rgb(72, 72, 78))
-        }
     } else {
-        #[cfg(target_os = "macos")]
-        {
-            Stroke::new(1.0_f32, Color32::from_rgb(210, 210, 218))
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Stroke::new(1.0_f32, Color32::from_rgb(218, 218, 222))
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Stroke::new(1.0_f32, Color32::from_rgb(210, 210, 218))
-        }
+        Stroke::new(
+            1.0_f32,
+            themed_platform_color(
+                is_dark,
+                (
+                    Color32::from_rgb(72, 72, 78),
+                    Color32::from_rgb(64, 64, 68),
+                    Color32::from_rgb(72, 72, 78),
+                ),
+                (
+                    Color32::from_rgb(210, 210, 218),
+                    Color32::from_rgb(218, 218, 222),
+                    Color32::from_rgb(210, 210, 218),
+                ),
+            ),
+        )
     }
 }
 
@@ -353,18 +314,11 @@ pub(crate) fn search_stroke(is_dark: bool, is_focused: bool) -> Stroke {
 #[must_use]
 pub(crate) const fn button_inactive_fill(is_dark: bool) -> Color32 {
     if is_dark {
-        #[cfg(target_os = "macos")]
-        {
-            Color32::from_rgb(46, 46, 50)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Color32::from_rgb(45, 45, 45)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Color32::from_rgb(48, 48, 50)
-        }
+        platform_select(
+            Color32::from_rgb(46, 46, 50),
+            Color32::from_rgb(45, 45, 45),
+            Color32::from_rgb(48, 48, 50),
+        )
     } else {
         Color32::WHITE
     }
@@ -374,18 +328,11 @@ pub(crate) const fn button_inactive_fill(is_dark: bool) -> Color32 {
 #[must_use]
 pub(crate) const fn button_hover_fill(is_dark: bool) -> Color32 {
     if is_dark {
-        #[cfg(target_os = "macos")]
-        {
-            Color32::from_rgb(64, 64, 70)
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Color32::from_rgb(56, 56, 56)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Color32::from_rgb(58, 58, 60)
-        }
+        platform_select(
+            Color32::from_rgb(64, 64, 70),
+            Color32::from_rgb(56, 56, 56),
+            Color32::from_rgb(58, 58, 60),
+        )
     } else {
         Color32::from_rgb(240, 240, 244)
     }
@@ -532,95 +479,37 @@ pub(crate) fn ensure_contrast(mut fg: Color32, bg: Color32, min_contrast: f32) -
 /// Corner rounding for clipboard item cards.
 #[must_use]
 pub(crate) const fn card_rounding() -> CornerRadius {
-    #[cfg(target_os = "macos")]
-    {
-        CornerRadius::same(10)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        CornerRadius::same(6)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        CornerRadius::same(8)
-    }
+    CornerRadius::same(platform_select(10, 6, 8))
 }
 
 /// Corner rounding for search bars.
 #[must_use]
 pub(crate) const fn search_rounding() -> CornerRadius {
-    #[cfg(target_os = "macos")]
-    {
-        CornerRadius::same(8)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        CornerRadius::same(4)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        CornerRadius::same(6)
-    }
+    CornerRadius::same(platform_select(8, 4, 6))
 }
 
 /// Corner rounding for standard buttons.
 #[must_use]
 pub(crate) const fn button_rounding() -> CornerRadius {
-    #[cfg(target_os = "macos")]
-    {
-        CornerRadius::same(6)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        CornerRadius::same(4)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        CornerRadius::same(6)
-    }
+    CornerRadius::same(platform_select(6, 4, 6))
 }
 
 /// Corner rounding for pills and badges.
 #[must_use]
 pub(crate) const fn pill_rounding() -> CornerRadius {
-    #[cfg(target_os = "macos")]
-    {
-        CornerRadius::same(12)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        CornerRadius::same(4)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        CornerRadius::same(8)
-    }
+    CornerRadius::same(platform_select(12, 4, 8))
 }
 
 /// Left padding for the top header row on macOS to avoid traffic lights.
 #[must_use]
 pub(crate) const fn header_left_padding() -> f32 {
-    #[cfg(target_os = "macos")]
-    {
-        68.0_f32
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        0.0_f32
-    }
+    platform_select(68.0_f32, 0.0_f32, 0.0_f32)
 }
 
 /// Top space for the main header panel.
 #[must_use]
 pub(crate) const fn top_padding() -> f32 {
-    #[cfg(target_os = "macos")]
-    {
-        10.0_f32
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        6.0_f32
-    }
+    platform_select(10.0_f32, 6.0_f32, 6.0_f32)
 }
 
 // ---------------------------------------------------------------------------
