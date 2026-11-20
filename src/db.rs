@@ -334,9 +334,8 @@ impl Database {
 
         // 1. Check if the most recent entry has the exact same content
         {
-            let mut stmt = tx.prepare(
-                "SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1",
-            )?;
+            let mut stmt =
+                tx.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
             let mut rows = stmt.query([])?;
             if let Some(row) = rows.next()? {
                 let last_kind: String = row.get(0)?;
@@ -384,9 +383,8 @@ impl Database {
         let tx = conn.transaction()?;
 
         {
-            let mut stmt = tx.prepare(
-                "SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1",
-            )?;
+            let mut stmt =
+                tx.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
             let mut rows = stmt.query([])?;
             if let Some(row) = rows.next()? {
                 let last_kind: String = row.get(0)?;
