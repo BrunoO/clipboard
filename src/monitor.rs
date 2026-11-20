@@ -4,7 +4,7 @@ use arboard::Clipboard;
 use eframe::egui;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender};
 use std::thread;
 use std::time::Duration;
 
@@ -38,63 +38,66 @@ fn compute_image_fingerprint(width: usize, height: usize, rgba: &[u8]) -> u64 {
 pub(crate) fn start_clipboard_monitor(
     db: Database,
     ctx: egui::Context,
-    notify_tx: Sender<()>,
-) -> (thread::JoinHandle<()>, Sender<()>) {
+    notify_tx: SyncSender<()>,
+) -> (Option<thread::JoinHandle<()>>, Sender<()>) {
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
-    let handle = thread::spawn(move || {
-        let Some(mut clipboard) = init_clipboard_with_retry(&shutdown_rx) else {
-            return;
-        };
+    let handle = thread::Builder::new()
+        .name("clipboard-monitor".to_string())
+        .spawn(move || {
+            let Some(mut clipboard) = init_clipboard_with_retry(&shutdown_rx) else {
+                return;
+            };
 
-        let mut state = MonitorState::default();
+            let mut state = MonitorState::default();
 
-        println!("👀 Clipboard monitor active (polling every 200ms for text & images)...");
+            println!("👀 Clipboard monitor active (polling every 200ms for text & images)...");
 
-        loop {
-            // Wait for POLL_INTERVAL, waking immediately if a shutdown signal arrives
-            match shutdown_rx.recv_timeout(POLL_INTERVAL) {
-                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    println!("👀 Clipboard monitor shutting down...");
-                    break;
+            loop {
+                // Wait for POLL_INTERVAL, waking immediately if a shutdown signal arrives
+                match shutdown_rx.recv_timeout(POLL_INTERVAL) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        println!("👀 Clipboard monitor shutting down...");
+                        break;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            }
 
-            // Fast path: when the OS exposes a monotonic clipboard change counter
-            // (macOS NSPasteboard.changeCount, Windows GetClipboardSequenceNumber),
-            // skip all clipboard reads/allocations/hashing when nothing has changed.
-            let change_token = crate::platform::clipboard_change_token();
-            if change_token.is_some() && state.change_token == change_token {
-                continue;
-            }
+                // Fast path: when the OS exposes a monotonic clipboard change counter
+                // (macOS NSPasteboard.changeCount, Windows GetClipboardSequenceNumber),
+                // skip all clipboard reads/allocations/hashing when nothing has changed.
+                let change_token = crate::platform::clipboard_change_token();
+                if change_token.is_some() && state.change_token == change_token {
+                    continue;
+                }
 
-            // Skip processing if marked as concealed/transient by password managers
-            if db.ignore_concealed() && crate::platform::is_clipboard_concealed() {
-                state.change_token = change_token;
-                continue;
-            }
-
-            match poll_clipboard_text(&mut clipboard, &db, &notify_tx, &ctx, &mut state) {
-                PollOutcome::Handled => {
+                // Skip processing if marked as concealed/transient by password managers
+                if db.ignore_concealed() && crate::platform::is_clipboard_concealed() {
                     state.change_token = change_token;
                     continue;
                 }
-                PollOutcome::Occupied => {
-                    // Clipboard is transiently locked by another process; retry next tick.
-                    continue;
-                }
-                PollOutcome::NotAvailable => {}
-            }
 
-            match poll_clipboard_image(&mut clipboard, &db, &notify_tx, &ctx, &mut state) {
-                PollOutcome::Handled | PollOutcome::NotAvailable => {
-                    state.change_token = change_token;
+                match poll_clipboard_text(&mut clipboard, &db, &notify_tx, &ctx, &mut state) {
+                    PollOutcome::Handled => {
+                        state.change_token = change_token;
+                        continue;
+                    }
+                    PollOutcome::Occupied => {
+                        // Clipboard is transiently locked by another process; retry next tick.
+                        continue;
+                    }
+                    PollOutcome::NotAvailable => {}
                 }
-                PollOutcome::Occupied => {}
+
+                match poll_clipboard_image(&mut clipboard, &db, &notify_tx, &ctx, &mut state) {
+                    PollOutcome::Handled | PollOutcome::NotAvailable => {
+                        state.change_token = change_token;
+                    }
+                    PollOutcome::Occupied => {}
+                }
             }
-        }
-    });
+        })
+        .ok();
 
     (handle, shutdown_tx)
 }
@@ -136,7 +139,7 @@ fn init_clipboard_with_retry(shutdown_rx: &std::sync::mpsc::Receiver<()>) -> Opt
 fn poll_clipboard_text(
     clipboard: &mut Clipboard,
     db: &Database,
-    notify_tx: &Sender<()>,
+    notify_tx: &SyncSender<()>,
     ctx: &egui::Context,
     state: &mut MonitorState,
 ) -> PollOutcome {
@@ -162,7 +165,7 @@ fn poll_clipboard_text(
     match db.insert(&text) {
         Ok(Some(id)) => {
             log_captured_text(id, &text);
-            let _ = notify_tx.send(());
+            let _ = notify_tx.try_send(());
             ctx.request_repaint();
         }
         Ok(None) => {}
@@ -176,7 +179,7 @@ fn poll_clipboard_text(
 fn poll_clipboard_image(
     clipboard: &mut Clipboard,
     db: &Database,
-    notify_tx: &Sender<()>,
+    notify_tx: &SyncSender<()>,
     ctx: &egui::Context,
     state: &mut MonitorState,
 ) -> PollOutcome {
@@ -219,7 +222,7 @@ fn poll_clipboard_image(
             println!("🖼️ Captured new image clipboard entry [id: {id}] ({width}x{height})");
             #[cfg(not(debug_assertions))]
             let _ = id;
-            let _ = notify_tx.send(());
+            let _ = notify_tx.try_send(());
             ctx.request_repaint();
         }
         Ok(None) => {}

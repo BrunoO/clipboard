@@ -140,9 +140,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     crate::platform::log_message("INFO", "CipherClipboard starting");
 
-    // 7. Setup inter-thread channels
-    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
-    let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
+    // 7. Setup inter-thread channels (bounded capacity 1 for coalesced wakeup signals)
+    let (notify_tx, notify_rx) = std::sync::mpsc::sync_channel(1);
+    let (hotkey_tx, hotkey_rx) = std::sync::mpsc::sync_channel(1);
     let (tray_tx, tray_rx) = std::sync::mpsc::channel();
 
     // 8. Start GUI, global hotkeys, system tray, and background monitor
@@ -181,7 +181,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Start background clipboard polling thread
             let monitor_db = db.clone();
             let monitor_ctx = cc.egui_ctx.clone();
-            let (_monitor_handle, monitor_shutdown_tx) =
+            let (monitor_handle, monitor_shutdown_tx) =
                 monitor::start_clipboard_monitor(monitor_db, monitor_ctx, notify_tx);
 
             Ok(Box::new(ClipboardApp::new(
@@ -195,6 +195,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 tray_service,
                 settings,
                 monitor_shutdown_tx,
+                monitor_handle,
             )))
         }),
     );

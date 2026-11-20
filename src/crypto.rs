@@ -216,7 +216,9 @@ pub(crate) mod mock_keyring {
     where
         F: FnOnce(&mut MockKeyringState) -> R,
     {
-        let mut guard = MOCK_KEYRING.lock().unwrap();
+        let mut guard = MOCK_KEYRING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if guard.is_none() {
             *guard = Some(MockKeyringState::default());
         }
@@ -224,7 +226,9 @@ pub(crate) mod mock_keyring {
     }
 
     pub(crate) fn reset() {
-        let mut guard = MOCK_KEYRING.lock().unwrap();
+        let mut guard = MOCK_KEYRING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = Some(MockKeyringState::default());
     }
 

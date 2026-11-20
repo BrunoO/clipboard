@@ -457,7 +457,7 @@ mod macos {
     static REOPEN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
     pub(super) fn take_reopen_requested() -> bool {
-        REOPEN_REQUESTED.swap(false, Ordering::SeqCst)
+        REOPEN_REQUESTED.swap(false, Ordering::AcqRel)
     }
 
     /// `AppKit`'s `[NSApplication sharedApplication]` asserts it is called on the
@@ -541,16 +541,17 @@ mod macos {
         // Defer window ordering to the next egui frame (ClipboardApp::update checks
         // take_reopen_requested()) instead of mutating AppKit windows re-entrantly
         // inside NSNotificationCenter activation/unhide callbacks.
-        REOPEN_REQUESTED.store(true, Ordering::SeqCst);
+        REOPEN_REQUESTED.store(true, Ordering::Release);
         super::request_repaint();
     }
 
-    // Wrapper to allow storing raw pointer in static (only accessed from main thread)
-    struct ObserverPtr(*mut Object);
-    unsafe impl Send for ObserverPtr {}
-    unsafe impl Sync for ObserverPtr {}
-
-    static REOPEN_OBSERVER: std::sync::Mutex<Option<ObserverPtr>> = std::sync::Mutex::new(None);
+    // Strictly main-thread-only (guarded by is_main_thread()), so a thread_local
+    // avoids needing unsafe Send/Sync impls or a Mutex.
+    thread_local! {
+        static REOPEN_OBSERVER: std::cell::Cell<*mut Object> = const {
+            std::cell::Cell::new(std::ptr::null_mut())
+        };
+    }
 
     pub(super) fn setup_reopen_observer() {
         if !is_main_thread() {
@@ -608,9 +609,7 @@ mod macos {
                 }
 
                 // Store observer for later cleanup
-                if let Ok(mut lock) = REOPEN_OBSERVER.lock() {
-                    *lock = Some(ObserverPtr(observer));
-                }
+                REOPEN_OBSERVER.with(|cell| cell.set(observer));
             });
         });
     }
@@ -619,8 +618,8 @@ mod macos {
         if !is_main_thread() {
             return;
         }
-        let observer = REOPEN_OBSERVER.lock().ok().and_then(|mut lock| lock.take());
-        if let Some(ObserverPtr(observer)) = observer {
+        let observer = REOPEN_OBSERVER.with(|cell| cell.replace(std::ptr::null_mut()));
+        if !observer.is_null() {
             objc::rc::autoreleasepool(|| unsafe {
                 let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
                 if !center.is_null() {
@@ -629,6 +628,11 @@ mod macos {
                 let _: () = msg_send![observer, release];
             });
         }
+        // Release the cloned egui::Context held in the global static on shutdown.
+        let mut lock = super::REPAINT_CTX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *lock = None;
     }
 
     #[link(name = "ApplicationServices", kind = "framework")]
@@ -697,7 +701,7 @@ mod macos {
             let our_pid = std::process::id() as i32;
 
             if pid > 0 && pid != our_pid {
-                PREVIOUS_APP_PID.store(pid, Ordering::SeqCst);
+                PREVIOUS_APP_PID.store(pid, Ordering::Relaxed);
             }
         });
     }
@@ -707,7 +711,7 @@ mod macos {
         // the restore/paste worker thread. Calling [NSApplication sharedApplication]
         // from a background thread violates AppKit's main-thread contract (SIGTRAP).
         objc::rc::autoreleasepool(|| unsafe {
-            let pid = PREVIOUS_APP_PID.load(Ordering::SeqCst);
+            let pid = PREVIOUS_APP_PID.load(Ordering::Relaxed);
             if pid > 0 {
                 let target_app: *mut Object = msg_send![
                     class!(NSRunningApplication),
@@ -726,7 +730,7 @@ mod macos {
     }
 
     pub(super) fn is_target_foreground() -> bool {
-        let target_pid = PREVIOUS_APP_PID.load(Ordering::SeqCst);
+        let target_pid = PREVIOUS_APP_PID.load(Ordering::Relaxed);
         if target_pid <= 0 {
             return false;
         }
@@ -1479,9 +1483,6 @@ mod windows {
     /// - `CanIncludeInClipboardHistory` = 0 (blocks Win+V local history)
     /// - `CanUploadClipboardContentToCloud` = 0 (blocks Windows Cloud Clipboard sync)
     pub(super) fn mark_clipboard_concealed() {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-
         #[link(name = "user32")]
         extern "system" {
             fn OpenClipboard(hWndNewOwner: Hwnd) -> i32;
@@ -1500,12 +1501,12 @@ mod windows {
 
         const GMEM_MOVEABLE: u32 = 0x0002;
 
-        unsafe fn set_zero_dword_format(name: &str) {
-            let wide: Vec<u16> = OsStr::new(name)
-                .encode_wide()
-                .chain(std::iter::once(0))
-                .collect();
-            let fmt = RegisterClipboardFormatW(wide.as_ptr());
+        static EXCLUDE_FMT: AtomicU32 = AtomicU32::new(0);
+        static HISTORY_FMT: AtomicU32 = AtomicU32::new(0);
+        static CLOUD_FMT: AtomicU32 = AtomicU32::new(0);
+
+        unsafe fn set_zero_dword_format(cache: &AtomicU32, name: &str) {
+            let fmt = cached_clipboard_format(cache, name);
             if fmt == 0 {
                 return;
             }
@@ -1529,9 +1530,9 @@ mod windows {
             if OpenClipboard(std::ptr::null_mut()) == 0 {
                 return;
             }
-            set_zero_dword_format("ExcludeClipboardContentFromMonitorProcessing");
-            set_zero_dword_format("CanIncludeInClipboardHistory");
-            set_zero_dword_format("CanUploadClipboardContentToCloud");
+            set_zero_dword_format(&EXCLUDE_FMT, "ExcludeClipboardContentFromMonitorProcessing");
+            set_zero_dword_format(&HISTORY_FMT, "CanIncludeInClipboardHistory");
+            set_zero_dword_format(&CLOUD_FMT, "CanUploadClipboardContentToCloud");
             let _ = CloseClipboard();
         }
     }

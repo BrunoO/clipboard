@@ -141,6 +141,7 @@ pub(crate) struct ClipboardApp {
     current_is_dark: Option<bool>,
     title_bar_dark_mode: Option<bool>,
     monitor_shutdown_tx: Sender<()>,
+    monitor_handle: Option<std::thread::JoinHandle<()>>,
     recording_custom_hotkey: bool,
     pending_custom_hotkey: String,
     is_quitting: bool,
@@ -163,6 +164,7 @@ impl ClipboardApp {
         tray_service: Option<TrayService>,
         settings: AppSettings,
         monitor_shutdown_tx: Sender<()>,
+        monitor_handle: Option<std::thread::JoinHandle<()>>,
     ) -> Self {
         db.set_max_history(settings.max_history);
         db.set_ignore_concealed(settings.ignore_concealed);
@@ -230,6 +232,7 @@ impl ClipboardApp {
             recording_custom_hotkey: false,
             pending_custom_hotkey: String::new(),
             monitor_shutdown_tx,
+            monitor_handle,
             is_quitting: false,
             show_keyring_explanation: false,
             last_drag_or_move_instant: None,
@@ -1418,6 +1421,9 @@ impl Drop for ClipboardApp {
             hotkey.shutdown();
         }
         let _ = self.monitor_shutdown_tx.send(());
+        if let Some(handle) = self.monitor_handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -1696,6 +1702,7 @@ mod tests {
             recording_custom_hotkey: false,
             pending_custom_hotkey: String::new(),
             monitor_shutdown_tx: shutdown_tx,
+            monitor_handle: None,
             is_quitting: false,
             show_keyring_explanation: false,
             last_drag_or_move_instant: None,

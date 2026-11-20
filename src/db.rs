@@ -100,15 +100,17 @@ impl ClipboardItem {
     }
 }
 
+struct DatabaseInner {
+    conn: Mutex<Connection>,
+    max_history: AtomicUsize,
+    ignore_concealed: AtomicBool,
+    auto_detect_secrets: AtomicBool,
+    transient_text: Mutex<Option<zeroize::Zeroizing<String>>>,
+}
+
 /// Thread-safe handle to the encrypted `SQLCipher` database.
 #[derive(Clone)]
-pub(crate) struct Database {
-    conn: Arc<Mutex<Connection>>,
-    max_history: Arc<AtomicUsize>,
-    ignore_concealed: Arc<AtomicBool>,
-    auto_detect_secrets: Arc<AtomicBool>,
-    transient_text: Arc<Mutex<Option<zeroize::Zeroizing<String>>>>,
-}
+pub(crate) struct Database(Arc<DatabaseInner>);
 
 impl std::fmt::Debug for Database {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -180,18 +182,18 @@ impl Database {
             }
         }
 
-        Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
-            max_history: Arc::new(AtomicUsize::new(100)),
-            ignore_concealed: Arc::new(AtomicBool::new(true)),
-            auto_detect_secrets: Arc::new(AtomicBool::new(true)),
-            transient_text: Arc::new(Mutex::new(None)),
-        })
+        Ok(Self(Arc::new(DatabaseInner {
+            conn: Mutex::new(conn),
+            max_history: AtomicUsize::new(100),
+            ignore_concealed: AtomicBool::new(true),
+            auto_detect_secrets: AtomicBool::new(true),
+            transient_text: Mutex::new(None),
+        })))
     }
 
     /// Acquires the database mutex, recovering from poison if a previous thread panicked.
     fn lock_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(|poisoned| {
+        self.0.conn.lock().unwrap_or_else(|poisoned| {
             eprintln!("⚠️ Database mutex recovered from poison");
             poisoned.into_inner()
         })
@@ -199,7 +201,7 @@ impl Database {
 
     /// Acquires the transient text mutex, recovering from poison if a previous thread panicked.
     fn lock_transient(&self) -> std::sync::MutexGuard<'_, Option<zeroize::Zeroizing<String>>> {
-        self.transient_text.lock().unwrap_or_else(|poisoned| {
+        self.0.transient_text.lock().unwrap_or_else(|poisoned| {
             eprintln!("⚠️ Transient text mutex recovered from poison");
             poisoned.into_inner()
         })
@@ -207,30 +209,30 @@ impl Database {
 
     /// Sets the maximum history limit dynamically.
     pub(crate) fn set_max_history(&self, max: usize) {
-        self.max_history.store(max, Ordering::Relaxed);
+        self.0.max_history.store(max, Ordering::Relaxed);
     }
 
     /// Retrieves the current maximum history limit.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn max_history(&self) -> usize {
-        self.max_history.load(Ordering::Relaxed)
+        self.0.max_history.load(Ordering::Relaxed)
     }
 
     /// Sets whether to ignore concealed clipboard data from password managers.
     pub(crate) fn set_ignore_concealed(&self, ignore: bool) {
-        self.ignore_concealed.store(ignore, Ordering::Relaxed);
+        self.0.ignore_concealed.store(ignore, Ordering::Relaxed);
     }
 
     /// Checks whether to ignore concealed clipboard data.
     #[must_use]
     pub(crate) fn ignore_concealed(&self) -> bool {
-        self.ignore_concealed.load(Ordering::Relaxed)
+        self.0.ignore_concealed.load(Ordering::Relaxed)
     }
 
     /// Sets whether to automatically classify likely secrets/API keys as `secret`.
     pub(crate) fn set_auto_detect_secrets(&self, enabled: bool) {
-        self.auto_detect_secrets.store(enabled, Ordering::Relaxed);
+        self.0.auto_detect_secrets.store(enabled, Ordering::Relaxed);
     }
 
     /// Marks the given text to be ignored once by the background clipboard monitor.
@@ -284,7 +286,7 @@ impl Database {
 
     /// Classifies text content without holding the database lock.
     fn classify_text_kind(&self, content: &str) -> &'static str {
-        if self.auto_detect_secrets.load(Ordering::Relaxed)
+        if self.0.auto_detect_secrets.load(Ordering::Relaxed)
             && crate::secret::is_likely_secret(content)
         {
             "secret"
@@ -325,7 +327,7 @@ impl Database {
         // acquiring the database mutex so UI reads are not blocked.
         let kind_str = self.classify_text_kind(content);
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let max_limit = self.max_history.load(Ordering::Relaxed);
+        let max_limit = self.0.max_history.load(Ordering::Relaxed);
 
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
@@ -376,7 +378,7 @@ impl Database {
     /// existing secret entries and enforcing the `max_history` limit.
     pub(crate) fn insert_secret(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let max_limit = self.max_history.load(Ordering::Relaxed);
+        let max_limit = self.0.max_history.load(Ordering::Relaxed);
 
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
@@ -426,7 +428,7 @@ impl Database {
     ) -> Result<Option<i64>, rusqlite::Error> {
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let content = format!("[Image {width}x{height}]");
-        let max_limit = self.max_history.load(Ordering::Relaxed);
+        let max_limit = self.0.max_history.load(Ordering::Relaxed);
 
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;

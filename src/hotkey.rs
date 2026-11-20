@@ -17,8 +17,9 @@ pub(crate) struct HotkeyService {
     manager: GlobalHotKeyManager,
     hotkeys: Vec<HotKey>,
     target_ids: Arc<RwLock<Vec<u32>>>,
-    shutdown_tx: Option<std::sync::mpsc::Sender<()>>,
-    last_registration_results: Arc<RwLock<Vec<HotkeyRegistrationResult>>>,
+    shutdown_tx: Option<crossbeam_channel::Sender<()>>,
+    listener_handle: Option<thread::JoinHandle<()>>,
+    last_registration_results: Vec<HotkeyRegistrationResult>,
     #[cfg(target_os = "linux")]
     quote_fallback: linux_x11_fallback::QuoteFallback,
 }
@@ -81,7 +82,7 @@ fn register_hotkey_batch(
 impl HotkeyService {
     pub(crate) fn new(
         initial_hotkeys: &[HotKey],
-        hotkey_tx: std::sync::mpsc::Sender<()>,
+        hotkey_tx: std::sync::mpsc::SyncSender<()>,
         ctx: egui::Context,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let manager = GlobalHotKeyManager::new()?;
@@ -99,44 +100,42 @@ impl HotkeyService {
         let target_ids = Arc::new(RwLock::new(ids));
         let thread_ids = Arc::clone(&target_ids);
         let receiver = GlobalHotKeyEvent::receiver();
-        let results_arc = Arc::new(RwLock::new(results));
 
-        // Background thread listens for OS hotkey events and wakes up egui
-        let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
-        thread::spawn(move || {
-            loop {
-                // Check for shutdown signal first
-                if shutdown_rx.try_recv().is_ok() {
-                    break;
+        // Background thread blocks via crossbeam::select! on OS hotkey events and shutdown
+        // with zero idle polling wakeups.
+        let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded::<()>(1);
+        let listener_handle = thread::Builder::new()
+            .name("hotkey-listener".to_string())
+            .spawn(move || loop {
+                crossbeam_channel::select! {
+                    recv(shutdown_rx) -> _ => break,
+                    recv(receiver) -> msg => {
+                        let Ok(event) = msg else {
+                            break;
+                        };
+                        let matches = {
+                            let lock = thread_ids
+                                .read()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            lock.contains(&event.id)
+                        };
+                        if matches && event.state == HotKeyState::Pressed {
+                            crate::platform::capture_active_window();
+                            let _ = hotkey_tx.try_send(());
+                            ctx.request_repaint();
+                        }
+                    }
                 }
-
-                // Wait for hotkey event with timeout to allow shutdown checks
-                let event = match receiver.recv_timeout(std::time::Duration::from_millis(100)) {
-                    Ok(e) => e,
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-                };
-
-                let matches = {
-                    let lock = thread_ids
-                        .read()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    lock.contains(&event.id)
-                };
-                if matches && event.state == HotKeyState::Pressed {
-                    crate::platform::capture_active_window();
-                    let _ = hotkey_tx.send(());
-                    ctx.request_repaint();
-                }
-            }
-        });
+            })
+            .ok();
 
         Ok(Self {
             manager,
             hotkeys: registered,
             target_ids,
             shutdown_tx: Some(shutdown_tx),
-            last_registration_results: results_arc,
+            listener_handle,
+            last_registration_results: results,
             #[cfg(target_os = "linux")]
             quote_fallback,
         })
@@ -173,26 +172,23 @@ impl HotkeyService {
         });
         *lock = new_ids;
 
-        // Store results for UI
-        if let Ok(mut results_lock) = self.last_registration_results.write() {
-            (*results_lock).clone_from(&results);
-        }
+        self.last_registration_results.clone_from(&results);
 
         results
     }
 
     /// Returns the last registration results for UI display.
     pub(crate) fn registration_results(&self) -> Vec<HotkeyRegistrationResult> {
-        self.last_registration_results
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        self.last_registration_results.clone()
     }
 
-    /// Signals the background hotkey listener thread to shut down.
+    /// Signals the background hotkey listener threads to shut down and joins them.
     pub(crate) fn shutdown(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
+            let _ = tx.try_send(());
+        }
+        if let Some(handle) = self.listener_handle.take() {
+            let _ = handle.join();
         }
         #[cfg(target_os = "linux")]
         self.quote_fallback.shutdown();
@@ -214,7 +210,7 @@ impl Drop for HotkeyService {
 mod linux_x11_fallback {
     use eframe::egui;
     use global_hotkey::hotkey::{HotKey, Modifiers};
-    use std::sync::mpsc::{self, Sender};
+    use std::sync::mpsc::{self, Sender, SyncSender};
     use std::thread;
     use std::time::Duration;
     use x11rb::connection::Connection;
@@ -229,13 +225,17 @@ mod linux_x11_fallback {
 
     pub(super) struct QuoteFallback {
         tx: Sender<Msg>,
+        handle: Option<thread::JoinHandle<()>>,
     }
 
     impl QuoteFallback {
-        pub(super) fn new(hotkey_tx: Sender<()>, ctx: egui::Context) -> Self {
+        pub(super) fn new(hotkey_tx: SyncSender<()>, ctx: egui::Context) -> Self {
             let (tx, rx) = mpsc::channel::<Msg>();
-            thread::spawn(move || run_loop(&rx, &hotkey_tx, &ctx));
-            Self { tx }
+            let handle = thread::Builder::new()
+                .name("x11-quote-hotkey".to_string())
+                .spawn(move || run_loop(&rx, &hotkey_tx, &ctx))
+                .ok();
+            Self { tx, handle }
         }
 
         pub(super) fn register(&self, hk: HotKey) -> Result<(), ()> {
@@ -248,8 +248,11 @@ mod linux_x11_fallback {
             let _ = self.tx.send(Msg::Clear);
         }
 
-        pub(super) fn shutdown(&self) {
+        pub(super) fn shutdown(&mut self) {
             let _ = self.tx.send(Msg::Shutdown);
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
         }
     }
 
@@ -333,7 +336,7 @@ mod linux_x11_fallback {
         conn: &x11rb::rust_connection::RustConnection,
         grabs: &[(u8, ModMask)],
         full_mask: KeyButMask,
-        hotkey_tx: &Sender<()>,
+        hotkey_tx: &SyncSender<()>,
         ctx: &egui::Context,
     ) {
         while let Ok(Some(event)) = conn.poll_for_event() {
@@ -344,7 +347,7 @@ mod linux_x11_fallback {
                     .any(|&(kc, mods)| kc == ev.detail && mods == ev_mods)
                 {
                     crate::platform::capture_active_window();
-                    let _ = hotkey_tx.send(());
+                    let _ = hotkey_tx.try_send(());
                     ctx.request_repaint();
                 }
             }
@@ -394,7 +397,7 @@ mod linux_x11_fallback {
         }
     }
 
-    fn run_loop(rx: &mpsc::Receiver<Msg>, hotkey_tx: &Sender<()>, ctx: &egui::Context) {
+    fn run_loop(rx: &mpsc::Receiver<Msg>, hotkey_tx: &SyncSender<()>, ctx: &egui::Context) {
         let Ok((conn, screen_num)) = x11rb::connect(None) else {
             // Still drain messages until shutdown so callers don't block
             drain_until_shutdown(rx);
