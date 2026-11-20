@@ -131,52 +131,56 @@ impl ClipboardApp {
                     self.selected_index = slot;
                 }
 
-                match action {
-                    ItemAction::CopyText(content) => self.copy_text_to_clipboard(&content, ctx),
-                    ItemAction::CopySecret(secret) => self.copy_secret_to_clipboard(&secret, ctx),
-                    ItemAction::CopyFormattedJson(formatted) => {
-                        self.copy_text_to_clipboard(&formatted, ctx);
-                        self.show_toast(&format!(
-                            "{} Copied formatted JSON to clipboard!",
-                            icons::CHECK
-                        ));
-                    }
-                    ItemAction::CopyColor(val, name) => {
-                        self.copy_text_to_clipboard(&val, ctx);
-                        self.show_toast(&format!("{} Copied {name}: {val}", icons::CHECK));
-                    }
-                    ItemAction::CopyImage(png_bytes) => {
-                        self.copy_image_to_clipboard(&png_bytes, ctx);
-                    }
-                    ItemAction::OpenBrowser(url) => self.open_url_in_browser(&url),
-                    ItemAction::ToggleSecret(id, make_secret) => {
-                        let _ = self.db.set_item_secret(id, make_secret);
-                        if !make_secret {
-                            self.revealed_secrets.remove(&id);
-                        }
-                        self.refresh_items();
-                        let msg = if make_secret {
-                            format!("{} Marked entry as Secret.", icons::LOCK)
-                        } else {
-                            format!("{} Unmarked entry as Secret.", icons::LOCK_OPEN)
-                        };
-                        self.show_toast(&msg);
-                    }
-                    ItemAction::ToggleRevealSecret(id) => {
-                        if !self.revealed_secrets.remove(&id) {
-                            self.revealed_secrets.insert(id);
-                        }
-                    }
-                    ItemAction::Delete(id) => {
-                        let _ = self.db.delete(id);
-                        self.revealed_secrets.remove(&id);
-                        self.texture_cache.remove(id);
-                        self.refresh_items();
-                        self.show_toast(&format!("{} Entry deleted.", icons::TRASH));
-                    }
-                    ItemAction::None => {}
-                }
+                self.dispatch_item_action(action, ctx);
             });
+    }
+
+    fn dispatch_item_action(&mut self, action: ItemAction, ctx: &egui::Context) {
+        match action {
+            ItemAction::CopyText(content) => self.copy_text_to_clipboard(&content, ctx),
+            ItemAction::CopySecret(secret) => self.copy_secret_to_clipboard(&secret, ctx),
+            ItemAction::CopyFormattedJson(formatted) => {
+                self.copy_text_to_clipboard(&formatted, ctx);
+                self.show_toast(&format!(
+                    "{} Copied formatted JSON to clipboard!",
+                    icons::CHECK
+                ));
+            }
+            ItemAction::CopyColor(val, name) => {
+                self.copy_text_to_clipboard(&val, ctx);
+                self.show_toast(&format!("{} Copied {name}: {val}", icons::CHECK));
+            }
+            ItemAction::CopyImage(png_bytes) => {
+                self.copy_image_to_clipboard(&png_bytes, ctx);
+            }
+            ItemAction::OpenBrowser(url) => self.open_url_in_browser(&url),
+            ItemAction::ToggleSecret(id, make_secret) => {
+                let _ = self.db.set_item_secret(id, make_secret);
+                if !make_secret {
+                    self.revealed_secrets.remove(&id);
+                }
+                self.refresh_items();
+                let msg = if make_secret {
+                    format!("{} Marked entry as Secret.", icons::LOCK)
+                } else {
+                    format!("{} Unmarked entry as Secret.", icons::LOCK_OPEN)
+                };
+                self.show_toast(&msg);
+            }
+            ItemAction::ToggleRevealSecret(id) => {
+                if !self.revealed_secrets.remove(&id) {
+                    self.revealed_secrets.insert(id);
+                }
+            }
+            ItemAction::Delete(id) => {
+                let _ = self.db.delete(id);
+                self.revealed_secrets.remove(&id);
+                self.texture_cache.remove(id);
+                self.refresh_items();
+                self.show_toast(&format!("{} Entry deleted.", icons::TRASH));
+            }
+            ItemAction::None => {}
+        }
     }
 
     fn open_url_in_browser(&mut self, raw_url: &str) {
@@ -371,7 +375,6 @@ impl ClipboardApp {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
     fn render_item_header(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
@@ -387,112 +390,144 @@ impl ClipboardApp {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(num) = shortcut_num {
-                    #[cfg(target_os = "macos")]
-                    let shortcut_str = format!("Cmd+{num}");
-                    #[cfg(not(target_os = "macos"))]
-                    let shortcut_str = format!("Ctrl+{num}");
-
-                    let (text_c, bg_c, stroke_c) =
-                        crate::theme::shortcut_badge_colors(is_dark, is_selected);
-
-                    egui::Frame::new()
-                        .corner_radius(crate::theme::pill_rounding())
-                        .fill(bg_c)
-                        .stroke(egui::Stroke::new(1.0_f32, stroke_c))
-                        .inner_margin(egui::Margin::symmetric(5, 2))
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(shortcut_str)
-                                    .size(9.5_f32)
-                                    .color(text_c)
-                                    .strong(),
-                            );
-                        });
+                    Self::render_shortcut_badge(ui, num, is_selected, is_dark);
                 }
 
-                if ui
-                    .small_button(icons::TRASH)
-                    .on_hover_text("Delete entry (Delete or Cmd+Backspace)")
-                    .clicked()
-                {
-                    action = ItemAction::Delete(item.id);
-                }
-
-                if item.kind != ItemKind::Image {
-                    let is_secret = item.kind == ItemKind::Secret;
-                    let lock_icon = if is_secret {
-                        icons::LOCK_OPEN
-                    } else {
-                        icons::LOCK
-                    };
-                    let lock_tip = if is_secret {
-                        "Unmark as Secret"
-                    } else {
-                        "Mark as Secret (mask content)"
-                    };
-                    if ui.small_button(lock_icon).on_hover_text(lock_tip).clicked() {
-                        action = ItemAction::ToggleSecret(item.id, !is_secret);
-                    }
-                }
-
-                if item.kind == ItemKind::Secret {
-                    let eye_icon = if is_revealed {
-                        icons::EYE_SLASH
-                    } else {
-                        icons::EYE
-                    };
-                    let eye_tip = if is_revealed {
-                        "Mask secret"
-                    } else {
-                        "Reveal secret"
-                    };
-                    if ui.small_button(eye_icon).on_hover_text(eye_tip).clicked() {
-                        action = ItemAction::ToggleRevealSecret(item.id);
-                    }
-                }
-
-                if ui
-                    .small_button(format!("{} Copy", icons::COPY))
-                    .on_hover_text("Copy back to clipboard (Enter)")
-                    .clicked()
-                {
-                    match item.kind {
-                        ItemKind::Text | ItemKind::Url | ItemKind::Code | ItemKind::Color => {
-                            action = ItemAction::CopyText(item.content.clone());
-                        }
-                        ItemKind::Secret => {
-                            action = ItemAction::CopySecret(item.content.clone());
-                        }
-                        ItemKind::Image => {
-                            if let Some(png_bytes) = &item.image_data {
-                                action = ItemAction::CopyImage(png_bytes.clone());
-                            }
-                        }
-                    }
-                }
-                if item.kind == ItemKind::Url
-                    && ui
-                        .small_button(format!("{} Open", icons::ARROW_SQUARE_OUT))
-                        .on_hover_text("Open link in default browser")
-                        .clicked()
-                {
-                    action = ItemAction::OpenBrowser(item.content.trim().to_string());
-                }
-                if item.code_language() == Some(crate::code::CodeLanguage::Json) {
-                    if let Some(pretty) = crate::code::format_json(&item.content) {
-                        if ui
-                            .small_button(format!("{} Prettify", icons::BRACKETS_CURLY))
-                            .on_hover_text("Copy formatted JSON with indentation")
-                            .clicked()
-                        {
-                            action = ItemAction::CopyFormattedJson(pretty);
-                        }
-                    }
-                }
+                action = Self::render_item_header_actions(ui, item, is_revealed);
             });
         });
 
         action
+    }
+
+    fn render_shortcut_badge(ui: &mut egui::Ui, num: usize, is_selected: bool, is_dark: bool) {
+        #[cfg(target_os = "macos")]
+        let shortcut_str = format!("Cmd+{num}");
+        #[cfg(not(target_os = "macos"))]
+        let shortcut_str = format!("Ctrl+{num}");
+
+        let (text_c, bg_c, stroke_c) = crate::theme::shortcut_badge_colors(is_dark, is_selected);
+
+        egui::Frame::new()
+            .corner_radius(crate::theme::pill_rounding())
+            .fill(bg_c)
+            .stroke(egui::Stroke::new(1.0_f32, stroke_c))
+            .inner_margin(egui::Margin::symmetric(5, 2))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(shortcut_str)
+                        .size(9.5_f32)
+                        .color(text_c)
+                        .strong(),
+                );
+            });
+    }
+
+    fn render_item_header_actions(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_revealed: bool,
+    ) -> ItemAction {
+        let mut action = if ui
+            .small_button(icons::TRASH)
+            .on_hover_text("Delete entry (Delete or Cmd+Backspace)")
+            .clicked()
+        {
+            ItemAction::Delete(item.id)
+        } else {
+            ItemAction::None
+        };
+
+        let secret_action = Self::render_secret_header_buttons(ui, item, is_revealed);
+        if !matches!(secret_action, ItemAction::None) {
+            action = secret_action;
+        }
+
+        if ui
+            .small_button(format!("{} Copy", icons::COPY))
+            .on_hover_text("Copy back to clipboard (Enter)")
+            .clicked()
+        {
+            action = Self::item_copy_action(item);
+        }
+
+        let extra_action = Self::render_kind_extra_buttons(ui, item);
+        if !matches!(extra_action, ItemAction::None) {
+            action = extra_action;
+        }
+
+        action
+    }
+
+    fn render_secret_header_buttons(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_revealed: bool,
+    ) -> ItemAction {
+        let mut action = ItemAction::None;
+
+        if item.kind != ItemKind::Image {
+            let is_secret = item.kind == ItemKind::Secret;
+            let (lock_icon, lock_tip) = if is_secret {
+                (icons::LOCK_OPEN, "Unmark as Secret")
+            } else {
+                (icons::LOCK, "Mark as Secret (mask content)")
+            };
+            if ui.small_button(lock_icon).on_hover_text(lock_tip).clicked() {
+                action = ItemAction::ToggleSecret(item.id, !is_secret);
+            }
+        }
+
+        if item.kind == ItemKind::Secret {
+            let (eye_icon, eye_tip) = if is_revealed {
+                (icons::EYE_SLASH, "Mask secret")
+            } else {
+                (icons::EYE, "Reveal secret")
+            };
+            if ui.small_button(eye_icon).on_hover_text(eye_tip).clicked() {
+                action = ItemAction::ToggleRevealSecret(item.id);
+            }
+        }
+
+        action
+    }
+
+    fn item_copy_action(item: &ClipboardItem) -> ItemAction {
+        match item.kind {
+            ItemKind::Text | ItemKind::Url | ItemKind::Code | ItemKind::Color => {
+                ItemAction::CopyText(item.content.clone())
+            }
+            ItemKind::Secret => ItemAction::CopySecret(item.content.clone()),
+            ItemKind::Image => item
+                .image_data
+                .as_ref()
+                .map_or(ItemAction::None, |png| ItemAction::CopyImage(png.clone())),
+        }
+    }
+
+    fn render_kind_extra_buttons(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+        if item.kind == ItemKind::Url
+            && ui
+                .small_button(format!("{} Open", icons::ARROW_SQUARE_OUT))
+                .on_hover_text("Open link in default browser")
+                .clicked()
+        {
+            return ItemAction::OpenBrowser(item.content.trim().to_string());
+        }
+
+        if item.code_language() == Some(crate::code::CodeLanguage::Json) {
+            if let Some(pretty) = crate::code::format_json(&item.content) {
+                if ui
+                    .small_button(format!("{} Prettify", icons::BRACKETS_CURLY))
+                    .on_hover_text("Copy formatted JSON with indentation")
+                    .clicked()
+                {
+                    return ItemAction::CopyFormattedJson(pretty);
+                }
+            }
+        }
+
+        ItemAction::None
     }
 
     fn render_secret_content(
@@ -593,76 +628,101 @@ impl ClipboardApp {
             }
 
             ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    let hex_label = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(parsed.to_hex())
-                                .monospace()
-                                .strong()
-                                .color(crate::theme::text_primary(is_dark)),
-                        )
-                        .sense(egui::Sense::click()),
-                    );
-                    if hex_label.clicked() {
-                        action = ItemAction::CopyColor(parsed.to_hex(), "HEX".to_string());
-                    } else if hex_label.hovered() {
-                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                    }
+                let row_action = Self::render_color_hex_row(ui, parsed, is_dark);
+                if !matches!(row_action, ItemAction::None) {
+                    action = row_action;
+                }
 
-                    let opacity_pct = u32::from(parsed.a) * 100 / 255;
-                    let opacity_note = if parsed.a < 255 {
-                        format!(" • {opacity_pct}% alpha")
-                    } else {
-                        String::new()
-                    };
-
-                    ui.label(
-                        egui::RichText::new(format!("{}{}", parsed.to_rgb_string(), opacity_note))
-                            .monospace()
-                            .size(11.0)
-                            .color(crate::theme::text_secondary(is_dark)),
-                    );
-                });
-
-                ui.horizontal(|ui| {
-                    if ui
-                        .small_button("# HEX")
-                        .on_hover_text("Copy HEX code (RGBA order)")
-                        .clicked()
-                    {
-                        action = ItemAction::CopyColor(parsed.to_hex(), "HEX".to_string());
-                    }
-                    if ui
-                        .small_button("RGB")
-                        .on_hover_text("Copy RGB / RGBA values")
-                        .clicked()
-                    {
-                        action = ItemAction::CopyColor(parsed.to_rgb_string(), "RGB".to_string());
-                    }
-                    if ui
-                        .small_button("HSL")
-                        .on_hover_text("Copy HSL / HSLA values")
-                        .clicked()
-                    {
-                        action = ItemAction::CopyColor(parsed.to_hsl_string(), "HSL".to_string());
-                    }
-
-                    if crate::color::is_eight_digit_hex(&item.content) {
-                        if let Some(argb) = crate::color::parse_argb_hex(&item.content) {
-                            if ui
-                                .small_button("ARGB")
-                                .on_hover_text("Copy as Android/Flutter ARGB (AARRGGBB)")
-                                .clicked()
-                            {
-                                action =
-                                    ItemAction::CopyColor(argb.to_rgb_string(), "ARGB".to_string());
-                            }
-                        }
-                    }
-                });
+                let btn_action = Self::render_color_format_buttons(ui, parsed, &item.content);
+                if !matches!(btn_action, ItemAction::None) {
+                    action = btn_action;
+                }
             });
         });
 
+        action
+    }
+
+    fn render_color_hex_row(
+        ui: &mut egui::Ui,
+        parsed: crate::color::ParsedColor,
+        is_dark: bool,
+    ) -> ItemAction {
+        let mut action = ItemAction::None;
+        ui.horizontal(|ui| {
+            let hex_label = ui.add(
+                egui::Label::new(
+                    egui::RichText::new(parsed.to_hex())
+                        .monospace()
+                        .strong()
+                        .color(crate::theme::text_primary(is_dark)),
+                )
+                .sense(egui::Sense::click()),
+            );
+            if hex_label.clicked() {
+                action = ItemAction::CopyColor(parsed.to_hex(), "HEX".to_string());
+            } else if hex_label.hovered() {
+                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+            }
+
+            let opacity_pct = u32::from(parsed.a) * 100 / 255;
+            let opacity_note = if parsed.a < 255 {
+                format!(" • {opacity_pct}% alpha")
+            } else {
+                String::new()
+            };
+
+            ui.label(
+                egui::RichText::new(format!("{}{}", parsed.to_rgb_string(), opacity_note))
+                    .monospace()
+                    .size(11.0)
+                    .color(crate::theme::text_secondary(is_dark)),
+            );
+        });
+        action
+    }
+
+    fn render_color_format_buttons(
+        ui: &mut egui::Ui,
+        parsed: crate::color::ParsedColor,
+        raw_content: &str,
+    ) -> ItemAction {
+        let mut action = ItemAction::None;
+        ui.horizontal(|ui| {
+            if ui
+                .small_button("# HEX")
+                .on_hover_text("Copy HEX code (RGBA order)")
+                .clicked()
+            {
+                action = ItemAction::CopyColor(parsed.to_hex(), "HEX".to_string());
+            }
+            if ui
+                .small_button("RGB")
+                .on_hover_text("Copy RGB / RGBA values")
+                .clicked()
+            {
+                action = ItemAction::CopyColor(parsed.to_rgb_string(), "RGB".to_string());
+            }
+            if ui
+                .small_button("HSL")
+                .on_hover_text("Copy HSL / HSLA values")
+                .clicked()
+            {
+                action = ItemAction::CopyColor(parsed.to_hsl_string(), "HSL".to_string());
+            }
+
+            if crate::color::is_eight_digit_hex(raw_content) {
+                if let Some(argb) = crate::color::parse_argb_hex(raw_content) {
+                    if ui
+                        .small_button("ARGB")
+                        .on_hover_text("Copy as Android/Flutter ARGB (AARRGGBB)")
+                        .clicked()
+                    {
+                        action = ItemAction::CopyColor(argb.to_rgb_string(), "ARGB".to_string());
+                    }
+                }
+            }
+        });
         action
     }
 
@@ -814,76 +874,89 @@ impl ClipboardApp {
             };
 
             for &color in colors {
-                egui::Frame::new()
-                    .fill(bg)
-                    .stroke(stroke)
-                    .corner_radius(4)
-                    .inner_margin(egui::Margin::symmetric(5, 2))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let swatch_res = Self::render_mini_color_swatch(ui, color);
-                            if swatch_res.clicked() {
-                                action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());
-                            } else if swatch_res.hovered() {
-                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                            }
-
-                            let hex_label = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(color.to_hex())
-                                        .monospace()
-                                        .size(11.0)
-                                        .strong()
-                                        .color(crate::theme::text_primary(is_dark)),
-                                )
-                                .sense(egui::Sense::click()),
-                            );
-                            if hex_label.clicked() {
-                                action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());
-                            } else if hex_label.hovered() {
-                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                            }
-
-                            if ui
-                                .small_button("# HEX")
-                                .on_hover_text(format!("Copy {}", color.to_hex()))
-                                .clicked()
-                            {
-                                action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());
-                            }
-                            if ui
-                                .small_button("RGB")
-                                .on_hover_text(format!("Copy {}", color.to_rgb_string()))
-                                .clicked()
-                            {
-                                action =
-                                    ItemAction::CopyColor(color.to_rgb_string(), "RGB".to_string());
-                            }
-                            if ui
-                                .small_button("HSL")
-                                .on_hover_text(format!("Copy {}", color.to_hsl_string()))
-                                .clicked()
-                            {
-                                action =
-                                    ItemAction::CopyColor(color.to_hsl_string(), "HSL".to_string());
-                            }
-                            if color.a < 255
-                                && ui
-                                    .small_button("ARGB")
-                                    .on_hover_text("Copy as Android/Flutter ARGB")
-                                    .clicked()
-                            {
-                                let argb_hex = format!(
-                                    "#{:02X}{:02X}{:02X}{:02X}",
-                                    color.a, color.r, color.g, color.b
-                                );
-                                action = ItemAction::CopyColor(argb_hex, "ARGB".to_string());
-                            }
-                        });
-                    });
+                let chip_action = Self::render_embedded_color_chip(ui, color, bg, stroke, is_dark);
+                if !matches!(chip_action, ItemAction::None) {
+                    action = chip_action;
+                }
             }
         });
 
+        action
+    }
+
+    fn render_embedded_color_chip(
+        ui: &mut egui::Ui,
+        color: crate::color::ParsedColor,
+        bg: egui::Color32,
+        stroke: egui::Stroke,
+        is_dark: bool,
+    ) -> ItemAction {
+        let mut action = ItemAction::None;
+        egui::Frame::new()
+            .fill(bg)
+            .stroke(stroke)
+            .corner_radius(4)
+            .inner_margin(egui::Margin::symmetric(5, 2))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let swatch_res = Self::render_mini_color_swatch(ui, color);
+                    if swatch_res.clicked() {
+                        action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());
+                    } else if swatch_res.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
+
+                    let hex_label = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(color.to_hex())
+                                .monospace()
+                                .size(11.0)
+                                .strong()
+                                .color(crate::theme::text_primary(is_dark)),
+                        )
+                        .sense(egui::Sense::click()),
+                    );
+                    if hex_label.clicked() {
+                        action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());
+                    } else if hex_label.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
+
+                    if ui
+                        .small_button("# HEX")
+                        .on_hover_text(format!("Copy {}", color.to_hex()))
+                        .clicked()
+                    {
+                        action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());
+                    }
+                    if ui
+                        .small_button("RGB")
+                        .on_hover_text(format!("Copy {}", color.to_rgb_string()))
+                        .clicked()
+                    {
+                        action = ItemAction::CopyColor(color.to_rgb_string(), "RGB".to_string());
+                    }
+                    if ui
+                        .small_button("HSL")
+                        .on_hover_text(format!("Copy {}", color.to_hsl_string()))
+                        .clicked()
+                    {
+                        action = ItemAction::CopyColor(color.to_hsl_string(), "HSL".to_string());
+                    }
+                    if color.a < 255
+                        && ui
+                            .small_button("ARGB")
+                            .on_hover_text("Copy as Android/Flutter ARGB")
+                            .clicked()
+                    {
+                        let argb_hex = format!(
+                            "#{:02X}{:02X}{:02X}{:02X}",
+                            color.a, color.r, color.g, color.b
+                        );
+                        action = ItemAction::CopyColor(argb_hex, "ARGB".to_string());
+                    }
+                });
+            });
         action
     }
 
