@@ -1,7 +1,7 @@
 # Windows Testing Checklist — CipherClipboard
 
-Manual smoke-test checklist for Windows. Run before each release, since Windows is
-the hardest platform to reach in CI (the `windows-latest` job is `continue-on-error`).
+Manual smoke-test checklist for Windows. Run before each release to cover GUI,
+shell, and hardware behaviors that headless CI cannot exercise.
 
 ## Build & install
 
