@@ -70,6 +70,7 @@ fn install_panic_hook() {
     }));
 }
 
+#[allow(clippy::too_many_lines)]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Starting CipherClipboard (Encrypted Clipboard Manager)...");
 
@@ -164,6 +165,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Initialize OS activation & reopen observers (macOS Dock click / Cmd+Tab)
             platform::set_repaint_context(&cc.egui_ctx);
             platform::setup_reopen_observer();
+            spawn_smoke_quit(&tray_tx, &cc.egui_ctx); // CI quit smoke test (debug only)
 
             // Initialize Windows system tray icon (runs on main UI thread event loop)
             let tray_service = tray::TrayService::new(&tray_tx, &cc.egui_ctx);
@@ -207,6 +209,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     result?;
 
     Ok(())
+}
+
+/// CI smoke-test hook (active in debug builds only; a no-op in release builds).
+///
+/// When `CIPHERCLIPBOARD_SMOKE_QUIT_MS` is set, requests a regular quit through the same
+/// path as the UI Quit button after the given delay, so CI can verify the app shuts down
+/// cleanly (exit code 0, no AppKit/winit teardown crash).
+fn spawn_smoke_quit(tray_tx: &std::sync::mpsc::Sender<tray::TrayAction>, ctx: &egui::Context) {
+    #[cfg(debug_assertions)]
+    {
+        let Some(delay_ms) = std::env::var("CIPHERCLIPBOARD_SMOKE_QUIT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+        else {
+            return;
+        };
+        let tx = tray_tx.clone();
+        let ctx = ctx.clone();
+        let _ = std::thread::Builder::new()
+            .name("smoke-quit".into())
+            .spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                if tx.send(tray::TrayAction::Quit).is_ok() {
+                    ctx.request_repaint();
+                }
+            });
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (tray_tx, ctx);
 }
 
 /// Opens or initializes the `SQLCipher` database, ensuring the in-memory encryption key
