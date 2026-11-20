@@ -153,11 +153,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "CipherClipboard",
         native_options,
         Box::new(move |cc| {
-            // Probe native system fonts (San Francisco, Segoe UI) and register Material icons (filled + outline)
+            // Probe native system fonts (San Francisco, Segoe UI) and register Material icons
+            // Register outlined before filled so outline is the default fallback for inline icons,
+            // while filled remains available explicitly (e.g. for selected/active states).
             let mut fonts = egui::FontDefinitions::default();
             theme::setup_fonts(&mut fonts);
             cc.egui_ctx.set_fonts(fonts);
-            egui_material_icons::initialize(&cc.egui_ctx);
+            cc.egui_ctx
+                .add_font(egui_material_icons::font_insert_outlined());
+            cc.egui_ctx.add_font(egui_material_icons::font_insert());
 
             // Apply platform-adaptive HIG visuals (Dark or Light)
             let is_dark = settings.theme.resolve(&cc.egui_ctx);
