@@ -50,6 +50,10 @@ pub(crate) fn is_app_active() -> bool {
 /// `Some(false)` if another application is active, or `None` if the platform/session
 /// cannot determine active-window ownership (e.g. pure Wayland without X11).
 #[must_use]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "windows"),
+    allow(clippy::unnecessary_wraps)
+)]
 pub(crate) fn is_app_active_state() -> Option<bool> {
     #[cfg(target_os = "macos")]
     {
@@ -355,7 +359,7 @@ mod macos {
         REOPEN_REQUESTED.swap(false, Ordering::SeqCst)
     }
 
-    /// AppKit's `[NSApplication sharedApplication]` asserts it is called on the
+    /// `AppKit`'s `[NSApplication sharedApplication]` asserts it is called on the
     /// main thread (trapping with `SIGTRAP` on macOS if invoked from a background
     /// or `cargo test` worker thread).
     fn is_main_thread() -> bool {
@@ -458,7 +462,7 @@ mod macos {
             // Observe NSApplicationDidBecomeActiveNotification (fires on Dock click, Cmd+Tab, app activate)
             let active_name: *mut Object = msg_send![
                 class!(NSString),
-                stringWithUTF8String: b"NSApplicationDidBecomeActiveNotification\0".as_ptr()
+                stringWithUTF8String: c"NSApplicationDidBecomeActiveNotification".as_ptr()
             ];
             if !active_name.is_null() {
                 let _: () = msg_send![
@@ -473,7 +477,7 @@ mod macos {
             // Observe NSApplicationDidUnhideNotification (fires when macOS unhides on Dock click / Cmd+Tab)
             let unhide_name: *mut Object = msg_send![
                 class!(NSString),
-                stringWithUTF8String: b"NSApplicationDidUnhideNotification\0".as_ptr()
+                stringWithUTF8String: c"NSApplicationDidUnhideNotification".as_ptr()
             ];
             if !unhide_name.is_null() {
                 let _: () = msg_send![
@@ -493,11 +497,7 @@ mod macos {
     }
 
     pub(super) fn teardown_reopen_observer() {
-        let observer = if let Ok(mut lock) = REOPEN_OBSERVER.lock() {
-            lock.take()
-        } else {
-            None
-        };
+        let observer = REOPEN_OBSERVER.lock().ok().and_then(|mut lock| lock.take());
         if let Some(ObserverPtr(observer)) = observer {
             objc::rc::autoreleasepool(|| unsafe {
                 let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
