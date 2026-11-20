@@ -51,11 +51,16 @@ cipherclipboard/
 ├── deny.toml             # Supply-chain security & license policy
 ├── scripts/              # Local CI pre-flight guardrails & release packaging
 ├── src/
-│   ├── main.rs           # Entry point, single-instance coordination & eframe launcher
-│   ├── app.rs            # egui UI layout, search, filters & state management
+│   ├── main.rs           # Entry point, panic hook, single-instance lock & eframe launcher
+│   ├── app/              # egui UI layout, history view, password generator & settings
+│   │   ├── mod.rs
+│   │   ├── history_view.rs
+│   │   ├── generator_view.rs
+│   │   └── settings_view.rs
 │   ├── db.rs             # rusqlite + SQLCipher encrypted database wrapper & migrations
 │   ├── crypto.rs         # OS Keyring integration & cryptographic key generation
 │   ├── hotkey.rs         # Global shortcut registration & listener thread
+│   ├── tray.rs           # Windows system tray icon & context menu lifecycle
 │   ├── secret.rs         # Heuristic detection & masking for credentials and API keys
 │   ├── code.rs           # Multi-language syntax detection & highlighting sections
 │   ├── color.rs          # Hex/RGB/HSL color parsing & swatch previews
@@ -65,7 +70,7 @@ cipherclipboard/
 │   ├── monitor.rs        # Background clipboard polling & change detection
 │   ├── settings.rs       # Persistent user preferences & keybinding configuration
 │   ├── theme.rs          # Dark/Light palettes & WCAG-compliant styling
-│   └── instance.rs       # Cross-platform single-instance mutex & named pipe lock
+│   └── instance.rs       # Cross-platform single-instance advisory lock
 └── README.md
 ```
 
@@ -120,6 +125,8 @@ cargo run
 
 The installer runs the bundled **Visual C++ redistributable (x64)** when the runtime is missing (a no-op when it is already installed). The portable ZIP contains `vc_redist.x64.exe` too — run it once before launching `CipherClipboard.exe` on a fresh Windows install. The executable is MSVC-linked (SQLCipher + OpenSSL), so it cannot start without the Universal CRT.
 
+**Uninstalling on Windows:** Uninstalling removes the application binaries and shortcuts only; your encrypted database, settings, and log (`%LOCALAPPDATA%\cipherclipboard\`) as well as the encryption key in **Windows Credential Manager** (under `cipherclipboard`) are preserved so upgrades and reinstalls never wipe your history. To perform a complete removal, delete `%LOCALAPPDATA%\cipherclipboard\` and remove the `cipherclipboard` generic credential in Windows Credential Manager.
+
 On first launch:
 1. It automatically generates a secure 256-bit encryption key and registers it with your **OS Keyring** (under service `cipherclipboard`).
 2. Creates an encrypted database `clipboard_history.db` in `~/Library/Application Support/cipherclipboard/` (or `%LOCALAPPDATA%\cipherclipboard\` on Windows).
@@ -146,7 +153,9 @@ To ensure all contributions satisfy continuous integration standards (formatting
 
 ## Known Limitations
 
-* **Monochrome Emoji & Symbol Rendering:** `egui` (`0.29`) rasterizes font glyphs via `ab_glyph` using monochrome vector outlines and does not support color emoji tables (`sbix`, `COLR`/`CPAL`, or `CBDT`). As a result, emojis and symbols in copied text render in the active theme's monochrome text color rather than full color. Invisible Unicode variation selectors (`U+FE0E`, `U+FE0F`) and zero-width joiners are stripped from UI previews to avoid missing-glyph (`□`) boxes, while the original text is preserved intact when copied back to the clipboard.
+* **Monochrome Emoji & Symbol Rendering:** `egui` (`0.36`) rasterizes font glyphs via `ab_glyph` using monochrome vector outlines and does not support color emoji tables (`sbix`, `COLR`/`CPAL`, or `CBDT`). As a result, emojis and symbols in copied text render in the active theme's monochrome text color rather than full color. Invisible Unicode variation selectors (`U+FE0E`, `U+FE0F`) and zero-width joiners are stripped from UI previews to avoid missing-glyph (`□`) boxes, while the original text is preserved intact when copied back to the clipboard.
+* **Windows UIPI & Elevated Target Windows:** Windows User Interface Privilege Isolation (UIPI) blocks standard-privilege applications from injecting synthetic keystrokes (`Ctrl+V`) into elevated (Administrator) windows. CipherClipboard detects higher-integrity target windows, copies the item to the clipboard, and skips auto-paste—press `Ctrl+V` manually in the elevated window.
+* **Windows `Alt+Space` Hotkey Preset:** Selecting the optional `Alt+Space` global shortcut on Windows overrides the standard system-menu accelerator (`Alt+Space`) in other applications. Prefer the default `Ctrl+Shift+V` unless you explicitly want `Alt+Space`.
 
 ---
 
