@@ -152,7 +152,7 @@ const DIGITS_UNAMBIGUOUS: &[u8] = b"23456789";
 const SYMBOLS: &[u8] = b"!@#$%^&*()-_=+[]{}|;:,.<>?";
 
 /// 2,048 distinct, unambiguous English words (BIP-39 standard, 11 bits of entropy per word).
-static WORDLIST: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+static WORDLIST: std::sync::LazyLock<Vec<&str>> = std::sync::LazyLock::new(|| {
     include_str!("../assets/wordlist.txt")
         .lines()
         .map(str::trim)

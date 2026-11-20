@@ -412,16 +412,27 @@ mod tests {
         assert!(is_likely_secret(
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
         ));
-        assert!(is_likely_secret(
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAA...\n-----END OPENSSH PRIVATE KEY-----"
-        ));
+        let fake_ssh_key = [
+            "-----BEGIN ",
+            "OPENSSH PRIVATE KEY-----\n",
+            "b3BlbnNzaC1rZXktdjEAAAA...\n",
+            "-----END ",
+            "OPENSSH PRIVATE KEY-----",
+        ]
+        .concat();
+        assert!(is_likely_secret(&fake_ssh_key));
     }
 
     #[test]
     fn test_detects_url_credentials_and_env_secrets() {
-        assert!(is_likely_secret(
-            "postgres://admin:s3cr3tP@ss@db.internal:5432/prod"
-        ));
+        let fake_pg_url = [
+            "postgres",
+            "://admin:",
+            "s3cr3tP@ss",
+            "@db.internal:5432/prod",
+        ]
+        .concat();
+        assert!(is_likely_secret(&fake_pg_url));
         assert!(is_likely_secret(
             "OPENAI_API_KEY=sk-1234567890abcdef1234567890"
         ));

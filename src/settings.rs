@@ -546,7 +546,7 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
-    const SETTINGS_KEY: &'static str = "app_config";
+    const SETTINGS_KEY: &str = "app_config";
 
     /// Loads settings from the database, falling back to default if unset or corrupted.
     #[must_use]

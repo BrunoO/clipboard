@@ -736,14 +736,14 @@ mod windows {
     static PREVIOUS_HWND: AtomicIsize = AtomicIsize::new(0);
     static PREVIOUS_PID: AtomicU32 = AtomicU32::new(0);
 
-    type HWND = *mut std::ffi::c_void;
+    type Hwnd = *mut std::ffi::c_void;
 
     // Calling PeekMessage on a thread creates its message queue. This is a
     // prerequisite for AttachThreadInput, which a bare std::thread lacks.
     #[allow(clippy::upper_case_acronyms)]
     #[repr(C)]
     struct MSG {
-        hwnd: HWND,
+        hwnd: Hwnd,
         message: u32,
         w_param: usize,
         l_param: isize,
@@ -760,28 +760,28 @@ mod windows {
     const MAPVK_VSC_TO_VK: u32 = 1;
 
     extern "system" {
-        fn GetForegroundWindow() -> HWND;
-        fn SetForegroundWindow(hwnd: HWND) -> i32;
-        fn BringWindowToTop(hwnd: HWND) -> i32;
-        fn ShowWindow(hwnd: HWND, nCmdShow: i32) -> i32;
-        fn IsIconic(hwnd: HWND) -> i32;
-        fn IsWindow(hwnd: HWND) -> i32;
+        fn GetForegroundWindow() -> Hwnd;
+        fn SetForegroundWindow(hwnd: Hwnd) -> i32;
+        fn BringWindowToTop(hwnd: Hwnd) -> i32;
+        fn ShowWindow(hwnd: Hwnd, nCmdShow: i32) -> i32;
+        fn IsIconic(hwnd: Hwnd) -> i32;
+        fn IsWindow(hwnd: Hwnd) -> i32;
         fn PeekMessageW(
             lpMsg: *mut MSG,
-            hWnd: HWND,
+            hWnd: Hwnd,
             wMsgFilterMin: u32,
             wMsgFilterMax: u32,
             wRemoveMsg: u32,
         ) -> i32;
         fn GetCurrentProcessId() -> u32;
         fn GetCurrentThreadId() -> u32;
-        fn GetWindowThreadProcessId(hwnd: HWND, lpdwProcessId: *mut u32) -> u32;
+        fn GetWindowThreadProcessId(hwnd: Hwnd, lpdwProcessId: *mut u32) -> u32;
         fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
         fn EnumWindows(
-            lpEnumFunc: unsafe extern "system" fn(HWND, isize) -> i32,
+            lpEnumFunc: unsafe extern "system" fn(Hwnd, isize) -> i32,
             lParam: isize,
         ) -> i32;
-        fn GetWindowTextW(hwnd: HWND, lpString: *mut u16, nMaxCount: i32) -> i32;
+        fn GetWindowTextW(hwnd: Hwnd, lpString: *mut u16, nMaxCount: i32) -> i32;
         fn GetKeyboardLayout(idThread: u32) -> *mut std::ffi::c_void;
         fn MapVirtualKeyExW(uCode: u32, uMapType: u32, dwhkl: *mut std::ffi::c_void) -> u32;
         fn ToUnicodeEx(
@@ -813,7 +813,7 @@ mod windows {
         } else {
             let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
             if hwnd_raw != 0 {
-                let hwnd = hwnd_raw as HWND;
+                let hwnd = hwnd_raw as Hwnd;
                 if IsWindow(hwnd) != 0 {
                     GetWindowThreadProcessId(hwnd, std::ptr::null_mut())
                 } else {
@@ -836,8 +836,8 @@ mod windows {
         }
     }
 
-    fn find_main_window() -> Option<HWND> {
-        unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: isize) -> i32 {
+    fn find_main_window() -> Option<Hwnd> {
+        unsafe extern "system" fn enum_proc(hwnd: Hwnd, lparam: isize) -> i32 {
             let mut pid: u32 = 0;
             GetWindowThreadProcessId(hwnd, &mut pid);
             if pid == GetCurrentProcessId() {
@@ -846,7 +846,7 @@ mod windows {
                 if len > 0 {
                     let title = String::from_utf16_lossy(&buf[..len as usize]);
                     if title == "CipherClipboard" {
-                        let out = lparam as *mut HWND;
+                        let out = lparam as *mut Hwnd;
                         if !out.is_null() {
                             *out = hwnd;
                         }
@@ -857,7 +857,7 @@ mod windows {
             1
         }
 
-        let mut target_hwnd: HWND = std::ptr::null_mut();
+        let mut target_hwnd: Hwnd = std::ptr::null_mut();
         unsafe {
             EnumWindows(enum_proc, std::ptr::addr_of_mut!(target_hwnd) as isize);
         }
@@ -938,7 +938,7 @@ mod windows {
         }
 
         unsafe {
-            let target_hwnd = hwnd_raw as HWND;
+            let target_hwnd = hwnd_raw as Hwnd;
             if IsWindow(target_hwnd) == 0 {
                 PREVIOUS_HWND.store(0, Ordering::SeqCst);
                 PREVIOUS_PID.store(0, Ordering::SeqCst);
@@ -997,10 +997,10 @@ mod windows {
             if fg.is_null() {
                 return false;
             }
-            if fg == hwnd_raw as HWND {
+            if fg == hwnd_raw as Hwnd {
                 return true;
             }
-            // Some apps replace their top-level HWND between capture and paste.
+            // Some apps replace their top-level Hwnd between capture and paste.
             // Accepting the captured process is still safe: never another app.
             let target_pid = PREVIOUS_PID.load(Ordering::SeqCst);
             if target_pid == 0 {
@@ -1015,10 +1015,10 @@ mod windows {
     pub(super) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
         struct SearchCtx {
             expected_pid: Option<u32>,
-            found: HWND,
+            found: Hwnd,
         }
 
-        unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: isize) -> i32 {
+        unsafe extern "system" fn enum_proc(hwnd: Hwnd, lparam: isize) -> i32 {
             let ctx = &mut *(lparam as *mut SearchCtx);
             let mut pid: u32 = 0;
             GetWindowThreadProcessId(hwnd, &mut pid);
@@ -1076,7 +1076,7 @@ mod windows {
 
         extern "system" {
             fn MessageBoxW(
-                hwnd: HWND,
+                hwnd: Hwnd,
                 lpText: *const u16,
                 lpCaption: *const u16,
                 uType: u32,
@@ -1098,9 +1098,9 @@ mod windows {
 
     /// Returns `true` only when all four keyboard events were inserted.
     pub(super) fn simulate_paste() -> bool {
-        #[allow(non_snake_case, non_camel_case_types)]
+        #[allow(non_snake_case)]
         #[repr(C)]
-        struct KEYBDINPUT {
+        struct KeybdInput {
             wVk: u16,
             wScan: u16,
             dwFlags: u32,
@@ -1109,23 +1109,22 @@ mod windows {
         }
 
         // Win32 INPUT union is sized to MOUSEINPUT (32 bytes on x64, 24 bytes on x86),
-        // making sizeof(INPUT) == 40 bytes on x64 (4 + 4 align + 24 KEYBDINPUT + 8 pad)
-        // and 28 bytes on x86 (4 + 16 KEYBDINPUT + 8 pad).
-        #[allow(non_snake_case, non_camel_case_types)]
+        // making sizeof(Input) == 40 bytes on x64 (4 + 4 align + 24 KeybdInput + 8 pad)
+        // and 28 bytes on x86 (4 + 16 KeybdInput + 8 pad).
         #[repr(C)]
-        struct INPUT {
+        struct Input {
             r#type: u32,
-            u: KEYBDINPUT,
+            u: KeybdInput,
             _pad: [u8; 8],
         }
 
         const _: () = assert!(
-            (cfg!(target_pointer_width = "64") && std::mem::size_of::<INPUT>() == 40)
-                || (cfg!(target_pointer_width = "32") && std::mem::size_of::<INPUT>() == 28)
+            (cfg!(target_pointer_width = "64") && std::mem::size_of::<Input>() == 40)
+                || (cfg!(target_pointer_width = "32") && std::mem::size_of::<Input>() == 28)
         );
 
         extern "system" {
-            fn SendInput(cInputs: u32, pInputs: *const INPUT, cbSize: i32) -> u32;
+            fn SendInput(cInputs: u32, pInputs: *const Input, cbSize: i32) -> u32;
         }
 
         const INPUT_KEYBOARD: u32 = 1;
@@ -1148,9 +1147,9 @@ mod windows {
 
             let inputs = [
                 // Ctrl Down
-                INPUT {
+                Input {
                     r#type: INPUT_KEYBOARD,
-                    u: KEYBDINPUT {
+                    u: KeybdInput {
                         wVk: VK_CONTROL,
                         wScan: ctrl_scan,
                         dwFlags: 0,
@@ -1160,9 +1159,9 @@ mod windows {
                     _pad: [0; 8],
                 },
                 // V Down
-                INPUT {
+                Input {
                     r#type: INPUT_KEYBOARD,
-                    u: KEYBDINPUT {
+                    u: KeybdInput {
                         wVk: VK_V,
                         wScan: v_scan,
                         dwFlags: 0,
@@ -1172,9 +1171,9 @@ mod windows {
                     _pad: [0; 8],
                 },
                 // V Up
-                INPUT {
+                Input {
                     r#type: INPUT_KEYBOARD,
-                    u: KEYBDINPUT {
+                    u: KeybdInput {
                         wVk: VK_V,
                         wScan: v_scan,
                         dwFlags: KEYEVENTF_KEYUP,
@@ -1184,9 +1183,9 @@ mod windows {
                     _pad: [0; 8],
                 },
                 // Ctrl Up
-                INPUT {
+                Input {
                     r#type: INPUT_KEYBOARD,
-                    u: KEYBDINPUT {
+                    u: KeybdInput {
                         wVk: VK_CONTROL,
                         wScan: ctrl_scan,
                         dwFlags: KEYEVENTF_KEYUP,
@@ -1197,7 +1196,7 @@ mod windows {
                 },
             ];
 
-            let inserted = SendInput(4, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+            let inserted = SendInput(4, inputs.as_ptr(), std::mem::size_of::<Input>() as i32);
             let ok = inserted == 4;
             if !ok {
                 log_message(
@@ -1365,7 +1364,7 @@ mod windows {
         if history_id != 0 && unsafe { IsClipboardFormatAvailable(history_id) } != 0 {
             #[link(name = "user32")]
             extern "system" {
-                fn OpenClipboard(hWndNewOwner: HWND) -> i32;
+                fn OpenClipboard(hWndNewOwner: Hwnd) -> i32;
                 fn CloseClipboard() -> i32;
                 fn GetClipboardData(uFormat: u32) -> *mut std::ffi::c_void;
             }
@@ -1407,7 +1406,7 @@ mod windows {
 
         #[link(name = "user32")]
         extern "system" {
-            fn OpenClipboard(hWndNewOwner: HWND) -> i32;
+            fn OpenClipboard(hWndNewOwner: Hwnd) -> i32;
             fn CloseClipboard() -> i32;
             fn SetClipboardData(uFormat: u32, hMem: *mut std::ffi::c_void)
                 -> *mut std::ffi::c_void;
@@ -1493,7 +1492,7 @@ mod windows {
     unsafe fn captured_target_pid() -> u32 {
         let hwnd_raw = PREVIOUS_HWND.load(Ordering::SeqCst);
         if hwnd_raw != 0 {
-            let hwnd = hwnd_raw as HWND;
+            let hwnd = hwnd_raw as Hwnd;
             if IsWindow(hwnd) != 0 {
                 let mut pid = 0u32;
                 GetWindowThreadProcessId(hwnd, &mut pid);
@@ -1620,7 +1619,7 @@ mod windows {
         #[link(name = "dwmapi")]
         extern "system" {
             fn DwmSetWindowAttribute(
-                hwnd: HWND,
+                hwnd: Hwnd,
                 dwAttribute: u32,
                 pvAttribute: *const std::ffi::c_void,
                 cbAttribute: u32,
