@@ -1373,6 +1373,14 @@ impl ClipboardApp {
 }
 
 impl eframe::App for ClipboardApp {
+    /// On macOS, exit right after cleanup to dodge an `AppKit` Touch Bar observer crash.
+    #[cfg(target_os = "macos")]
+    fn on_exit(&mut self) {
+        if self.is_quitting {
+            self.shutdown_and_exit();
+        }
+    }
+
     /// Runs before every `ui()` frame AND while the window is hidden (`Visible(false)`).
     /// In `eframe` 0.36+, `ui()` is skipped while the root viewport is invisible, so
     /// all wake-up, tray, hotkey, activation/reopen, monitor, and auto-clear handlers
@@ -1433,6 +1441,28 @@ impl eframe::App for ClipboardApp {
 
         self.render_clear_confirm_modal(&ctx, is_dark);
         self.render_keyring_explanation_modal(&ctx, is_dark);
+    }
+}
+
+impl ClipboardApp {
+    /// Terminates the process right after cleanup on macOS.
+    ///
+    /// After the close request, winit's `NSApplication run` loop is still pumping and
+    /// `AppKit`'s display cycle invalidates `_NSTouchBarFinderObservation` on the already
+    /// torn-down `WinitView`, raising an uncaught `NSRangeException`. Exiting here, once
+    /// our own cleanup finished, avoids that last `AppKit` flush.
+    #[cfg(target_os = "macos")]
+    fn shutdown_and_exit(&mut self) -> ! {
+        self.clear_pending_secret_from_clipboard();
+        if let Some(hotkey) = self.hotkey_service.as_mut() {
+            hotkey.shutdown();
+        }
+        let _ = self.monitor_shutdown_tx.send(());
+        if let Some(handle) = self.monitor_handle.take() {
+            let _ = handle.join();
+        }
+        crate::platform::teardown_reopen_observer();
+        std::process::exit(0);
     }
 }
 
