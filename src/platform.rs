@@ -554,10 +554,10 @@ mod macos {
     }
 
     pub(super) fn setup_reopen_observer() {
+        static INIT: std::sync::Once = std::sync::Once::new();
         if !is_main_thread() {
             return;
         }
-        static INIT: std::sync::Once = std::sync::Once::new();
         INIT.call_once(|| {
             objc::rc::autoreleasepool(|| unsafe {
                 let superclass = class!(NSObject);
