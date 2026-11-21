@@ -49,9 +49,11 @@ CipherClipboard runs quietly in the background, instantly captures copied text a
 cipherclipboard/
 ├── Cargo.toml            # Project manifest & dependencies
 ├── deny.toml             # Supply-chain security & license policy
-├── WINDOWS_REVIEW.md     # Windows readiness review notes
-├── WINDOWS_TESTING.md    # Windows manual testing checklist
-├── docs/                 # Bug analyses and platform-specific docs (e.g. docs/windows/)
+├── docs/                 # Bug analyses, platform notes and dated review reports
+│   ├── windows/
+│   │   ├── WINDOWS_REVIEW.md     # Windows readiness review notes
+│   │   └── WINDOWS_TESTING.md    # Windows manual testing checklist
+│   └── reviews/                  # Dated comprehensive review reports
 ├── scripts/              # Local CI pre-flight guardrails & release packaging
 ├── src/
 │   ├── main.rs           # Entry point, panic hook, single-instance lock & eframe launcher
@@ -68,7 +70,11 @@ cipherclipboard/
 │   ├── code.rs           # Multi-language syntax detection & highlighting sections
 │   ├── color.rs          # Hex/RGB/HSL color parsing & swatch previews
 │   ├── password.rs       # Cryptographically secure password and passphrase generator
-│   ├── platform.rs       # OS-level window focus capture, restoration & auto-paste
+│   ├── platform/         # OS-level window focus capture, restoration & auto-paste
+│   │   ├── mod.rs
+│   │   ├── macos.rs
+│   │   ├── windows.rs
+│   │   └── linux.rs
 │   ├── media.rs          # Image encoding/decoding (RGBA <-> PNG)
 │   ├── monitor.rs        # Background clipboard polling & change detection
 │   ├── settings.rs       # Persistent user preferences & keybinding configuration
@@ -139,6 +145,14 @@ On first launch:
 2. Creates an encrypted database `clipboard_history.db` in your app data directory: `~/Library/Application Support/cipherclipboard/` (macOS), `%LOCALAPPDATA%\cipherclipboard\` (Windows), or `~/.local/share/cipherclipboard/` (Linux).
 3. Opens the UI and starts monitoring copied text and images in the background.
 
+#### Key loss and recovery
+
+The key normally lives in your OS Keyring under service `cipherclipboard` (macOS Keychain, Windows Credential Manager, or Linux Secret Service). If the keyring is unavailable at first launch, CipherClipboard creates a restricted local `.encryption_key` fallback in the app data directory and shows a degraded-state notice.
+
+If an encrypted database already exists but its key cannot be found, startup **fails closed**: CipherClipboard will never generate a replacement key, because that would make your existing history undecryptable. First try unlocking the OS keyring (for example, unlock the macOS login keychain) and restarting. If you previously used the fallback, restore `.encryption_key` from a backup. There is no other way to recover the encrypted history.
+
+Deleting the app data directory — `~/Library/Application Support/cipherclipboard/` (macOS), `%LOCALAPPDATA%\cipherclipboard\` (Windows), or `~/.local/share/cipherclipboard/` (Linux) — removes the database and fallback key and **permanently destroys your history**. Do this only when you intentionally want to start fresh.
+
 ---
 
 ## Development & CI Guardrails
@@ -160,7 +174,7 @@ To ensure all contributions satisfy continuous integration standards (formatting
 
 ## Known Limitations
 
-* **Monochrome Emoji & Symbol Rendering:** `egui` (`0.36`) rasterizes font glyphs via `ab_glyph` using monochrome vector outlines and does not support color emoji tables (`sbix`, `COLR`/`CPAL`, or `CBDT`). As a result, emojis and symbols in copied text render in the active theme's monochrome text color rather than full color. Invisible Unicode variation selectors (`U+FE0E`, `U+FE0F`) and zero-width joiners are stripped from UI previews to avoid missing-glyph (`□`) boxes, while the original text is preserved intact when copied back to the clipboard.
+* **Monochrome Emoji & Symbol Rendering:** `egui` (`0.37`) rasterizes font glyphs via `ab_glyph` using monochrome vector outlines and does not support color emoji tables (`sbix`, `COLR`/`CPAL`, or `CBDT`). As a result, emojis and symbols in copied text render in the active theme's monochrome text color rather than full color. Invisible Unicode variation selectors (`U+FE0E`, `U+FE0F`) and zero-width joiners are stripped from UI previews to avoid missing-glyph (`□`) boxes, while the original text is preserved intact when copied back to the clipboard.
 * **Windows UIPI & Elevated Target Windows:** Windows User Interface Privilege Isolation (UIPI) blocks standard-privilege applications from injecting synthetic keystrokes (`Ctrl+V`) into elevated (Administrator) windows. CipherClipboard detects higher-integrity target windows, copies the item to the clipboard, and skips auto-paste—press `Ctrl+V` manually in the elevated window.
 * **Windows `Alt+Space` Hotkey Preset:** Selecting the optional `Alt+Space` global shortcut on Windows overrides the standard system-menu accelerator (`Alt+Space`) in other applications. Prefer the default `Ctrl+Shift+V` unless you explicitly want `Alt+Space`.
 

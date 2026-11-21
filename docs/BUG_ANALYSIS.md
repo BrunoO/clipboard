@@ -1,5 +1,7 @@
 # CipherClipboard — Bug Analysis & Recommendations
 
+> **Historical snapshot (2026-11-14):** paths and line numbers below predate the `src/platform/` and `src/app/` module split. Current paths are given where a finding was carried forward; see `docs/reviews/` for current dated reviews.
+
 **Generated**: 2026-11-14  
 **Project**: `/Users/brunoorsier/dev/clipboard`  
 **Index**: 656 nodes, 2,595 edges (Rust, Bash, YAML, TOML)
@@ -84,7 +86,7 @@ if let Err(e) = conn.execute(...) {
 
 ### 3. Database Errors Hidden at Startup
 
-**File**: `src/app.rs:169`
+**File**: `src/app/mod.rs` (historical `src/app.rs:169`)
 
 ```rust
 let initial_items = db.get_recent(settings.max_history, None).unwrap_or_default();
@@ -113,7 +115,7 @@ let initial_items = match db.get_recent(settings.max_history, None) {
 
 ### 5. macOS Notification Observer Never Removed
 
-**File**: `src/platform.rs:260–310` (`setup_reopen_observer`)
+**File**: `src/platform/macos.rs` (`setup_reopen_observer`; historical `src/platform.rs:260–310`)
 
 ```rust
 // Adds observer but NO corresponding removeObserver
@@ -171,7 +173,7 @@ if let Some(&observer) = REOPEN_OBSERVER.get() {
 
 ### 10. Clipboard Writer Failure Silent
 
-**File**: `src/app.rs:163`
+**File**: `src/app/mod.rs` (historical `src/app.rs:163`)
 
 ```rust
 let clipboard_writer = Clipboard::new().ok();  // None on failure
@@ -193,7 +195,7 @@ let clipboard_writer = match Clipboard::new() {
 
 ### 11. Auto-Paste Timing Fragility
 
-**File**: `src/platform.rs:143`
+**File**: `src/platform/{macos,windows}.rs` (historical `src/platform.rs:143`)
 
 ```rust
 std::thread::sleep(Duration::from_millis(120));  // Hardcoded
@@ -252,8 +254,8 @@ sed -i 's/\.lock()\.unwrap()/.lock().unwrap_or_else(|e| e.into_inner())/g' src/d
 
 ## Files to Audit Further
 
-- `src/platform.rs` — 767 lines, heavy `unsafe`, macOS/Windows FFI
-- `src/app.rs` — 2,647 lines, complex UI state machine
+- `src/platform/` — `mod.rs` facade plus `macos.rs`, `windows.rs`, and `linux.rs` FFI backends
+- `src/app/` — `mod.rs` plus `history_view.rs`, `generator_view.rs`, and `settings_view.rs` UI state machine
 - `src/hotkey.rs` — Global hotkey manager lifecycle
 - `src/crypto.rs` — Key management, permissions hardening
 
