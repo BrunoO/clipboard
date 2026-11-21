@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CipherClipboard Architecture Diagrams</title>
+  <style>
+    :root { --bg:#0b1020; --panel:#121a30; --text:#e8edf7; --muted:#aab6cc; --line:#28324d; --accent:#7cc4ff; --chip:#1b2742; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:linear-gradient(180deg,#0b1020,#0f1729); color:var(--text); }
+    main { max-width:1000px; margin:0 auto; padding:48px 20px 64px; }
+    h1 { margin:0 0 8px; font-size:clamp(28px,5vw,42px); line-height:1.1; }
+    p.lead { margin:0 0 28px; color:var(--muted); max-width:72ch; }
+    .grid { display:grid; gap:16px; }
+    .card { display:block; padding:20px; background:rgba(18,26,48,.92); border:1px solid var(--line); border-radius:14px; color:inherit; text-decoration:none; transition:transform .12s ease,border-color .12s ease; }
+    .card:hover { transform:translateY(-1px); border-color:#3d527d; }
+    .meta { display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+    .value { display:inline-flex; align-items:center; justify-content:center; min-width:32px; height:32px; padding:0 10px; border-radius:999px; background:#173055; color:#9fd3ff; font-weight:700; font-size:14px; }
+    .type { font-size:12px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); background:var(--chip); padding:4px 8px; border-radius:999px; border:1px solid var(--line); }
+    h2 { margin:0 0 8px; font-size:22px; line-height:1.25; }
+    .card p { margin:0 0 10px; color:#d7deea; }
+    .why { margin:0; color:var(--muted); font-size:14px; }
+    .path { margin-top:12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; color:#8ea0bf; }
+    footer { margin-top:28px; color:var(--muted); font-size:14px; }
+    code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.95em; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>CipherClipboard Architecture Diagrams</h1>
+    <p class="lead">Generated Archify diagrams for the CipherClipboard codebase, ordered by increasing value. Start low for orientation; prioritize the bottom diagrams for behavior, concurrency, and security decisions.</p>
+    <div class="grid">
+      <a class="card" href="./01-module-map.html">
+        <div class="meta"><span class="value">1</span><span class="type">Architecture</span></div>
+        <h2>Module / Component Map</h2>
+        <p>Top-level modules and dependency directions across bootstrap, UI, monitor, DB, crypto, platform, hotkey, tray, and settings.</p>
+        <p class="why"><strong>Why useful:</strong> Fast orientation, but mostly recoverable from the file tree.</p>
+        <div class="path">01-module-map.html</div>
+      </a>
+      <a class="card" href="./02-storage-erd.html">
+        <div class="meta"><span class="value">2</span><span class="type">ERD</span></div>
+        <h2>Storage Model</h2>
+        <p>SQLCipher tables (<code>clipboard_history</code>, <code>app_settings</code>) and the external encryption key artifact relationship.</p>
+        <p class="why"><strong>Why useful:</strong> Clarifies persistence and encryption scope, though the schema is intentionally small.</p>
+        <div class="path">02-storage-erd.html</div>
+      </a>
+      <a class="card" href="./03-startup-sequence.html">
+        <div class="meta"><span class="value">3</span><span class="type">Sequence</span></div>
+        <h2>Startup &amp; Shutdown Flow</h2>
+        <p>Bootstrap, encrypted DB/settings load, service wiring, app run, and teardown/join order.</p>
+        <p class="why"><strong>Why useful:</strong> Helpful for initialization and cleanup regressions; much of it is linear in <code>main.rs</code>.</p>
+        <div class="path">03-startup-sequence.html</div>
+      </a>
+      <a class="card" href="./04-window-state-lifecycle.html">
+        <div class="meta"><span class="value">4</span><span class="type">Lifecycle</span></div>
+        <h2>Window / UI State Machine</h2>
+        <p>Visibility, focus, tray fallback, hotkey recording modal, blur-hide/escape behavior, and quit transitions.</p>
+        <p class="why"><strong>Why useful:</strong> Captures desktop UX behavior spread across OS events and UI state.</p>
+        <div class="path">04-window-state-lifecycle.html</div>
+      </a>
+      <a class="card" href="./05-ingestion-dataflow.html">
+        <div class="meta"><span class="value">5</span><span class="type">Dataflow</span></div>
+        <h2>Clipboard Ingestion Data Flow</h2>
+        <p>OS clipboard capture through monitor polling/change detection, classification/filtering, SQLCipher dedup/insert, and UI refresh.</p>
+        <p class="why"><strong>Why useful:</strong> Core product pipeline; makes performance and privacy decisions explicit.</p>
+        <div class="path">05-ingestion-dataflow.html</div>
+      </a>
+      <a class="card" href="./06-paste-sequence.html">
+        <div class="meta"><span class="value">6</span><span class="type">Sequence</span></div>
+        <h2>Copy / Restore Focus / Auto-Paste</h2>
+        <p>Selection or generated secret to clipboard write, optional DB update, hide, focus restore, foreground/elevation checks, and paste simulation.</p>
+        <p class="why"><strong>Why useful:</strong> Crosses UI, DB, platform, and security-sensitive OS behavior with subtle ordering constraints.</p>
+        <div class="path">06-paste-sequence.html</div>
+      </a>
+      <a class="card" href="./07-concurrency-runtime.html">
+        <div class="meta"><span class="value">7</span><span class="type">Architecture</span></div>
+        <h2>Concurrency &amp; Runtime Communication</h2>
+        <p>UI main thread, monitor/hotkey/tray/paste workers, channels/atomics, shared <code>Arc&lt;Mutex&lt;DB&gt;&gt;</code>, and shutdown/join paths.</p>
+        <p class="why"><strong>Why useful:</strong> High leverage for real bugs—makes synchronization boundaries and lifecycle guarantees visible.</p>
+        <div class="path">07-concurrency-runtime.html</div>
+      </a>
+      <a class="card" href="./08-security-trust-boundaries.html">
+        <div class="meta"><span class="value">8</span><span class="type">Architecture</span></div>
+        <h2>Security &amp; Trust Boundaries</h2>
+        <p>OS clipboard/target app trust boundaries, classification/masking, SQLCipher persistence, keyring vs restricted fallback key, and guarded paste controls.</p>
+        <p class="why"><strong>Why useful:</strong> Highest value—maps the app’s core sensitive-data protections and trust assumptions.</p>
+        <div class="path">08-security-trust-boundaries.html</div>
+      </a>
+    </div>
+    <footer>Artifacts were generated with Archify and stored alongside per-diagram <code>.finalize</code>, <code>.browser-check</code>, and <code>.delivery</code> evidence files.</footer>
+  </main>
+</body>
+</html>
