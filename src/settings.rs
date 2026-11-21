@@ -148,7 +148,11 @@ pub(crate) struct ParsedHotkey {
 
 impl ParsedHotkey {
     /// Parses a string like "Ctrl+Shift+V" into modifiers and key code.
-    #[allow(clippy::too_many_lines, clippy::match_same_arms)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::match_same_arms,
+        reason = "exhaustive keyboard code mapping table"
+    )]
     pub(crate) fn parse(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split('+').collect();
         if parts.is_empty() {
@@ -294,7 +298,10 @@ impl ParsedHotkey {
     }
 
     /// Formats back to a display string like "Ctrl+Shift+V".
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "exhaustive keyboard code display formatting table"
+    )]
     pub(crate) fn format(&self) -> String {
         let mut parts = Vec::new();
         if self.modifiers.contains(Modifiers::CONTROL) {

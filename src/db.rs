@@ -606,26 +606,24 @@ impl Database {
 
         Ok(Some(new_id))
     }
+}
 
-    /// Fetches the most recent clipboard entries, optionally filtered by search text.
-    ///
-    /// # Errors
-    /// Returns the underlying SQLite error if the query or row extraction fails.
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn get_recent(
+struct RawRecentRow {
+    id: i64,
+    kind_str: String,
+    content: String,
+    width: Option<u32>,
+    height: Option<u32>,
+    created_at: String,
+}
+
+impl Database {
+    /// Queries raw recent rows from SQLite holding the connection lock only during row extraction.
+    fn fetch_raw_recent_rows(
         &self,
         limit: usize,
         filter: Option<&str>,
-    ) -> Result<Vec<ClipboardItem>, rusqlite::Error> {
-        struct RawRow {
-            id: i64,
-            kind_str: String,
-            content: String,
-            width: Option<u32>,
-            height: Option<u32>,
-            created_at: String,
-        }
-
+    ) -> Result<Vec<RawRecentRow>, rusqlite::Error> {
         let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
         let search_pattern = filter.filter(|s| !s.trim().is_empty()).map(|search| {
             let escaped = search
@@ -636,67 +634,66 @@ impl Database {
             format!("%{escaped}%")
         });
 
-        // Hold the database mutex only while reading raw rows from SQLite.
-        let raw_rows = {
-            let conn = self.lock_conn();
-            let mut raw_rows = Vec::new();
-            let extract_row = |row: &rusqlite::Row| -> Result<RawRow, rusqlite::Error> {
-                Ok(RawRow {
-                    id: row.get(0)?,
-                    kind_str: row.get(1).unwrap_or_else(|_| "text".to_string()),
-                    content: row.get(2)?,
-                    width: row.get(3)?,
-                    height: row.get(4)?,
-                    created_at: row.get(5)?,
-                })
-            };
+        let conn = self.lock_conn();
+        let mut raw_rows = Vec::new();
+        let extract_row = |row: &rusqlite::Row| -> Result<RawRecentRow, rusqlite::Error> {
+            Ok(RawRecentRow {
+                id: row.get(0)?,
+                kind_str: row.get(1).unwrap_or_else(|_| "text".to_string()),
+                content: row.get(2)?,
+                width: row.get(3)?,
+                height: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        };
 
-            if let Some(pattern) = search_pattern {
+        if let Some(pattern) = search_pattern {
+            let mut stmt = conn.prepare(
+                "SELECT id, kind, content, width, height, created_at
+                 FROM clipboard_history
+                 WHERE kind != 'secret' AND content LIKE ?1 ESCAPE '\\'
+                 ORDER BY id DESC LIMIT ?2",
+            )?;
+            let mut rows = stmt.query(params![pattern, limit_i64])?;
+            while let Some(row) = rows.next()? {
+                raw_rows.push(extract_row(row)?);
+            }
+        } else {
+            let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
+            if preserve {
                 let mut stmt = conn.prepare(
                     "SELECT id, kind, content, width, height, created_at
                      FROM clipboard_history
-                     WHERE kind != 'secret' AND content LIKE ?1 ESCAPE '\\'
-                     ORDER BY id DESC LIMIT ?2",
+                     WHERE kind = 'secret'
+                        OR id IN (
+                            SELECT id FROM clipboard_history
+                            WHERE kind != 'secret'
+                            ORDER BY id DESC LIMIT ?1
+                        )
+                     ORDER BY id DESC",
                 )?;
-                let mut rows = stmt.query(params![pattern, limit_i64])?;
+                let mut rows = stmt.query(params![limit_i64])?;
                 while let Some(row) = rows.next()? {
                     raw_rows.push(extract_row(row)?);
                 }
             } else {
-                let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
-                if preserve {
-                    let mut stmt = conn.prepare(
-                        "SELECT id, kind, content, width, height, created_at
-                         FROM clipboard_history
-                         WHERE kind = 'secret'
-                            OR id IN (
-                                SELECT id FROM clipboard_history
-                                WHERE kind != 'secret'
-                                ORDER BY id DESC LIMIT ?1
-                            )
-                         ORDER BY id DESC",
-                    )?;
-                    let mut rows = stmt.query(params![limit_i64])?;
-                    while let Some(row) = rows.next()? {
-                        raw_rows.push(extract_row(row)?);
-                    }
-                } else {
-                    let mut stmt = conn.prepare(
-                        "SELECT id, kind, content, width, height, created_at
-                         FROM clipboard_history
-                         ORDER BY id DESC LIMIT ?1",
-                    )?;
-                    let mut rows = stmt.query(params![limit_i64])?;
-                    while let Some(row) = rows.next()? {
-                        raw_rows.push(extract_row(row)?);
-                    }
+                let mut stmt = conn.prepare(
+                    "SELECT id, kind, content, width, height, created_at
+                     FROM clipboard_history
+                     ORDER BY id DESC LIMIT ?1",
+                )?;
+                let mut rows = stmt.query(params![limit_i64])?;
+                while let Some(row) = rows.next()? {
+                    raw_rows.push(extract_row(row)?);
                 }
             }
-            raw_rows
-        };
+        }
+        Ok(raw_rows)
+    }
 
-        // Classify any legacy untyped rows outside the database lock.
-        let items = raw_rows
+    /// Classifies raw SQLite rows into typed `ClipboardItem`s outside the database lock.
+    fn classify_raw_rows(raw_rows: Vec<RawRecentRow>) -> Vec<ClipboardItem> {
+        raw_rows
             .into_iter()
             .map(|r| {
                 let kind = match r.kind_str.as_str() {
@@ -734,9 +731,20 @@ impl Database {
                     embedded_colors,
                 }
             })
-            .collect();
+            .collect()
+    }
 
-        Ok(items)
+    /// Fetches the most recent clipboard entries, optionally filtered by search text.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the query or row extraction fails.
+    pub(crate) fn get_recent(
+        &self,
+        limit: usize,
+        filter: Option<&str>,
+    ) -> Result<Vec<ClipboardItem>, rusqlite::Error> {
+        let raw_rows = self.fetch_raw_recent_rows(limit, filter)?;
+        Ok(Self::classify_raw_rows(raw_rows))
     }
 
     /// Loads the PNG bytes for a single image entry only when the UI needs them.
