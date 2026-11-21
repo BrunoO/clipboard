@@ -49,6 +49,10 @@ fn warn_if_local_cache_hardening_failed(permissions_degraded: bool) {
 ///   Keychain, Windows Credential Manager, Linux Secret Service). Any legacy `.encryption_key`
 ///   file is migrated into the OS Keyring and securely removed from disk. Falls back to the
 ///   restricted local key file only if the OS Keyring is unavailable (e.g., headless Linux).
+///
+/// # Errors
+/// Returns an error if a key file cannot be read or written with restricted permissions,
+/// or if an existing encrypted database is found but its key cannot be recovered.
 pub(crate) fn get_or_create_encryption_key(
     data_dir: &Path,
     db_exists: bool,

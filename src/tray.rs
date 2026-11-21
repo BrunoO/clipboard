@@ -170,6 +170,9 @@ impl Drop for TrayService {
 }
 
 /// Decodes the bundled application PNG into `(rgba_bytes, width, height)` for the tray icon.
+///
+/// # Errors
+/// Returns an image decoding error if the bundled PNG cannot be read.
 #[allow(dead_code)]
 pub(crate) fn load_tray_icon_rgba() -> Result<(Vec<u8>, u32, u32), image::ImageError> {
     // Windows notification-area icons are 16x16/32x32. Feeding the full 512x512

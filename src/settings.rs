@@ -562,6 +562,9 @@ impl AppSettings {
     }
 
     /// Saves the settings to the database.
+    ///
+    /// # Errors
+    /// Returns an error if settings serialization or the database write fails.
     pub(crate) fn save(&self, db: &Database) -> Result<(), Box<dyn std::error::Error>> {
         let json = serde_json::to_string(self)?;
         db.set_setting(Self::SETTINGS_KEY, &json)?;

@@ -72,6 +72,10 @@ fn clear_previous_window_if_matches(stale_hwnd: isize) {
 /// Resolves the keyboard layout (HKL) for the thread whose layout the user is
 /// currently typing with, preferring the foreground window's thread (or the
 /// captured target window when our own window is foreground) over our UI thread.
+///
+/// # Safety
+/// Call only on Windows after the Win32 subsystem is initialized. The returned
+/// `HKL` is a borrowed OS handle; callers must not retain it across layout changes.
 unsafe fn target_keyboard_layout() -> HKL {
     let current_pid = GetCurrentProcessId();
     let fg = GetForegroundWindow();
@@ -509,7 +513,11 @@ pub(super) fn mark_clipboard_concealed() {
     static HISTORY_FMT: AtomicU32 = AtomicU32::new(0);
     static CLOUD_FMT: AtomicU32 = AtomicU32::new(0);
 
-    // SAFETY: The caller holds the clipboard open; allocation, locking, and `SetClipboardData` are checked and any unowned global is freed.
+    /// Registers a zero DWORD clipboard format, reusing a cached format ID.
+    ///
+    /// # Safety
+    /// The caller must hold the clipboard open; allocation, locking, and
+    /// `SetClipboardData` are checked and any unowned global is freed.
     unsafe fn set_zero_dword_format(cache: &AtomicU32, name: &str) {
         let fmt = cached_clipboard_format(cache, name);
         if fmt == 0 {
@@ -577,7 +585,11 @@ pub(super) fn quote_key_is_ugrave() -> bool {
     }
 }
 
-// SAFETY: The captured HWND is validated with `IsWindow` before the PID query; the out-pointer is a live local and only non-self PIDs are returned.
+/// Returns the PID of the captured foreground target, or `0` if unavailable.
+///
+/// # Safety
+/// The captured HWND is validated with `IsWindow` before the PID query; the
+/// out-pointer is a live local and only non-self PIDs are returned.
 unsafe fn captured_target_pid() -> u32 {
     let Some(prev) = load_previous_window() else {
         return 0;
@@ -607,7 +619,13 @@ pub(crate) fn target_is_elevated() -> bool {
     #[repr(C, align(8))]
     struct TokenIntegrityBuf([u8; 256]);
 
-    // SAFETY: All Win32 handle calls are null-checked and closed; `ret_len` is validated to be at least the `TOKEN_MANDATORY_LABEL` header and no larger than the 8-byte-aligned 256-byte buffer before the cast, and SID pointers are checked before dereference.
+    /// Reads the mandatory integrity level of `pid`, or `None` if it cannot be queried.
+    ///
+    /// # Safety
+    /// All Win32 handle calls are null-checked and closed; `ret_len` is validated
+    /// to be at least the `TOKEN_MANDATORY_LABEL` header and no larger than the
+    /// 8-byte-aligned 256-byte buffer before the cast, and SID pointers are
+    /// checked before dereference.
     unsafe fn integrity_level(pid: u32) -> Option<u32> {
         if pid == 0 {
             return None;
@@ -701,6 +719,10 @@ pub(super) fn set_title_bar_dark_mode(is_dark: bool) {
 
 const DPAPI_ENTROPY: &[u8] = b"CipherClipboard-DPAPI-v1";
 
+/// Encrypts `plaintext` with DPAPI using the application entropy.
+///
+/// # Errors
+/// Returns an error if the input is too large for DPAPI or `CryptProtectData` fails.
 pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let in_len = u32::try_from(plaintext.len())
         .map_err(|_| "DPAPI plaintext exceeds u32::MAX bytes".to_string())?;
@@ -747,6 +769,11 @@ pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
     Ok(ciphertext)
 }
 
+/// Decrypts DPAPI ciphertext produced by [`dpapi_protect`].
+///
+/// # Errors
+/// Returns an error if the input is too large for DPAPI, `CryptUnprotectData`
+/// fails, or the ciphertext was not produced with the application entropy.
 pub(crate) fn dpapi_unprotect(ciphertext: &[u8]) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
     use zeroize::Zeroize;
 

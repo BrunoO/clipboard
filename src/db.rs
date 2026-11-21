@@ -169,6 +169,10 @@ impl std::fmt::Debug for Database {
 impl Database {
     /// Opens or creates the SQLite database, unlocks it with the `SQLCipher` key,
     /// enables WAL mode for high performance concurrency, and initializes or migrates the schema.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be opened, the encryption key is rejected,
+    /// or SQLite pragmas/schema initialization fail.
     pub(crate) fn open(
         path: &Path,
         encryption_key: &str,
@@ -308,6 +312,9 @@ impl Database {
 
     /// Prunes older clipboard items exceeding the maximum history threshold.
     /// Returns the number of purged rows.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the prune `DELETE` fails.
     pub(crate) fn prune_history(&self, max_history: usize) -> Result<usize, rusqlite::Error> {
         if max_history == 0 {
             return Ok(0);
@@ -325,6 +332,9 @@ impl Database {
     }
 
     /// Compacts and defragments the encrypted database to reclaim free disk space.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if `VACUUM` fails.
     #[cfg(test)]
     pub(crate) fn vacuum(&self) -> Result<(), rusqlite::Error> {
         let conn = self.lock_conn();
@@ -370,6 +380,9 @@ impl Database {
     /// If an identical item exists earlier in history, deletes the stale copy and promotes
     /// the item to the top with an updated timestamp.
     /// Also automatically enforces the `max_history` limit.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if any statement in the insert transaction fails.
     pub(crate) fn insert(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
         // Run CPU-bound classification (secret/URL/color/code heuristics) before
         // acquiring the database mutex so UI reads are not blocked.
@@ -423,6 +436,9 @@ impl Database {
 
     /// Inserts a secret/sensitive text entry (e.g., generated password), deduplicating against
     /// existing secret entries and enforcing the `max_history` limit.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if any statement in the insert transaction fails.
     pub(crate) fn insert_secret(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let max_limit = self.0.max_history.load(Ordering::Relaxed);
@@ -466,6 +482,9 @@ impl Database {
     /// If an identical image exists earlier in history, deletes the stale copy and
     /// promotes the item to the top with an updated timestamp.
     /// Also automatically enforces the `max_history` limit.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if any statement in the insert transaction fails.
     pub(crate) fn insert_image(
         &self,
         width: u32,
@@ -520,6 +539,9 @@ impl Database {
     }
 
     /// Fetches the most recent clipboard entries, optionally filtered by search text.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the query or row extraction fails.
     pub(crate) fn get_recent(
         &self,
         limit: usize,
@@ -621,6 +643,10 @@ impl Database {
     }
 
     /// Loads the PNG bytes for a single image entry only when the UI needs them.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the query fails; a missing id or
+    /// non-image row yields `Ok(None)`.
     pub(crate) fn get_image_data(&self, id: i64) -> Result<Option<Vec<u8>>> {
         let conn = self.lock_conn();
         match conn.query_row(
@@ -635,6 +661,9 @@ impl Database {
     }
 
     /// Toggles whether a non-image history entry is classified as `secret`.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the lookup or `UPDATE` fails.
     pub(crate) fn set_item_secret(&self, id: i64, is_secret: bool) -> Result<(), rusqlite::Error> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare("SELECT kind, content FROM clipboard_history WHERE id = ?1")?;
@@ -670,6 +699,9 @@ impl Database {
     }
 
     /// Deletes a specific entry by its primary key ID.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the `DELETE` fails.
     pub(crate) fn delete(&self, id: i64) -> Result<(), rusqlite::Error> {
         let conn = self.lock_conn();
         conn.execute("DELETE FROM clipboard_history WHERE id = ?1", params![id])?;
@@ -717,6 +749,9 @@ impl Database {
     }
 
     /// Fetches a setting value by key from the database.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the query or row extraction fails.
     pub(crate) fn get_setting(&self, key: &str) -> Result<Option<String>, rusqlite::Error> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key = ?1")?;
@@ -729,6 +764,9 @@ impl Database {
     }
 
     /// Stores or updates a setting value by key.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the upsert fails.
     pub(crate) fn set_setting(&self, key: &str, value: &str) -> Result<(), rusqlite::Error> {
         let conn = self.lock_conn();
         conn.execute(

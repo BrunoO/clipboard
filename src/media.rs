@@ -4,6 +4,10 @@ use std::io::Cursor;
 const MAX_IMAGE_PIXELS: usize = 40_000_000; // Guard against decompression bombs (~40 MP)
 
 /// Encodes raw RGBA bytes into PNG format.
+///
+/// # Errors
+/// Returns an error if the dimensions or buffer length are invalid, the image
+/// exceeds the allocation guard, or PNG encoding fails.
 pub(crate) fn rgba_to_png(
     width: usize,
     height: usize,
@@ -25,6 +29,10 @@ pub(crate) fn rgba_to_png(
 
 /// Decodes PNG bytes into (width, height, raw RGBA bytes), validating header dimensions
 /// and applying decoder memory limits *before* allocating the pixel buffer.
+///
+/// # Errors
+/// Returns an error if the PNG header is invalid, the image exceeds the allocation
+/// guard, or decoding to RGBA fails.
 pub(crate) fn png_to_rgba(
     png_bytes: &[u8],
 ) -> Result<(usize, usize, Vec<u8>), Box<dyn std::error::Error + Send + Sync>> {

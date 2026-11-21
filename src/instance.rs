@@ -18,6 +18,9 @@ pub(crate) enum AcquireResult {
 
 impl SingleInstanceLock {
     /// Attempts to acquire an exclusive non-blocking lock on `lock_path`.
+    ///
+    /// # Errors
+    /// Returns an I/O error if the lock file cannot be opened or the lock cannot be queried.
     pub(crate) fn acquire(lock_path: &Path) -> std::io::Result<AcquireResult> {
         let mut file = OpenOptions::new()
             .read(true)
