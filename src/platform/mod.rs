@@ -171,6 +171,48 @@ pub(crate) const fn concealed_marker_limitation() -> Option<&'static str> {
     }
 }
 
+/// Windows clipboard formats whose presence marks incoming content as concealed.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) const WINDOWS_CONCEALED_DETECT_FORMATS: [&str; 3] = [
+    "ExcludeClipboardContentFromMonitorProcessing",
+    "Clipboard Viewer Ignore",
+    "CanIncludeInClipboardHistory",
+];
+
+/// Windows clipboard formats emitted to mark outgoing secrets as concealed.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) const WINDOWS_CONCEALED_EMIT_FORMATS: [&str; 3] = [
+    "ExcludeClipboardContentFromMonitorProcessing",
+    "CanIncludeInClipboardHistory",
+    "CanUploadClipboardContentToCloud",
+];
+
+/// Pure incoming-marker decision shared by Windows FFI and host-agnostic tests.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) const fn windows_concealed_detected(
+    exclude_available: bool,
+    ignore_available: bool,
+    history_excluded: bool,
+) -> bool {
+    exclude_available || ignore_available || history_excluded
+}
+
+/// Pure UIPI decision: an unqueryable or higher-integrity target must skip auto-paste.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) const fn uipi_should_skip_paste(
+    target_pid: u32,
+    target_level: Option<u32>,
+    self_level: u32,
+) -> bool {
+    if target_pid == 0 {
+        return false;
+    }
+    match target_level {
+        None => true,
+        Some(level) => level > self_level,
+    }
+}
+
 /// Attaches OS-native privacy/concealed markers to the current clipboard entry
 /// so OS clipboard history, cloud sync, Universal Clipboard, and other clipboard
 /// managers do not record or broadcast secrets copied by `CipherClipboard`.
@@ -473,6 +515,44 @@ mod tests {
             assert_eq!(support, ConcealedMarkerSupport::DetectOnly);
             assert!(limitation.is_some_and(|text| text.contains("cannot advertise")));
         }
+    }
+
+    #[test]
+    fn test_windows_concealed_marker_decision_helper() {
+        assert!(!windows_concealed_detected(false, false, false));
+        assert!(windows_concealed_detected(true, false, false));
+        assert!(windows_concealed_detected(false, true, false));
+        assert!(windows_concealed_detected(false, false, true));
+        assert!(windows_concealed_detected(true, true, true));
+    }
+
+    #[test]
+    fn test_windows_concealed_marker_format_names() {
+        assert_eq!(
+            WINDOWS_CONCEALED_DETECT_FORMATS,
+            [
+                "ExcludeClipboardContentFromMonitorProcessing",
+                "Clipboard Viewer Ignore",
+                "CanIncludeInClipboardHistory",
+            ]
+        );
+        assert_eq!(
+            WINDOWS_CONCEALED_EMIT_FORMATS,
+            [
+                "ExcludeClipboardContentFromMonitorProcessing",
+                "CanIncludeInClipboardHistory",
+                "CanUploadClipboardContentToCloud",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_uipi_should_skip_paste_fails_closed() {
+        assert!(!uipi_should_skip_paste(0, None, 0x2000));
+        assert!(uipi_should_skip_paste(42, None, 0x2000));
+        assert!(!uipi_should_skip_paste(42, Some(0x2000), 0x2000));
+        assert!(uipi_should_skip_paste(42, Some(0x3000), 0x2000));
+        assert!(!uipi_should_skip_paste(42, Some(0x1000), 0x2000));
     }
 
     #[cfg(target_os = "linux")]

@@ -508,7 +508,7 @@ impl ClipboardApp {
         let Some((_, deadline)) = &self.pending_clipboard_clear else {
             return;
         };
-        if Instant::now() < *deadline {
+        if !clipboard_clear_is_due(Instant::now(), *deadline) {
             return;
         }
         self.clear_pending_secret_from_clipboard();
@@ -1002,7 +1002,8 @@ impl ClipboardApp {
             new_items_detected = true;
         }
 
-        if new_items_detected || self.search_query != self.last_query_cached {
+        let query_changed = self.search_query != self.last_query_cached;
+        if monitor_update_needs_refresh(new_items_detected, query_changed) {
             self.refresh_items();
             self.last_query_cached = self.search_query.clone();
             self.selected_index = 0;
@@ -1542,6 +1543,16 @@ impl ClipboardApp {
     }
 }
 
+/// Pure dispatch decision for monitor notifications and search-query changes.
+const fn monitor_update_needs_refresh(new_items_detected: bool, query_changed: bool) -> bool {
+    new_items_detected || query_changed
+}
+
+/// Pure deadline decision for pending secret clipboard clears.
+fn clipboard_clear_is_due(now: Instant, deadline: Instant) -> bool {
+    now >= deadline
+}
+
 impl eframe::App for ClipboardApp {
     /// On macOS, exit right after cleanup to dodge an `AppKit` Touch Bar observer crash.
     #[cfg(target_os = "macos")]
@@ -1870,8 +1881,11 @@ fn render_view_toggle_button(
 
 #[cfg(test)]
 mod tests {
-    use super::{ClipboardApp, ToastSeverity};
+    use super::{
+        clipboard_clear_is_due, monitor_update_needs_refresh, ClipboardApp, ToastSeverity,
+    };
     use eframe::egui;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn test_format_display_preview_strips_variation_selectors_and_truncates() {
@@ -2055,5 +2069,122 @@ mod tests {
         let ctx = egui::Context::default();
         app.copy_plain_text("test_log_path", "Copied test toast", &ctx);
         assert!(app.toast.is_some());
+    }
+
+    fn test_app_with_channels() -> (ClipboardApp, std::sync::mpsc::Sender<()>, tempfile::TempDir) {
+        let (shutdown_tx, _shutdown_rx) = std::sync::mpsc::channel();
+        let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+        let (_hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
+        let (_tray_tx, tray_rx) = std::sync::mpsc::channel();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("contract_test.db");
+        let key = format!("{:016x}", 3_u64).repeat(4);
+        let db = crate::db::Database::open(&db_path, &key).unwrap();
+
+        let app = ClipboardApp {
+            db,
+            key_storage_mode: crate::crypto::KeyStorageMode::OsKeyring,
+            search_query: String::new(),
+            content_filter: super::ContentFilter::All,
+            items: Vec::new(),
+            filter_counts: super::FilterCounts::default(),
+            clipboard_writer: None,
+            toast: None,
+            pending_toast: None,
+            last_query_cached: String::new(),
+            notify_rx,
+            hotkey_rx,
+            hotkey_service: None,
+            tray_rx,
+            tray_service: None,
+            texture_cache: super::ImageTextureCache::new(),
+            is_visible: true,
+            has_been_focused: false,
+            was_inactive_since_hidden: false,
+            selected_index: 0,
+            focus_search_input: true,
+            last_toggle_instant: None,
+            settings: crate::settings::AppSettings::default(),
+            active_view: super::ActiveView::History,
+            password_gen: crate::password::PasswordGeneratorState::default(),
+            revealed_secrets: std::collections::HashSet::new(),
+            pending_clipboard_clear: None,
+            show_clear_confirm_dialog: false,
+            scroll_to_selected: false,
+            current_is_dark: None,
+            title_bar_dark_mode: None,
+            recording_custom_hotkey: false,
+            pending_custom_hotkey: String::new(),
+            monitor_shutdown_tx: shutdown_tx,
+            monitor_handle: None,
+            is_quitting: false,
+            show_keyring_explanation: false,
+            last_drag_or_move_instant: None,
+            last_outer_rect: None,
+            last_hide_instant: None,
+        };
+
+        (app, notify_tx, dir)
+    }
+
+    #[test]
+    fn test_monitor_update_needs_refresh_helper() {
+        assert!(!monitor_update_needs_refresh(false, false));
+        assert!(monitor_update_needs_refresh(true, false));
+        assert!(monitor_update_needs_refresh(false, true));
+        assert!(monitor_update_needs_refresh(true, true));
+    }
+
+    #[test]
+    fn test_clipboard_clear_is_due_helper() {
+        let now = Instant::now();
+        assert!(!clipboard_clear_is_due(now, now + Duration::from_secs(1)));
+        assert!(clipboard_clear_is_due(now + Duration::from_secs(1), now));
+        assert!(clipboard_clear_is_due(now, now));
+    }
+
+    #[test]
+    fn test_handle_monitor_updates_dispatches_on_notification_and_query_change() {
+        let (mut app, notify_tx, _dir) = test_app_with_channels();
+
+        app.selected_index = 3;
+        notify_tx.send(()).unwrap();
+        app.handle_monitor_updates();
+        assert_eq!(app.selected_index, 0);
+        assert!(app.scroll_to_selected);
+        assert_eq!(app.last_query_cached, String::new());
+
+        // With no new signal, handler state is left untouched.
+        app.selected_index = 4;
+        app.scroll_to_selected = false;
+        app.handle_monitor_updates();
+        assert_eq!(app.selected_index, 4);
+        assert!(!app.scroll_to_selected);
+
+        app.search_query = "changed".to_string();
+        app.handle_monitor_updates();
+        assert_eq!(app.selected_index, 0);
+        assert!(app.scroll_to_selected);
+        assert_eq!(app.last_query_cached, "changed");
+    }
+
+    #[test]
+    fn test_handle_clipboard_auto_clear_dispatches_only_at_deadline() {
+        let (mut app, _notify_tx, _dir) = test_app_with_channels();
+        let secret = format!("{:016x}", 7_u64).repeat(4);
+
+        app.pending_clipboard_clear = Some((
+            zeroize::Zeroizing::new(secret.clone()),
+            Instant::now() + Duration::from_secs(60),
+        ));
+        app.handle_clipboard_auto_clear();
+        assert!(app.pending_clipboard_clear.is_some());
+
+        app.pending_clipboard_clear = Some((
+            zeroize::Zeroizing::new(secret),
+            Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
+        ));
+        app.handle_clipboard_auto_clear();
+        assert!(app.pending_clipboard_clear.is_none());
     }
 }

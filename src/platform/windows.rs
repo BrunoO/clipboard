@@ -483,25 +483,32 @@ pub(super) fn is_clipboard_concealed() -> bool {
     static HISTORY_FMT: AtomicU32 = AtomicU32::new(0);
 
     let exclude_id =
-        cached_clipboard_format(&EXCLUDE_FMT, "ExcludeClipboardContentFromMonitorProcessing");
+        cached_clipboard_format(&EXCLUDE_FMT, super::WINDOWS_CONCEALED_DETECT_FORMATS[0]);
     // SAFETY: The format atom was registered earlier in this call (0 is guarded); `IsClipboardFormatAvailable` only reads a global format table.
-    if exclude_id != 0 && unsafe { IsClipboardFormatAvailable(exclude_id) } != 0 {
+    let exclude_available =
+        exclude_id != 0 && unsafe { IsClipboardFormatAvailable(exclude_id) } != 0;
+    if exclude_available {
         return true;
     }
 
-    let ignore_id = cached_clipboard_format(&IGNORE_FMT, "Clipboard Viewer Ignore");
+    let ignore_id =
+        cached_clipboard_format(&IGNORE_FMT, super::WINDOWS_CONCEALED_DETECT_FORMATS[1]);
     // SAFETY: The format atom was registered earlier in this call (0 is guarded); `IsClipboardFormatAvailable` only reads a global format table.
-    if ignore_id != 0 && unsafe { IsClipboardFormatAvailable(ignore_id) } != 0 {
+    let ignore_available = ignore_id != 0 && unsafe { IsClipboardFormatAvailable(ignore_id) } != 0;
+    if ignore_available {
         return true;
     }
 
     // Windows 10/11 Clipboard History API: apps set CanIncludeInClipboardHistory = DWORD(0)
     // to mark sensitive items as excluded from clipboard history.
-    let history_id = cached_clipboard_format(&HISTORY_FMT, "CanIncludeInClipboardHistory");
-    history_id != 0
-        // SAFETY: The format atom was registered earlier in this call (0 is guarded); `IsClipboardFormatAvailable` only reads a global format table.
+    let history_id =
+        cached_clipboard_format(&HISTORY_FMT, super::WINDOWS_CONCEALED_DETECT_FORMATS[2]);
+    // SAFETY: The format atom was registered earlier in this call (0 is guarded); `IsClipboardFormatAvailable` only reads a global format table.
+    let history_excluded = history_id != 0
         && unsafe { IsClipboardFormatAvailable(history_id) } != 0
-        && is_clipboard_history_excluded(history_id)
+        && is_clipboard_history_excluded(history_id);
+
+    super::windows_concealed_detected(exclude_available, ignore_available, history_excluded)
 }
 
 /// Appends Windows privacy clipboard formats without clearing the text just written:
@@ -544,9 +551,9 @@ pub(super) fn mark_clipboard_concealed() {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
             return;
         }
-        set_zero_dword_format(&EXCLUDE_FMT, "ExcludeClipboardContentFromMonitorProcessing");
-        set_zero_dword_format(&HISTORY_FMT, "CanIncludeInClipboardHistory");
-        set_zero_dword_format(&CLOUD_FMT, "CanUploadClipboardContentToCloud");
+        set_zero_dword_format(&EXCLUDE_FMT, super::WINDOWS_CONCEALED_EMIT_FORMATS[0]);
+        set_zero_dword_format(&HISTORY_FMT, super::WINDOWS_CONCEALED_EMIT_FORMATS[1]);
+        set_zero_dword_format(&CLOUD_FMT, super::WINDOWS_CONCEALED_EMIT_FORMATS[2]);
         let _ = CloseClipboard();
     }
 }
@@ -685,7 +692,7 @@ pub(crate) fn target_is_elevated() -> bool {
         // Protected / higher-integrity processes often refuse TOKEN_QUERY.
         // Fail closed: asking the user to paste manually is safer than a
         // silent drop by UIPI.
-        integrity_level(target_pid).is_none_or(|level| level > self_level)
+        super::uipi_should_skip_paste(target_pid, integrity_level(target_pid), self_level)
     }
 }
 
