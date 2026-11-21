@@ -68,10 +68,7 @@ impl std::fmt::Debug for SystemTrayBackend {
 impl SystemTrayBackend {
     /// Initializes the OS system tray icon where supported (Windows) and wires click/menu
     /// events to `tray_tx` + `ctx.request_repaint()`.
-    #[cfg_attr(
-        not(target_os = "windows"),
-        allow(unused_variables, clippy::missing_const_for_fn)
-    )]
+    #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
     pub(crate) fn new(
         tray_tx: &std::sync::mpsc::Sender<crate::tray::TrayAction>,
         ctx: &eframe::egui::Context,
@@ -250,13 +247,6 @@ pub(crate) fn is_app_active_state() -> Option<bool> {
 /// Returns `true` on Windows when the current keyboard layout produces `ù` for the
 /// physical key in the US `Quote` position (French/Belgian AZERTY layouts).
 #[must_use]
-#[cfg_attr(
-    not(target_os = "windows"),
-    expect(
-        clippy::missing_const_for_fn,
-        reason = "non-Windows stub keeps the cross-platform facade uniform"
-    )
-)]
 pub(crate) fn quote_key_is_ugrave() -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -302,13 +292,6 @@ pub(crate) fn open_auto_paste_permission_settings() {
 }
 
 /// Applies the platform title-bar dark mode attribute where supported (Windows DWM).
-#[cfg_attr(
-    not(target_os = "windows"),
-    expect(
-        clippy::missing_const_for_fn,
-        reason = "non-Windows stub keeps the cross-platform facade uniform"
-    )
-)]
 pub(crate) fn set_title_bar_dark_mode(is_dark: bool) {
     #[cfg(target_os = "windows")]
     {

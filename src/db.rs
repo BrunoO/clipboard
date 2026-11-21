@@ -1078,8 +1078,8 @@ mod tests {
         }
 
         // 2. Open with wrong key - must fail verification
-        let wrong_key = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-        let result = Database::open(&db_path, wrong_key);
+        let wrong_key = test_hex_key(2);
+        let result = Database::open(&db_path, &wrong_key);
         assert!(result.is_err(), "Opening with wrong key must fail");
     }
 

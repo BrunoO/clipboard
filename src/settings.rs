@@ -557,13 +557,15 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    const TEST_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    fn test_hex_key(seed: u64) -> String {
+        format!("{seed:016x}").repeat(4)
+    }
 
     #[test]
     fn test_settings_default_and_roundtrip() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("settings_module_test.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         // Initially default
         let loaded = AppSettings::load(&db);
