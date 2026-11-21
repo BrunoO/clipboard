@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "659f5e11-9a41-4928-b9cb-e3c601030587",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/tmp/arch-01-module-map.json",
+  "output": "/Users/brunoorsier/dev/clipboard/docs/architecture/01-module-map.html",
+  "specification": {
+    "sha256": "d0775fefe37d3c67c5620f6deef1d896a887a5ff93b522f690837844127cb07d",
+    "bytes": 2484
+  },
+  "artifact": {
+    "sha256": "9edb134eba38d671fafb4b2cecd43ec21cd0c27eb693b00a8b7f9063ede5d257",
+    "bytes": 842686
+  }
+}

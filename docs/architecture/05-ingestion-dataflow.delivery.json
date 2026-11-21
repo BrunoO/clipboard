@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "b36dc7a7-5d09-4a2a-9539-b73a87028e98",
+  "status": "current",
+  "command": "deliver",
+  "type": "dataflow",
+  "input": "/tmp/arch-05-ingestion.json",
+  "output": "/Users/brunoorsier/dev/clipboard/docs/architecture/05-ingestion-dataflow.html",
+  "specification": {
+    "sha256": "f86b2ebc75cd3ce6d69f1cdf4589be524bcd8c96afcac111359c840059fd9428",
+    "bytes": 1881
+  },
+  "artifact": {
+    "sha256": "e514731278239b42c3189c0e24a1a620ac281eac4a8b9d91d381a46d4322907c",
+    "bytes": 831026
+  }
+}

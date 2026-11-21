@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "dataflow",
+  "quality": "showcase",
+  "specification": {
+    "path": "/tmp/arch-05-ingestion.json",
+    "sha256": "f86b2ebc75cd3ce6d69f1cdf4589be524bcd8c96afcac111359c840059fd9428",
+    "bytes": 1881
+  },
+  "artifact": {
+    "path": "/Users/brunoorsier/dev/clipboard/docs/architecture/05-ingestion-dataflow.html",
+    "sha256": "e514731278239b42c3189c0e24a1a620ac281eac4a8b9d91d381a46d4322907c",
+    "bytes": 831026
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/05-ingestion-dataflow.finalize.json",
+    "summaryReceipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/05-ingestion-dataflow.finalize-summary.json",
+    "browserCheckReceipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/05-ingestion-dataflow.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-21T08:28:52.129Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2014,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}
