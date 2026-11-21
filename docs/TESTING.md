@@ -4,7 +4,7 @@
 
 - `cargo fmt -- --check`
 - `cargo clippy --all-targets --all-features --locked -- -D warnings`
-- `cargo test --all-targets --locked` — 97 unit tests (98 across platforms) across 17 source files as of 2026-11-21
+- `cargo test --all-targets --locked` — 98 unit tests (99 across platforms) across 17 source files as of 2026-11-21
 - `cargo doc --no-deps --locked`
 - CI runs the same gates on Linux, macOS, and Windows, plus a debug-only macOS quit smoke job. SonarCloud generates `lcov.info`, but coverage is not measured locally.
 

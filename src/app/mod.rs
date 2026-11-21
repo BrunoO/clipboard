@@ -230,13 +230,7 @@ impl ClipboardApp {
         monitor_shutdown_tx: Sender<()>,
         monitor_handle: Option<std::thread::JoinHandle<()>>,
     ) -> Self {
-        db.set_max_history(settings.max_history);
-        db.set_ignore_concealed(settings.ignore_concealed);
-        db.set_auto_detect_secrets(settings.auto_detect_secrets);
-        db.set_preserve_secrets_on_prune(settings.preserve_secrets_on_prune);
-        if let Err(e) = db.prune_history(settings.max_history) {
-            eprintln!("⚠️ Failed to prune history at startup: {e}");
-        }
+        db.apply_settings(&settings);
 
         let mut startup_toast = None;
         let initial_items = match db.get_recent(settings.max_history, None) {

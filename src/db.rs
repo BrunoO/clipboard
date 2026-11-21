@@ -304,6 +304,13 @@ impl Database {
         self.0.auto_detect_secrets.store(enabled, Ordering::Relaxed);
     }
 
+    /// Checks whether automatic secret detection is enabled.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn auto_detect_secrets(&self) -> bool {
+        self.0.auto_detect_secrets.load(Ordering::Relaxed)
+    }
+
     /// Sets whether to preserve secrets and passwords from being deleted during history pruning.
     pub(crate) fn set_preserve_secrets_on_prune(&self, preserve: bool) {
         self.0
@@ -316,6 +323,14 @@ impl Database {
     #[must_use]
     pub(crate) fn preserve_secrets_on_prune(&self) -> bool {
         self.0.preserve_secrets_on_prune.load(Ordering::Relaxed)
+    }
+
+    /// Synchronizes runtime atomic settings flags from persistent application settings.
+    pub(crate) fn apply_settings(&self, settings: &crate::settings::AppSettings) {
+        self.set_max_history(settings.max_history);
+        self.set_ignore_concealed(settings.ignore_concealed);
+        self.set_auto_detect_secrets(settings.auto_detect_secrets);
+        self.set_preserve_secrets_on_prune(settings.preserve_secrets_on_prune);
     }
 
     /// Marks the given text to be ignored once by the background clipboard monitor.
@@ -1486,5 +1501,27 @@ mod tests {
             ),
             "Error message must provide migration context with failing SQL statement, got: {err_msg}"
         );
+    }
+
+    #[test]
+    fn test_database_apply_settings() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("apply_settings.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        let settings = crate::settings::AppSettings {
+            max_history: 42,
+            ignore_concealed: false,
+            auto_detect_secrets: false,
+            preserve_secrets_on_prune: true,
+            ..Default::default()
+        };
+
+        db.apply_settings(&settings);
+
+        assert_eq!(db.max_history(), 42);
+        assert!(!db.ignore_concealed());
+        assert!(!db.auto_detect_secrets());
+        assert!(db.preserve_secrets_on_prune());
     }
 }
