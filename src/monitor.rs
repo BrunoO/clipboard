@@ -235,17 +235,16 @@ fn poll_clipboard_image(
 
 #[cfg(debug_assertions)]
 fn log_captured_text(id: i64, text: &str) {
-    if crate::secret::is_likely_secret(text) {
-        println!("🔒 Captured new secret clipboard entry [id: {id}] (<redacted>)");
+    let classification = if crate::secret::is_likely_secret(text) {
+        "secret-like"
     } else {
-        let preview = if text.chars().count() > 40 {
-            let truncated: String = text.chars().take(40).collect();
-            format!("{truncated}...")
-        } else {
-            text.to_string()
-        };
-        println!("📋 Captured new text clipboard entry [id: {id}]: {preview:?}");
-    }
+        "text"
+    };
+    println!(
+        "📋 Captured new {classification} clipboard entry [id: {id}] ({} chars, {} bytes; preview withheld)",
+        text.chars().count(),
+        text.len()
+    );
 }
 
 #[cfg(not(debug_assertions))]
