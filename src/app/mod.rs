@@ -348,13 +348,16 @@ impl ClipboardApp {
         ));
     }
 
-    fn persist_settings(&mut self) {
+    fn persist_settings(&mut self) -> bool {
         if let Err(error) = self.settings.save(&self.db) {
             crate::logging::log_message("ERROR", &format!("Failed to save settings: {error}"));
             self.show_error_toast(&format!(
                 "{} Failed to save settings. Changes will be lost on restart.",
                 icons::WARNING
             ));
+            false
+        } else {
+            true
         }
     }
 

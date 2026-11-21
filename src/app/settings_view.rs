@@ -76,18 +76,18 @@ impl ClipboardApp {
                                 && selected_theme != current_theme
                             {
                                 self.settings.theme = selected_theme;
-                                if let Err(e) = self.settings.save(&self.db) {
-                                    eprintln!("Failed to save settings: {e}");
-                                }
+                                let saved = self.persist_settings();
                                 let new_is_dark = selected_theme.resolve(ui.ctx());
                                 crate::theme::setup_theme(ui.ctx(), new_is_dark);
                                 self.current_is_dark = Some(new_is_dark);
                                 ui.ctx().request_repaint();
-                                self.show_toast(&format!(
-                                    "{} Theme changed to {}",
-                                    icons::CHECK,
-                                    selected_theme.display_name()
-                                ));
+                                if saved {
+                                    self.show_toast(&format!(
+                                        "{} Theme changed to {}",
+                                        icons::CHECK,
+                                        selected_theme.display_name()
+                                    ));
+                                }
                             }
                         }
                     });
@@ -136,19 +136,18 @@ impl ClipboardApp {
                 && !is_selected
             {
                 self.settings.hotkey = preset;
-                if let Err(e) = self.settings.save(&self.db) {
-                    eprintln!("Failed to save settings: {e}");
-                }
-                if self.update_hotkeys_from_settings() {
-                    self.show_toast(&format!(
-                        "{} Shortcut set to {}",
-                        icons::CHECK,
-                        preset.badge()
-                    ));
-                } else {
+                let saved = self.persist_settings();
+                let registered = self.update_hotkeys_from_settings();
+                if !registered {
                     self.show_warning_toast(&format!(
                         "{} Could not register {} (may be in use by OS)",
                         icons::WARNING,
+                        preset.badge()
+                    ));
+                } else if saved {
+                    self.show_toast(&format!(
+                        "{} Shortcut set to {}",
+                        icons::CHECK,
                         preset.badge()
                     ));
                 }
@@ -300,19 +299,18 @@ impl ClipboardApp {
     pub(super) fn apply_custom_hotkey(&mut self) {
         if let Some(parsed) = crate::settings::ParsedHotkey::parse(&self.pending_custom_hotkey) {
             self.settings.custom_hotkey = parsed.format();
-            if let Err(e) = self.settings.save(&self.db) {
-                eprintln!("Failed to save settings: {e}");
-            }
-            if self.update_hotkeys_from_settings() {
-                self.show_toast(&format!(
-                    "{} Custom shortcut set to {}",
-                    icons::CHECK,
-                    self.settings.custom_hotkey
-                ));
-            } else {
+            let saved = self.persist_settings();
+            let registered = self.update_hotkeys_from_settings();
+            if !registered {
                 self.show_warning_toast(&format!(
                     "{} Could not register {} (may be in use by OS)",
                     icons::WARNING,
+                    self.settings.custom_hotkey
+                ));
+            } else if saved {
+                self.show_toast(&format!(
+                    "{} Custom shortcut set to {}",
+                    icons::CHECK,
                     self.settings.custom_hotkey
                 ));
             }
@@ -427,8 +425,10 @@ impl ClipboardApp {
                         {
                             self.settings.max_history = limit;
                             self.db.set_max_history(limit);
-                            let _ = self.db.prune_history(limit);
                             self.persist_settings();
+                            if let Err(err) = self.db.prune_history(limit) {
+                                self.report_db_write_failure("prune history", &err);
+                            }
                             self.refresh_items();
                         }
                     }
