@@ -4,6 +4,7 @@
 //! Windows DPAPI) is delegated to the target-gated FFI submodules (`platform::windows`).
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use zeroize::Zeroizing;
 
@@ -84,7 +85,6 @@ pub(crate) fn write_protected_key_file(path: &Path, key: &str) -> Result<bool, s
     }
     #[cfg(unix)]
     let permissions_degraded = {
-        use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
 
         let mut file = fs::OpenOptions::new()
@@ -138,6 +138,38 @@ pub(crate) fn open_restricted_append_file(path: &Path) -> std::io::Result<fs::Fi
         opts.mode(0o600);
     }
     opts.open(path)
+}
+
+/// Opens or creates the single-instance lock file with owner-only (`0o600`) permissions on Unix.
+///
+/// # Errors
+/// Returns the underlying I/O error if the lock file cannot be opened or created.
+pub(crate) fn open_instance_lock_file(path: &Path) -> std::io::Result<fs::File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
+/// Writes the process ID to the single-instance PID sidecar with owner-only (`0o600`) permissions on Unix.
+///
+/// # Errors
+/// Returns the underlying I/O error if the sidecar cannot be opened or written.
+pub(crate) fn write_instance_pid_file(path: &Path, pid: u32) -> std::io::Result<()> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path)?;
+    file.write_all(pid.to_string().as_bytes())?;
+    file.sync_all()
 }
 
 /// Restricts a fallback key file and returns `true` when hardening could not be applied.
@@ -297,6 +329,31 @@ mod tests {
         assert_eq!(
             mode, 0o700,
             "Data directory permissions must be 0700 on Unix"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_instance_lock_and_pid_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let lock_path = dir.path().join(".instance.lock");
+        let pid_path = dir.path().join(".instance.pid");
+
+        let _lock = open_instance_lock_file(&lock_path).unwrap();
+        write_instance_pid_file(&pid_path, 12345).unwrap();
+
+        let lock_mode = fs::metadata(&lock_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            lock_mode, 0o600,
+            "Instance lock permissions must be 0600 on Unix"
+        );
+
+        let pid_mode = fs::metadata(&pid_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            pid_mode, 0o600,
+            "Instance pid permissions must be 0600 on Unix"
         );
     }
 

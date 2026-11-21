@@ -1,4 +1,4 @@
-use std::fs::{File, OpenOptions, TryLockError};
+use std::fs::{File, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -22,12 +22,7 @@ impl SingleInstanceLock {
     /// # Errors
     /// Returns an I/O error if the lock file cannot be opened or the lock cannot be queried.
     pub(crate) fn acquire(lock_path: &Path) -> std::io::Result<AcquireResult> {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(lock_path)?;
+        let mut file = crate::platform::fs_security::open_instance_lock_file(lock_path)?;
 
         match file.try_lock() {
             Ok(()) => {
@@ -40,7 +35,10 @@ impl SingleInstanceLock {
                 // Also persist the PID in a sidecar file that remains readable on
                 // platforms where reading a locked file is not allowed (Windows).
                 let sidecar = lock_path.with_extension("pid");
-                let _ = std::fs::write(&sidecar, std::process::id().to_string());
+                let _ = crate::platform::fs_security::write_instance_pid_file(
+                    &sidecar,
+                    std::process::id(),
+                );
 
                 Ok(AcquireResult::Acquired(Self { _file: file }))
             }
