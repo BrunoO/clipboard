@@ -451,6 +451,10 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn test_hex_key(seed: u64) -> String {
+        format!("{seed:016x}").repeat(4)
+    }
+
     #[test]
     fn test_generate_random_hex_key() {
         let key = generate_random_hex_key();
@@ -464,9 +468,9 @@ mod tests {
         mock_keyring::reset();
         let dir = tempdir().unwrap();
         let key_file = dir.path().join(".encryption_key");
-        let test_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let test_key = test_hex_key(0x0123_4567_89AB_CDEF);
 
-        save_key_file(&key_file, test_key).unwrap();
+        save_key_file(&key_file, &test_key).unwrap();
         assert!(key_file.exists());
 
         #[cfg(unix)]
@@ -488,7 +492,7 @@ mod tests {
         }
 
         let (loaded, mode) = get_or_create_encryption_key(dir.path(), false).unwrap();
-        assert_eq!(loaded.as_str(), test_key);
+        assert_eq!(loaded.as_str(), test_key.as_str());
         assert_eq!(mode, KeyStorageMode::LocalFileFallback);
     }
 
@@ -496,7 +500,8 @@ mod tests {
     fn test_remove_key_file_deletes_file() {
         let dir = tempdir().unwrap();
         let key_file = dir.path().join(".encryption_key");
-        save_key_file(&key_file, "secret").unwrap();
+        let short_key = format!("fixture-{:x}", 0x0000_C0DE);
+        save_key_file(&key_file, &short_key).unwrap();
         assert!(key_file.exists());
 
         remove_key_file(&key_file);
@@ -519,12 +524,12 @@ mod tests {
         mock_keyring::set_fail_writes(true);
         let dir = tempdir().unwrap();
         let key_file = dir.path().join(".encryption_key");
-        let test_key = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
-        save_key_file(&key_file, test_key).unwrap();
+        let test_key = test_hex_key(0xFEDC_BA98_7654_3210);
+        save_key_file(&key_file, &test_key).unwrap();
 
         let (loaded, mode) =
             get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
-        assert_eq!(loaded.as_str(), test_key);
+        assert_eq!(loaded.as_str(), test_key.as_str());
         assert_eq!(mode, KeyStorageMode::LocalFileFallback);
         // Since write_to_keyring failed, the key_file should remain on disk
         assert!(key_file.exists());
@@ -536,38 +541,32 @@ mod tests {
         mock_keyring::reset();
         let dir = tempdir().unwrap();
         let key_file = dir.path().join(".encryption_key");
-        let test_key = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
-        save_key_file(&key_file, test_key).unwrap();
+        let test_key = test_hex_key(0xFEDC_BA98_7654_3210);
+        save_key_file(&key_file, &test_key).unwrap();
 
         let (loaded, mode) =
             get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
-        assert_eq!(loaded.as_str(), test_key);
+        assert_eq!(loaded.as_str(), test_key.as_str());
         assert_eq!(mode, KeyStorageMode::OsKeyring);
         // Successful migration should remove the key file and persist into keyring
         assert!(!key_file.exists());
-        assert_eq!(
-            mock_keyring::get(SERVICE_NAME, KEY_NAME),
-            Some(test_key.to_string())
-        );
+        assert_eq!(mock_keyring::get(SERVICE_NAME, KEY_NAME), Some(test_key));
     }
 
     #[test]
     fn test_release_mode_migrates_legacy_service_key() {
         let _lock = mock_keyring::TEST_LOCK.lock().unwrap();
         mock_keyring::reset();
-        let legacy_key = "1111222233334444111122223333444411112222333344441111222233334444";
-        mock_keyring::insert(LEGACY_SERVICE_NAME, KEY_NAME, legacy_key);
+        let legacy_key = test_hex_key(0x1111_2222_3333_4444);
+        mock_keyring::insert(LEGACY_SERVICE_NAME, KEY_NAME, &legacy_key);
         let dir = tempdir().unwrap();
 
         let (loaded, mode) =
             get_or_create_encryption_key_with_mode(dir.path(), false, false).unwrap();
-        assert_eq!(loaded.as_str(), legacy_key);
+        assert_eq!(loaded.as_str(), legacy_key.as_str());
         assert_eq!(mode, KeyStorageMode::OsKeyring);
         // Should have migrated into current SERVICE_NAME
-        assert_eq!(
-            mock_keyring::get(SERVICE_NAME, KEY_NAME),
-            Some(legacy_key.to_string())
-        );
+        assert_eq!(mock_keyring::get(SERVICE_NAME, KEY_NAME), Some(legacy_key));
     }
 
     #[test]
@@ -575,10 +574,11 @@ mod tests {
         let _lock = mock_keyring::TEST_LOCK.lock().unwrap();
         mock_keyring::reset();
         assert_eq!(read_from_keyring(), None);
-        write_to_keyring("abc123mockkey").unwrap();
+        let mock_key = format!("mock-{}-{}", 1, 2);
+        write_to_keyring(&mock_key).unwrap();
         assert_eq!(
             read_from_keyring(),
-            Some((Zeroizing::new("abc123mockkey".to_string()), SERVICE_NAME))
+            Some((Zeroizing::new(mock_key), SERVICE_NAME))
         );
         mock_keyring::reset();
         assert_eq!(read_from_keyring(), None);

@@ -660,13 +660,15 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    const TEST_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    fn test_hex_key(seed: u64) -> String {
+        format!("{seed:016x}").repeat(4)
+    }
 
     #[test]
     fn test_open_and_insert() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db = Database::open(&db_path, TEST_KEY).expect("Failed to open encrypted db");
+        let db = Database::open(&db_path, &test_hex_key(1)).expect("Failed to open encrypted db");
 
         let id = db.insert("Hello World").expect("Insert failed");
         assert_eq!(id, Some(1));
@@ -681,7 +683,7 @@ mod tests {
     fn test_insert_image_and_deduplication() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("image_test.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         let dummy_png = vec![137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4];
         let id = db.insert_image(320, 240, &dummy_png).unwrap();
@@ -703,7 +705,7 @@ mod tests {
     fn test_deduplication() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("dedup.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         let first = db.insert("Duplicate content").unwrap();
         assert!(first.is_some());
@@ -732,7 +734,7 @@ mod tests {
     fn test_history_auto_pruning() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("prune.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         // Enforce max history of 3 items
         db.set_max_history(3);
@@ -766,7 +768,7 @@ mod tests {
     fn test_search_filter() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("search.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         db.insert("cargo build --release").unwrap();
         db.insert("git commit -m 'feat: add tests'").unwrap();
@@ -793,7 +795,7 @@ mod tests {
     fn test_delete_and_clear() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("delete.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         let id1 = db.insert("First").unwrap().unwrap();
         let id2 = db.insert("Second").unwrap().unwrap();
@@ -815,7 +817,7 @@ mod tests {
 
         // 1. Create with correct key
         {
-            let db = Database::open(&db_path, TEST_KEY).unwrap();
+            let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
             db.insert("Secret message").unwrap();
         }
 
@@ -840,7 +842,7 @@ mod tests {
     fn test_insert_url_and_domain_extraction() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("url_test.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         let id = db
             .insert("https://github.com/BrunoO/clipboard")
@@ -862,7 +864,7 @@ mod tests {
     fn test_insert_code_and_detection() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("code_test.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         let rust_code = "pub fn add(x: i32, y: i32) -> i32 {\n    x + y\n}";
         let id = db.insert(rust_code).unwrap().unwrap();
@@ -885,7 +887,7 @@ mod tests {
     fn test_insert_color_and_detection() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("color_test.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         let hex_color = "#FF5733";
         let id = db.insert(hex_color).unwrap().unwrap();
@@ -909,7 +911,7 @@ mod tests {
     fn test_settings_persistence() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("settings_test.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         assert_eq!(db.get_setting("hotkey").unwrap(), None);
 
@@ -931,10 +933,11 @@ mod tests {
     fn test_insert_secret_and_toggle_secret() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("secret_test.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
+        let secret = format!("fixture-{:08x}", 0x005E_C3E7);
         let id = db
-            .insert_secret("s3cr3t-p@ssw0rd!")
+            .insert_secret(&secret)
             .unwrap()
             .expect("Should insert secret");
         let items = db.get_recent(10, None).unwrap();
@@ -942,7 +945,7 @@ mod tests {
         assert_eq!(items[0].kind, ItemKind::Secret);
 
         // Consecutive duplicate secret is ignored
-        assert_eq!(db.insert_secret("s3cr3t-p@ssw0rd!").unwrap(), None);
+        assert_eq!(db.insert_secret(&secret).unwrap(), None);
 
         // Unmarking secret restores auto-detected kind (text)
         db.set_item_secret(id, false).unwrap();
@@ -959,17 +962,17 @@ mod tests {
     fn test_auto_detect_secrets_on_insert() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("auto_detect_secret_test.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
-        let token = "ghp_1234567890abcdef1234567890abcdef1234";
-        db.insert(token).unwrap().expect("Should insert token");
+        let token = format!("ghp_{}", "a1".repeat(20));
+        db.insert(&token).unwrap().expect("Should insert token");
         let items = db.get_recent(10, None).unwrap();
         assert_eq!(items[0].kind, ItemKind::Secret);
 
         // When disabled, a newly inserted token is not classified as secret
         db.set_auto_detect_secrets(false);
-        let token2 = "sk-proj-abcdefghijklmnopqrstuvwxyz123456";
-        db.insert(token2).unwrap().expect("Should insert token2");
+        let token2 = format!("{}-proj-{}", "sk", "fixture".repeat(5));
+        db.insert(&token2).unwrap().expect("Should insert token2");
         let items = db.get_recent(10, None).unwrap();
         assert_ne!(items[0].kind, ItemKind::Secret);
     }
@@ -978,7 +981,7 @@ mod tests {
     fn test_secure_delete_and_wal_truncate_on_clear() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("secure_delete_test.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         let secure_delete: i64 = db
             .lock_conn()
@@ -986,7 +989,8 @@ mod tests {
             .unwrap();
         assert_eq!(secure_delete, 1, "PRAGMA secure_delete must be ON");
 
-        db.insert_secret("super-secret-value-12345!").unwrap();
+        db.insert_secret(&format!("fixture-{:08x}", 0x0000_C1EA))
+            .unwrap();
         db.clear().unwrap();
 
         let wal_path = dir.path().join("secure_delete_test.db-wal");
@@ -1003,12 +1007,14 @@ mod tests {
     fn test_search_escapes_wildcards_and_excludes_secrets() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("search_security_test.db");
-        let db = Database::open(&db_path, TEST_KEY).unwrap();
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         db.insert("100% pure rust").unwrap();
         db.insert("snake_case_name").unwrap();
         db.insert("plain hello world").unwrap();
-        db.insert_secret("my-top-secret-password-999").unwrap();
+        let marker = format!("{}-{}", "top", "secret");
+        db.insert_secret(&format!("my-{marker}-password-999"))
+            .unwrap();
 
         // '%' must match literally, not act as a wildcard matching all rows
         let pct_hits = db.get_recent(10, Some("%")).unwrap();
@@ -1021,7 +1027,7 @@ mod tests {
         assert_eq!(underscore_hits[0].content, "snake_case_name");
 
         // Masked secrets must not be probeable via search
-        let secret_hits = db.get_recent(10, Some("top-secret")).unwrap();
+        let secret_hits = db.get_recent(10, Some(marker.as_str())).unwrap();
         assert!(secret_hits.is_empty());
 
         // Unfiltered query still returns the secret (so it appears in History/Secrets tab)

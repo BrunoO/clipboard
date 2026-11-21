@@ -50,6 +50,7 @@ cipherclipboard/
 ├── Cargo.toml            # Project manifest & dependencies
 ├── deny.toml             # Supply-chain security & license policy
 ├── docs/                 # Bug analyses, platform notes and dated review reports
+│   ├── TESTING.md                # Test inventory and skipped-tooling notes
 │   ├── windows/
 │   │   ├── WINDOWS_REVIEW.md     # Windows readiness review notes
 │   │   └── WINDOWS_TESTING.md    # Windows manual testing checklist
@@ -169,6 +170,8 @@ To ensure all contributions satisfy continuous integration standards (formatting
    ```bash
    ./scripts/preflight.sh
    ```
+
+See [`docs/TESTING.md`](docs/TESTING.md) for the current test inventory and the explicitly skipped property-based, fuzz, and Miri tooling.
 
 ---
 

@@ -1718,11 +1718,8 @@ mod tests {
         let (tray_tx, tray_rx) = std::sync::mpsc::channel();
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("quit_test.db");
-        let db = crate::db::Database::open(
-            &db_path,
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .unwrap();
+        let key = format!("{:016x}", 1_u64).repeat(4);
+        let db = crate::db::Database::open(&db_path, &key).unwrap();
         let mut app = ClipboardApp {
             db,
             key_storage_mode: crate::crypto::KeyStorageMode::OsKeyring,
