@@ -34,6 +34,7 @@ pub(super) fn take_reopen_requested() -> bool {
 /// main thread (trapping with `SIGTRAP` on macOS if invoked from a background
 /// or `cargo test` worker thread).
 fn is_main_thread() -> bool {
+    // SAFETY: NSThread's `isMainThread` is a side-effect-free class query; the receiver comes from the ObjC runtime and no shared state is mutated.
     unsafe {
         let is_main: bool = msg_send![class!(NSThread), isMainThread];
         is_main
@@ -44,6 +45,7 @@ pub(super) fn is_active() -> bool {
     if !is_main_thread() {
         return false;
     }
+    // SAFETY: Guarded by `is_main_thread()`; `sharedApplication` is null-checked before messaging, and these AppKit getters do not mutate private windows.
     unsafe {
         let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
         if ns_app.is_null() {
@@ -59,6 +61,7 @@ pub(super) fn hide_app() {
     if !is_main_thread() {
         return;
     }
+    // SAFETY: Guarded by `is_main_thread()`; `sharedApplication` is null-checked and `hide:` accepts nil, so only a valid app object receives a valid selector.
     unsafe {
         let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
         if !ns_app.is_null() {
@@ -72,6 +75,7 @@ pub(super) fn order_front_main_window() {
     if !is_main_thread() {
         return;
     }
+    // SAFETY: Main-thread guarded and autoreleased; every AppKit object is null-checked, and private windows are skipped via `canBecomeMainWindow`.
     objc::rc::autoreleasepool(|| unsafe {
         let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
         if ns_app.is_null() {
@@ -129,6 +133,7 @@ pub(super) fn setup_reopen_observer() {
         return;
     }
     INIT.call_once(|| {
+        // SAFETY: Main-thread guarded, run once, and autoreleased; the class is registered before `class!`, both objects are null-checked, and the observer is retained for teardown.
         objc::rc::autoreleasepool(|| unsafe {
             let superclass = class!(NSObject);
             if let Some(mut decl) = ClassDecl::new("CipherReopenObserver", superclass) {
@@ -190,6 +195,7 @@ pub(super) fn teardown_reopen_observer() {
     }
     let observer = REOPEN_OBSERVER.with(|cell| cell.replace(std::ptr::null_mut()));
     if !observer.is_null() {
+        // SAFETY: Main-thread guarded and autoreleased; the observer pointer came from `setup_reopen_observer`, the center is null-checked, and `release` balances `new`.
         objc::rc::autoreleasepool(|| unsafe {
             let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
             if !center.is_null() {
@@ -229,10 +235,12 @@ extern "C" {
 }
 
 pub(crate) fn is_trusted() -> bool {
+    // SAFETY: `AXIsProcessTrusted` takes no pointers and only queries a global permission flag; no object lifetime is involved.
     unsafe { AXIsProcessTrusted() }
 }
 
 pub(crate) fn prompt_permission() -> bool {
+    // SAFETY: Autoreleased; the NSString/NSNumber/NSDictionary objects are null-checked and stay alive for the call, and the NSDictionary is CF-compatible for `AXIsProcessTrustedWithOptions`.
     objc::rc::autoreleasepool(|| unsafe {
         let str_obj: *mut Object = msg_send![
             class!(NSString),
@@ -258,6 +266,7 @@ pub(crate) fn open_accessibility_settings() {
 }
 
 pub(super) fn capture_frontmost() {
+    // SAFETY: Autoreleased; `NSWorkspace` and its frontmost app are null-checked before messaging, and only the PID scalar is read.
     objc::rc::autoreleasepool(|| unsafe {
         let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
         if workspace.is_null() {
@@ -280,6 +289,7 @@ pub(super) fn restore_focus() {
     // Note: hide_app() is already called on the main thread before spawning
     // the restore/paste worker thread. Calling [NSApplication sharedApplication]
     // from a background thread violates AppKit's main-thread contract (SIGTRAP).
+    // SAFETY: Autoreleased; the PID comes from our own atomic, the `NSRunningApplication` result is null-checked, and no `NSApplication` call is made off the main thread.
     objc::rc::autoreleasepool(|| unsafe {
         let pid = PREVIOUS_APP_PID.load(Ordering::Relaxed);
         if pid > 0 {
@@ -304,6 +314,7 @@ pub(super) fn is_target_foreground() -> bool {
     if target_pid <= 0 {
         return false;
     }
+    // SAFETY: Autoreleased; workspace/frontmost app are null-checked before reading the PID scalar used for the foreground comparison.
     objc::rc::autoreleasepool(|| unsafe {
         let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
         if workspace.is_null() {
@@ -329,6 +340,7 @@ pub(super) fn simulate_paste() {
     // kCGEventSourceStateCombinedSessionState = 0
     const SOURCE_STATE_COMBINED_SESSION: i32 = 0;
 
+    // SAFETY: All CoreGraphics constants are fixed; event and source handles are null-checked before flags/post/release, and only handles created here are released.
     unsafe {
         let source = CGEventSourceCreate(SOURCE_STATE_COMBINED_SESSION);
 
@@ -360,6 +372,7 @@ pub(super) fn simulate_paste() {
 }
 
 pub(super) fn clipboard_change_token() -> Option<u64> {
+    // SAFETY: Autoreleased; the pasteboard is null-checked and `changeCount` is read as a scalar inside the pool's lifetime.
     objc::rc::autoreleasepool(|| unsafe {
         let pasteboard: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
         if pasteboard.is_null() {
@@ -371,6 +384,7 @@ pub(super) fn clipboard_change_token() -> Option<u64> {
 }
 
 pub(super) fn is_clipboard_concealed() -> bool {
+    // SAFETY: Autoreleased; pasteboard, types, and each item are null-checked, and `UTF8String` data is read as a `CStr` only while the owning NSString is alive.
     objc::rc::autoreleasepool(|| unsafe {
         let pasteboard: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
         if pasteboard.is_null() {
@@ -409,6 +423,7 @@ pub(super) fn is_clipboard_concealed() -> bool {
 }
 
 pub(super) fn mark_clipboard_concealed() {
+    // SAFETY: Autoreleased; pasteboard and NSData are null-checked, each marker is NUL-terminated, and type arrays are null-checked before being passed to AppKit.
     objc::rc::autoreleasepool(|| unsafe {
         let pasteboard: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
         if pasteboard.is_null() {

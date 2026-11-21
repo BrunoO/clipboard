@@ -108,6 +108,7 @@ unsafe fn target_keyboard_layout() -> HKL {
 }
 
 fn find_main_window() -> Option<HWND> {
+    // SAFETY: `EnumWindows` invokes this synchronously with a valid HWND; `lparam` points to the caller's local `target_hwnd`, which stays alive for the whole enumeration.
     unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, &raw mut pid);
@@ -135,6 +136,7 @@ fn find_main_window() -> Option<HWND> {
     }
 
     let mut target_hwnd: HWND = std::ptr::null_mut();
+    // SAFETY: `enum_proc` is a valid `extern "system"` callback and `target_hwnd` is a live local for the synchronous `EnumWindows` call.
     unsafe {
         EnumWindows(
             Some(enum_proc),
@@ -153,6 +155,7 @@ pub(super) fn order_front_main_window() {
         return;
     };
 
+    // SAFETY: The HWND came from enumeration; window managers reject stale handles without dereferencing them, local PID out-pointers are valid, and any input attachment is detached.
     unsafe {
         if IsIconic(target_hwnd) != 0 {
             ShowWindow(target_hwnd, SW_RESTORE);
@@ -183,6 +186,7 @@ pub(super) fn order_front_main_window() {
 }
 
 pub(super) fn is_active() -> bool {
+    // SAFETY: `GetForegroundWindow` may be null and is checked; the PID out-pointer references a live local.
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.is_null() {
@@ -195,6 +199,7 @@ pub(super) fn is_active() -> bool {
 }
 
 pub(super) fn capture_frontmost() {
+    // SAFETY: The foreground HWND is null-checked; the PID out-pointer references a live local and is only stored when non-zero and not our process.
     unsafe {
         let hwnd = GetForegroundWindow();
         if !hwnd.is_null() {
@@ -217,6 +222,7 @@ pub(super) fn restore_focus() {
     };
     let hwnd_raw = prev.hwnd;
 
+    // SAFETY: The target HWND was validated with `IsWindow`; `MSG` is a live zeroed local, foreground PID out-pointers are valid, and thread input is detached on every path.
     unsafe {
         let target_hwnd = hwnd_raw as HWND;
         if IsWindow(target_hwnd) == 0 {
@@ -270,6 +276,7 @@ pub(super) fn is_target_foreground() -> bool {
     let Some(prev) = load_previous_window() else {
         return false;
     };
+    // SAFETY: The foreground HWND is null-checked; the PID out-pointer is a live local and the comparison uses only scalar IDs.
     unsafe {
         let fg = GetForegroundWindow();
         if fg.is_null() {
@@ -295,6 +302,7 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
         found: HWND,
     }
 
+    // SAFETY: `EnumWindows` invokes this synchronously; `lparam` points to the caller's live `SearchCtx` and the title buffer is indexed only by the returned length.
     unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let ctx = &mut *(lparam as *mut SearchCtx);
         let mut pid: u32 = 0;
@@ -326,6 +334,7 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
         expected_pid,
         found: std::ptr::null_mut(),
     };
+    // SAFETY: `enum_proc` is a valid callback and `ctx` remains alive for the synchronous call; stale HWNDs are passed only to APIs that fail safely.
     unsafe {
         EnumWindows(Some(enum_proc), std::ptr::addr_of_mut!(ctx) as LPARAM);
         if ctx.found.is_null() {
@@ -354,6 +363,7 @@ pub(crate) fn show_error_dialog(message: &str) {
         .chain(std::iter::once(0))
         .collect();
 
+    // SAFETY: Both wide buffers are NUL-terminated by `chain(once(0))` and remain alive for the call; a null owner and the fixed flags are valid for `MessageBoxW`.
     unsafe {
         MessageBoxW(
             std::ptr::null_mut(),
@@ -381,6 +391,7 @@ pub(super) fn simulate_paste() -> bool {
         }
     }
 
+    // SAFETY: The keyboard layout query is safe Win32; virtual-key scans are checked before use, every `INPUT` field is initialized, and `SendInput`'s count and `cbSize` match the array.
     unsafe {
         // Raw Input / Windows Terminal-style handlers read hardware scan codes
         // and drop events with wScan == 0 even when wVk is set.
@@ -428,6 +439,7 @@ fn cached_clipboard_format(cache: &AtomicU32, name: &str) -> u32 {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
+    // SAFETY: `wide` is NUL-terminated and alive for the call; `RegisterClipboardFormatW` returns 0 on failure, which the caller handles.
     let registered = unsafe { RegisterClipboardFormatW(wide.as_ptr()) };
     if registered != 0 {
         cache.store(registered, Ordering::Relaxed);
@@ -436,6 +448,7 @@ fn cached_clipboard_format(cache: &AtomicU32, name: &str) -> u32 {
 }
 
 fn is_clipboard_history_excluded(history_id: u32) -> bool {
+    // SAFETY: The clipboard is opened successfully, the data handle is non-null and large enough, the locked pointer is checked before dereference, and both the lock and clipboard are released.
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
             return false;
@@ -455,6 +468,7 @@ fn is_clipboard_history_excluded(history_id: u32) -> bool {
 }
 
 pub(super) fn clipboard_change_token() -> Option<u64> {
+    // SAFETY: `GetClipboardSequenceNumber` takes no pointers and only reads a Win32 counter.
     let seq = unsafe { GetClipboardSequenceNumber() };
     (seq != 0).then(|| u64::from(seq))
 }
@@ -466,11 +480,13 @@ pub(super) fn is_clipboard_concealed() -> bool {
 
     let exclude_id =
         cached_clipboard_format(&EXCLUDE_FMT, "ExcludeClipboardContentFromMonitorProcessing");
+    // SAFETY: The format atom was registered earlier in this call (0 is guarded); `IsClipboardFormatAvailable` only reads a global format table.
     if exclude_id != 0 && unsafe { IsClipboardFormatAvailable(exclude_id) } != 0 {
         return true;
     }
 
     let ignore_id = cached_clipboard_format(&IGNORE_FMT, "Clipboard Viewer Ignore");
+    // SAFETY: The format atom was registered earlier in this call (0 is guarded); `IsClipboardFormatAvailable` only reads a global format table.
     if ignore_id != 0 && unsafe { IsClipboardFormatAvailable(ignore_id) } != 0 {
         return true;
     }
@@ -479,6 +495,7 @@ pub(super) fn is_clipboard_concealed() -> bool {
     // to mark sensitive items as excluded from clipboard history.
     let history_id = cached_clipboard_format(&HISTORY_FMT, "CanIncludeInClipboardHistory");
     history_id != 0
+        // SAFETY: The format atom was registered earlier in this call (0 is guarded); `IsClipboardFormatAvailable` only reads a global format table.
         && unsafe { IsClipboardFormatAvailable(history_id) } != 0
         && is_clipboard_history_excluded(history_id)
 }
@@ -492,6 +509,7 @@ pub(super) fn mark_clipboard_concealed() {
     static HISTORY_FMT: AtomicU32 = AtomicU32::new(0);
     static CLOUD_FMT: AtomicU32 = AtomicU32::new(0);
 
+    // SAFETY: The caller holds the clipboard open; allocation, locking, and `SetClipboardData` are checked and any unowned global is freed.
     unsafe fn set_zero_dword_format(cache: &AtomicU32, name: &str) {
         let fmt = cached_clipboard_format(cache, name);
         if fmt == 0 {
@@ -513,6 +531,7 @@ pub(super) fn mark_clipboard_concealed() {
         }
     }
 
+    // SAFETY: `OpenClipboard` is checked, zero-DWORD helpers run only while the clipboard is open, and `CloseClipboard` always runs.
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
             return;
@@ -527,6 +546,7 @@ pub(super) fn mark_clipboard_concealed() {
 /// Returns `true` when the active target thread's Windows keyboard layout produces `ù`
 /// for the physical key in the US `Quote` position (French/Belgian AZERTY layouts).
 pub(super) fn quote_key_is_ugrave() -> bool {
+    // SAFETY: The layout query is safe Win32; the key-state and output buffers are initialized and sized, and `ToUnicodeEx` output is bounded by `buf.len()` and checked before slicing.
     unsafe {
         let hkl = target_keyboard_layout();
         if hkl.is_null() {
@@ -557,6 +577,7 @@ pub(super) fn quote_key_is_ugrave() -> bool {
     }
 }
 
+// SAFETY: The captured HWND is validated with `IsWindow` before the PID query; the out-pointer is a live local and only non-self PIDs are returned.
 unsafe fn captured_target_pid() -> u32 {
     let Some(prev) = load_previous_window() else {
         return 0;
@@ -586,6 +607,7 @@ pub(crate) fn target_is_elevated() -> bool {
     #[repr(C, align(8))]
     struct TokenIntegrityBuf([u8; 256]);
 
+    // SAFETY: All Win32 handle calls are null-checked and closed; the 8-byte-aligned 256-byte buffer matches `TOKEN_MANDATORY_LABEL` plus inline SID, and SID pointers are checked before dereference.
     unsafe fn integrity_level(pid: u32) -> Option<u32> {
         if pid == 0 {
             return None;
@@ -625,6 +647,7 @@ pub(crate) fn target_is_elevated() -> bool {
         level
     }
 
+    // SAFETY: Both helper calls honor their safety contracts and query handles internally; a failed integrity query fails closed.
     unsafe {
         let target_pid = captured_target_pid();
         if target_pid == 0 {
@@ -646,6 +669,7 @@ pub(super) fn set_title_bar_dark_mode(is_dark: bool) {
         return;
     };
 
+    // SAFETY: The HWND came from enumeration, the value is a live local i32, and the pointer/size passed to `DwmSetWindowAttribute` match that storage.
     unsafe {
         let value: i32 = i32::from(is_dark);
         let attr = DWMWA_USE_IMMERSIVE_DARK_MODE.cast_unsigned();
@@ -687,6 +711,7 @@ pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
         pbData: std::ptr::null_mut(),
     };
 
+    // SAFETY: Input blob pointers reference live, length-checked slices, output is initialized null, and the out-blob buffer is owned by us until `LocalFree`.
     let ok = unsafe {
         CryptProtectData(
             &raw const in_blob,
@@ -703,6 +728,7 @@ pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     let out_len = usize::try_from(out_blob.cbData).unwrap_or(0);
+    // SAFETY: The output pointer was checked non-null and `out_len` comes from `cbData`; the bytes are copied before the owned buffer is freed once.
     let ciphertext = unsafe {
         let slice = std::slice::from_raw_parts(out_blob.pbData, out_len);
         let copied = slice.to_vec();
@@ -733,6 +759,7 @@ pub(crate) fn dpapi_unprotect(ciphertext: &[u8]) -> Result<zeroize::Zeroizing<Ve
         pbData: std::ptr::null_mut(),
     };
 
+    // SAFETY: Input blob pointers reference live, length-checked slices, output is initialized null, and the plaintext buffer is owned by us until `LocalFree`.
     let ok = unsafe {
         CryptUnprotectData(
             &raw const in_blob,
@@ -749,6 +776,7 @@ pub(crate) fn dpapi_unprotect(ciphertext: &[u8]) -> Result<zeroize::Zeroizing<Ve
     }
 
     let out_len = usize::try_from(out_blob.cbData).unwrap_or(0);
+    // SAFETY: The output pointer was checked non-null and `out_len` comes from `cbData`; bytes are copied into `Zeroizing`, zeroed, then the owned buffer is freed once.
     let plaintext = unsafe {
         let slice = std::slice::from_raw_parts_mut(out_blob.pbData, out_len);
         let copied = zeroize::Zeroizing::new(slice.to_vec());
