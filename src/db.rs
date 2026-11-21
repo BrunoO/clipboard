@@ -153,6 +153,7 @@ struct DatabaseInner {
     max_history: AtomicUsize,
     ignore_concealed: AtomicBool,
     auto_detect_secrets: AtomicBool,
+    preserve_secrets_on_prune: AtomicBool,
     transient_text: Mutex<Option<zeroize::Zeroizing<String>>>,
 }
 
@@ -213,6 +214,7 @@ impl Database {
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_clipboard_history_id ON clipboard_history(id DESC);
+            CREATE INDEX IF NOT EXISTS idx_clipboard_history_kind_id ON clipboard_history(kind, id DESC);
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -239,6 +241,7 @@ impl Database {
             max_history: AtomicUsize::new(100),
             ignore_concealed: AtomicBool::new(true),
             auto_detect_secrets: AtomicBool::new(true),
+            preserve_secrets_on_prune: AtomicBool::new(false),
             transient_text: Mutex::new(None),
         })))
     }
@@ -287,6 +290,20 @@ impl Database {
         self.0.auto_detect_secrets.store(enabled, Ordering::Relaxed);
     }
 
+    /// Sets whether to preserve secrets and passwords from being deleted during history pruning.
+    pub(crate) fn set_preserve_secrets_on_prune(&self, preserve: bool) {
+        self.0
+            .preserve_secrets_on_prune
+            .store(preserve, Ordering::Relaxed);
+    }
+
+    /// Checks whether secrets are preserved from deletion during history pruning.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn preserve_secrets_on_prune(&self) -> bool {
+        self.0.preserve_secrets_on_prune.load(Ordering::Relaxed)
+    }
+
     /// Marks the given text to be ignored once by the background clipboard monitor.
     pub(crate) fn skip_next_capture(&self, text: &str) {
         let mut guard = self.lock_transient();
@@ -321,13 +338,27 @@ impl Database {
         }
         let conn = self.lock_conn();
         let limit_i64 = i64::try_from(max_history).unwrap_or(i64::MAX);
-        let deleted = conn.execute(
-            "DELETE FROM clipboard_history
-             WHERE id NOT IN (
-                 SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
-             )",
-            params![limit_i64],
-        )?;
+        let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
+        let deleted = if preserve {
+            conn.execute(
+                "DELETE FROM clipboard_history
+                 WHERE kind != 'secret'
+                   AND id NOT IN (
+                       SELECT id FROM clipboard_history
+                       WHERE kind != 'secret'
+                       ORDER BY id DESC LIMIT ?1
+                   )",
+                params![limit_i64],
+            )?
+        } else {
+            conn.execute(
+                "DELETE FROM clipboard_history
+                 WHERE id NOT IN (
+                     SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
+                 )",
+                params![limit_i64],
+            )?
+        };
         Ok(deleted)
     }
 
@@ -360,16 +391,30 @@ impl Database {
     }
 
     /// Prunes entries exceeding `max_limit` within an active SQLite transaction.
-    fn prune_in_tx(tx: &rusqlite::Transaction<'_>, max_limit: usize) {
+    fn prune_in_tx(tx: &rusqlite::Transaction<'_>, max_limit: usize, preserve: bool) {
         if max_limit > 0 {
             let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
-            if let Err(e) = tx.execute(
-                "DELETE FROM clipboard_history
-                 WHERE id NOT IN (
-                     SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
-                 )",
-                params![limit_i64],
-            ) {
+            let result = if preserve {
+                tx.execute(
+                    "DELETE FROM clipboard_history
+                     WHERE kind != 'secret'
+                       AND id NOT IN (
+                           SELECT id FROM clipboard_history
+                           WHERE kind != 'secret'
+                           ORDER BY id DESC LIMIT ?1
+                       )",
+                    params![limit_i64],
+                )
+            } else {
+                tx.execute(
+                    "DELETE FROM clipboard_history
+                     WHERE id NOT IN (
+                         SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
+                     )",
+                    params![limit_i64],
+                )
+            };
+            if let Err(e) = result {
                 eprintln!("⚠️ Failed to prune clipboard history: {e}");
             }
         }
@@ -389,6 +434,7 @@ impl Database {
         let kind_str = self.classify_text_kind(content);
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let max_limit = self.0.max_history.load(Ordering::Relaxed);
+        let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
 
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
@@ -428,7 +474,7 @@ impl Database {
         let new_id = tx.last_insert_rowid();
 
         // 3. Automatically prune older entries beyond max_history
-        Self::prune_in_tx(&tx, max_limit);
+        Self::prune_in_tx(&tx, max_limit, preserve);
         tx.commit()?;
 
         Ok(Some(new_id))
@@ -442,6 +488,7 @@ impl Database {
     pub(crate) fn insert_secret(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let max_limit = self.0.max_history.load(Ordering::Relaxed);
+        let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
 
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
@@ -471,7 +518,7 @@ impl Database {
 
         let new_id = tx.last_insert_rowid();
 
-        Self::prune_in_tx(&tx, max_limit);
+        Self::prune_in_tx(&tx, max_limit, preserve);
         tx.commit()?;
 
         Ok(Some(new_id))
@@ -494,6 +541,7 @@ impl Database {
         let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let content = format!("[Image {width}x{height}]");
         let max_limit = self.0.max_history.load(Ordering::Relaxed);
+        let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
 
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
@@ -532,7 +580,7 @@ impl Database {
         let new_id = tx.last_insert_rowid();
 
         // 3. Automatically prune older entries beyond max_history
-        Self::prune_in_tx(&tx, max_limit);
+        Self::prune_in_tx(&tx, max_limit, preserve);
         tx.commit()?;
 
         Ok(Some(new_id))
@@ -542,6 +590,7 @@ impl Database {
     ///
     /// # Errors
     /// Returns the underlying SQLite error if the query or row extraction fails.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn get_recent(
         &self,
         limit: usize,
@@ -593,14 +642,33 @@ impl Database {
                     raw_rows.push(extract_row(row)?);
                 }
             } else {
-                let mut stmt = conn.prepare(
-                    "SELECT id, kind, content, width, height, created_at
-                     FROM clipboard_history
-                     ORDER BY id DESC LIMIT ?1",
-                )?;
-                let mut rows = stmt.query(params![limit_i64])?;
-                while let Some(row) = rows.next()? {
-                    raw_rows.push(extract_row(row)?);
+                let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
+                if preserve {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, kind, content, width, height, created_at
+                         FROM clipboard_history
+                         WHERE kind = 'secret'
+                            OR id IN (
+                                SELECT id FROM clipboard_history
+                                WHERE kind != 'secret'
+                                ORDER BY id DESC LIMIT ?1
+                            )
+                         ORDER BY id DESC",
+                    )?;
+                    let mut rows = stmt.query(params![limit_i64])?;
+                    while let Some(row) = rows.next()? {
+                        raw_rows.push(extract_row(row)?);
+                    }
+                } else {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, kind, content, width, height, created_at
+                         FROM clipboard_history
+                         ORDER BY id DESC LIMIT ?1",
+                    )?;
+                    let mut rows = stmt.query(params![limit_i64])?;
+                    while let Some(row) = rows.next()? {
+                        raw_rows.push(extract_row(row)?);
+                    }
                 }
             }
             raw_rows
@@ -888,6 +956,52 @@ mod tests {
 
         // Vacuum database test
         db.vacuum().unwrap();
+    }
+
+    #[test]
+    fn test_preserve_secrets_on_prune() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("preserve_secrets.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        // Enforce max history of 2 items
+        db.set_max_history(2);
+        db.set_preserve_secrets_on_prune(true);
+        assert!(db.preserve_secrets_on_prune());
+
+        // Insert a secret
+        db.insert_secret("MySecretPassword123").unwrap();
+
+        // Insert 3 regular text items
+        db.insert("Regular 1").unwrap();
+        db.insert("Regular 2").unwrap();
+        db.insert("Regular 3").unwrap();
+
+        // With preserve_secrets_on_prune = true:
+        // Non-secret items are pruned to max_history (2 items: Regular 3 and Regular 2),
+        // but the secret is preserved!
+        let items = db.get_recent(2, None).unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].content, "Regular 3");
+        assert_eq!(items[1].content, "Regular 2");
+        assert_eq!(items[2].content, "MySecretPassword123");
+        assert_eq!(items[2].kind, ItemKind::Secret);
+
+        // Explicit manual prune to 1
+        let purged = db.prune_history(1).unwrap();
+        assert_eq!(purged, 1); // Regular 2 pruned
+        let items_after = db.get_recent(1, None).unwrap();
+        assert_eq!(items_after.len(), 2);
+        assert_eq!(items_after[0].content, "Regular 3");
+        assert_eq!(items_after[1].content, "MySecretPassword123");
+
+        // Now disable preserve_secrets_on_prune and prune to 1
+        db.set_preserve_secrets_on_prune(false);
+        assert!(!db.preserve_secrets_on_prune());
+        db.prune_history(1).unwrap();
+        let items_disabled = db.get_recent(10, None).unwrap();
+        assert_eq!(items_disabled.len(), 1);
+        assert_eq!(items_disabled[0].content, "Regular 3");
     }
 
     #[test]

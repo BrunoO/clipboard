@@ -26,6 +26,9 @@ impl ClipboardApp {
                 self.render_security_settings_group(ui, is_dark);
                 ui.add_space(10.0);
 
+                self.render_logging_settings_group(ui, is_dark);
+                ui.add_space(10.0);
+
                 Self::render_about_settings_group(ui, is_dark);
                 ui.add_space(12.0);
 
@@ -450,30 +453,7 @@ impl ClipboardApp {
                 .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );
-            if matches!(
-                self.key_storage_mode,
-                crate::crypto::KeyStorageMode::LocalFileFallback
-                    | crate::crypto::KeyStorageMode::LocalFileFallbackDegraded
-            ) {
-                let permissions_degraded = self.key_storage_mode
-                    == crate::crypto::KeyStorageMode::LocalFileFallbackDegraded;
-                let warning = if permissions_degraded {
-                    "Keyring fallback active, but key file permissions could not be restricted (Windows ACL hardening failed or USERNAME/USERDOMAIN was unavailable). Unlock the keyring and restart to migrate the key."
-                } else {
-                    "Keyring fallback active: the encryption key is stored in a restricted local file (.encryption_key) because the OS Keyring was unavailable."
-                };
-                let color = if permissions_degraded {
-                    crate::theme::error_color(is_dark)
-                } else {
-                    crate::theme::warning_color(is_dark)
-                };
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new(format!("{} {warning}", icons::WARNING))
-                        .color(color)
-                        .size(11.0),
-                );
-            }
+            Self::render_keyring_fallback_notice(ui, self.key_storage_mode, is_dark);
 
             ui.add_space(6.0);
             if ui
@@ -506,6 +486,23 @@ impl ClipboardApp {
                 self.persist_settings();
             }
 
+            ui.add_space(4.0);
+            if ui
+                .checkbox(
+                    &mut self.settings.preserve_secrets_on_prune,
+                    "Preserve secrets during history pruning",
+                )
+                .on_hover_text(
+                    "Prevents passwords, API keys, and generated secrets from being automatically deleted when history reaches the item limit.",
+                )
+                .changed()
+            {
+                self.db
+                    .set_preserve_secrets_on_prune(self.settings.preserve_secrets_on_prune);
+                self.persist_settings();
+                self.refresh_items();
+            }
+
             ui.add_space(6.0);
             self.render_auto_clear_secret_selector(ui);
 
@@ -532,6 +529,37 @@ impl ClipboardApp {
         });
     }
 
+    fn render_keyring_fallback_notice(
+        ui: &mut egui::Ui,
+        key_storage_mode: crate::crypto::KeyStorageMode,
+        is_dark: bool,
+    ) {
+        if matches!(
+            key_storage_mode,
+            crate::crypto::KeyStorageMode::LocalFileFallback
+                | crate::crypto::KeyStorageMode::LocalFileFallbackDegraded
+        ) {
+            let permissions_degraded =
+                key_storage_mode == crate::crypto::KeyStorageMode::LocalFileFallbackDegraded;
+            let warning = if permissions_degraded {
+                "Keyring fallback active, but key file permissions could not be restricted (Windows ACL hardening failed or USERNAME/USERDOMAIN was unavailable). Unlock the keyring and restart to migrate the key."
+            } else {
+                "Keyring fallback active: the encryption key is stored in a restricted local file (.encryption_key) because the OS Keyring was unavailable."
+            };
+            let color = if permissions_degraded {
+                crate::theme::error_color(is_dark)
+            } else {
+                crate::theme::warning_color(is_dark)
+            };
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(format!("{} {warning}", icons::WARNING))
+                    .color(color)
+                    .size(11.0),
+            );
+        }
+    }
+
     fn render_auto_clear_secret_selector(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Auto-clear copied secrets after:");
@@ -548,6 +576,78 @@ impl ClipboardApp {
                         }
                     }
                 });
+        });
+    }
+
+    fn render_logging_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{} Diagnostics & Logs", icons::FILE_TEXT))
+                    .color(crate::theme::text_primary(is_dark))
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "Application events, errors, and crash diagnostics are recorded to a local log file.",
+                )
+                .color(crate::theme::text_secondary(is_dark))
+                .size(11.0),
+            );
+            ui.add_space(6.0);
+
+            let log_path = crate::logging::log_file_path();
+            let path_str = log_path.map_or_else(
+                || "(unavailable)".to_string(),
+                |p| p.display().to_string(),
+            );
+
+            ui.label(
+                egui::RichText::new("Log file path:")
+                    .color(crate::theme::text_secondary(is_dark))
+                    .size(11.0),
+            );
+            ui.add_space(2.0);
+
+            egui::Frame::new()
+                .fill(crate::theme::search_bg(is_dark))
+                .stroke(crate::theme::card_stroke(is_dark, false))
+                .corner_radius(4)
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&path_str)
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(crate::theme::text_primary(is_dark)),
+                            )
+                            .selectable(true)
+                            .wrap(),
+                        );
+                    });
+                });
+
+            ui.add_space(6.0);
+
+            ui.horizontal(|ui| {
+                let copy_enabled = log_path.is_some();
+                if ui
+                    .add_enabled(
+                        copy_enabled,
+                        egui::Button::new(format!("{} Copy Path", icons::COPY)),
+                    )
+                    .on_hover_text("Copy the full path of the log file to clipboard")
+                    .clicked()
+                {
+                    self.copy_plain_text(
+                        &path_str,
+                        &format!("{} Copied log path to clipboard!", icons::CHECK),
+                        ui.ctx(),
+                    );
+                }
+            });
         });
     }
 
