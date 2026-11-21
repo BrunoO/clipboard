@@ -165,6 +165,7 @@ fn poll_clipboard_text(
     match db.insert(&text) {
         Ok(Some(id)) => {
             log_captured_text(id, &text);
+            // Best-effort coalesced wakeup; a full or closed channel needs no action.
             let _ = notify_tx.try_send(());
             ctx.request_repaint();
         }
@@ -222,6 +223,7 @@ fn poll_clipboard_image(
             println!("🖼️ Captured new image clipboard entry [id: {id}] ({width}x{height})");
             #[cfg(not(debug_assertions))]
             let _ = id;
+            // Best-effort coalesced wakeup; a full or closed channel needs no action.
             let _ = notify_tx.try_send(());
             ctx.request_repaint();
         }

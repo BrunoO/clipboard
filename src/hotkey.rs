@@ -80,6 +80,11 @@ fn register_hotkey_batch(
 }
 
 impl HotkeyService {
+    /// Initializes the global hotkey manager and registers the initial hotkeys.
+    ///
+    /// # Errors
+    /// Returns an error if the platform hotkey manager cannot be created or a
+    /// requested hotkey cannot be registered.
     pub(crate) fn new(
         initial_hotkeys: &[HotKey],
         hotkey_tx: std::sync::mpsc::SyncSender<()>,
@@ -121,6 +126,7 @@ impl HotkeyService {
                         };
                         if matches && event.state == HotKeyState::Pressed {
                             crate::platform::capture_active_window();
+                            // Best-effort coalesced wakeup; a full or closed channel needs no action.
                             let _ = hotkey_tx.try_send(());
                             ctx.request_repaint();
                         }
@@ -185,6 +191,7 @@ impl HotkeyService {
     /// Signals the background hotkey listener threads to shut down and joins them.
     pub(crate) fn shutdown(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
+            // The listener may already have exited; the join below is authoritative.
             let _ = tx.try_send(());
         }
         if let Some(handle) = self.listener_handle.take() {
@@ -347,6 +354,7 @@ mod linux_x11_fallback {
                     .any(|&(kc, mods)| kc == ev.detail && mods == ev_mods)
                 {
                     crate::platform::capture_active_window();
+                    // Best-effort coalesced wakeup; a full or closed channel needs no action.
                     let _ = hotkey_tx.try_send(());
                     ctx.request_repaint();
                 }
