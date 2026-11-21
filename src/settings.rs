@@ -54,26 +54,22 @@ impl HotkeyPreset {
     /// Human-readable label for settings UI.
     #[must_use]
     pub(crate) const fn display_name(self) -> &'static str {
-        #[cfg(target_os = "macos")]
-        {
-            self.platform_labels().0
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.platform_labels().1
+        let labels = self.platform_labels();
+        if cfg!(target_os = "macos") {
+            labels.0
+        } else {
+            labels.1
         }
     }
 
     /// Short badge for header display.
     #[must_use]
     pub(crate) const fn badge(self) -> &'static str {
-        #[cfg(target_os = "macos")]
-        {
-            self.platform_labels().2
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.platform_labels().3
+        let labels = self.platform_labels();
+        if cfg!(target_os = "macos") {
+            labels.2
+        } else {
+            labels.3
         }
     }
 
@@ -81,30 +77,23 @@ impl HotkeyPreset {
     /// Returns empty vec for `None` or `Custom` (custom hotkeys are resolved via settings).
     #[must_use]
     pub(crate) fn to_hotkeys(self) -> Vec<HotKey> {
-        #[cfg(target_os = "macos")]
-        let base_mod = Modifiers::META;
-        #[cfg(not(target_os = "macos"))]
-        let base_mod = Modifiers::CONTROL;
+        let base_mod = if cfg!(target_os = "macos") {
+            Modifiers::META
+        } else {
+            Modifiers::CONTROL
+        };
 
         match self {
             Self::Universal => vec![HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyV)],
             Self::AzertyQuote => {
-                #[cfg(target_os = "windows")]
-                if crate::platform::quote_key_is_ugrave() {
-                    vec![
-                        HotKey::new(Some(base_mod), Code::Backquote),
-                        HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Backquote),
-                    ]
+                let code = if crate::platform::quote_key_is_ugrave() {
+                    Code::Backquote
                 } else {
-                    vec![
-                        HotKey::new(Some(base_mod), Code::Quote),
-                        HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Quote),
-                    ]
-                }
-                #[cfg(not(target_os = "windows"))]
+                    Code::Quote
+                };
                 vec![
-                    HotKey::new(Some(base_mod), Code::Quote),
-                    HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::Quote),
+                    HotKey::new(Some(base_mod), code),
+                    HotKey::new(Some(base_mod | Modifiers::SHIFT), code),
                 ]
             }
             Self::CtrlShiftC => vec![HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyC)],
@@ -192,10 +181,7 @@ impl ParsedHotkey {
             }
         }
 
-        #[cfg(target_os = "windows")]
         let azerty = crate::platform::quote_key_is_ugrave();
-        #[cfg(not(target_os = "windows"))]
-        let azerty = false;
 
         let key = match key_str.to_lowercase().as_str() {
             "space" => Code::Space,
@@ -333,10 +319,7 @@ impl ParsedHotkey {
             parts.push("Shift");
         }
         if self.modifiers.contains(Modifiers::META) {
-            #[cfg(target_os = "macos")]
-            parts.push("Cmd");
-            #[cfg(not(target_os = "macos"))]
-            parts.push("Win");
+            parts.push(crate::platform::META_MODIFIER_NAME);
         }
         parts.push(match self.key {
             Code::Space => "Space",
@@ -484,14 +467,7 @@ const fn default_preserve_secrets_on_prune() -> bool {
 }
 
 const fn default_hide_on_blur() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        false
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        true
-    }
+    !cfg!(target_os = "windows")
 }
 
 const fn default_restore_focus() -> bool {

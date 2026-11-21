@@ -98,6 +98,109 @@ pub(crate) fn set_title_bar_dark_mode(is_dark: bool) {
     }
 }
 
+/// Human-readable name of the primary shortcut modifier key (`Cmd` on macOS, `Ctrl` elsewhere).
+pub(crate) const PRIMARY_MODIFIER_NAME: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Ctrl"
+};
+
+/// Human-readable name of the OS `Meta` / `Super` modifier key (`Cmd` on macOS, `Win` elsewhere).
+pub(crate) const META_MODIFIER_NAME: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Win"
+};
+
+/// Returns the user-facing navigation hint displayed in the bottom bar.
+#[must_use]
+pub(crate) const fn navigation_hint_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "↑/↓ or Tab • Enter • Cmd+1..9 • Esc"
+    } else {
+        "↑/↓ or Tab • Enter • Ctrl+1..9 • Esc"
+    }
+}
+
+/// Returns the tooltip for the header Quit button.
+#[must_use]
+pub(crate) const fn quit_shortcut_tooltip() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Quit CipherClipboard (Cmd+Q)"
+    } else {
+        "Quit CipherClipboard (Ctrl+Q)"
+    }
+}
+
+/// Formats an item quick-copy shortcut badge (e.g. `Cmd+1` on macOS, `Ctrl+1` elsewhere).
+#[must_use]
+pub(crate) fn format_item_shortcut(num: usize) -> String {
+    format!("{PRIMARY_MODIFIER_NAME}+{num}")
+}
+
+/// Returns `true` when the platform's primary shortcut modifier is pressed in `egui`.
+#[must_use]
+pub(crate) const fn is_primary_shortcut_modifier(modifiers: eframe::egui::Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        modifiers.command
+    } else {
+        modifiers.ctrl
+    }
+}
+
+/// Builds candidate font paths under the Windows `Fonts` directory.
+#[cfg(any(target_os = "windows", test))]
+#[must_use]
+pub(crate) fn windows_font_candidates(windir: Option<&str>) -> Vec<std::path::PathBuf> {
+    let base = windir
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(r"C:\Windows");
+    let fonts_dir = std::path::PathBuf::from(base).join("Fonts");
+    ["segoeui.ttf", "segoeuil.ttf", "arial.ttf"]
+        .into_iter()
+        .map(|name| fonts_dir.join(name))
+        .collect()
+}
+
+/// Returns candidate paths for native system UI fonts on the current platform
+/// (San Francisco on macOS, Segoe UI on Windows, `DejaVu` Sans on Linux).
+#[must_use]
+pub(crate) fn system_font_candidates() -> Vec<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        [
+            "/System/Library/Fonts/SFNS.ttf",
+            "/System/Library/Fonts/SFNSText.ttf",
+            "/System/Library/Fonts/SFCompact.ttf",
+            "/System/Library/Fonts/HelveticaNeue.ttc",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/Library/Fonts/Arial.ttf",
+        ]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let windir = std::env::var("WINDIR")
+            .ok()
+            .or_else(|| std::env::var("SystemRoot").ok());
+        windows_font_candidates(windir.as_deref())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect()
+    }
+}
+
 use crate::logging::log_message;
 
 /// Returns a monotonic OS clipboard change counter when supported by the platform

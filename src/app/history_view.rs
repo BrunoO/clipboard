@@ -412,10 +412,7 @@ impl ClipboardApp {
     }
 
     fn render_shortcut_badge(ui: &mut egui::Ui, num: usize, is_selected: bool, is_dark: bool) {
-        #[cfg(target_os = "macos")]
-        let shortcut_str = format!("Cmd+{num}");
-        #[cfg(not(target_os = "macos"))]
-        let shortcut_str = format!("Ctrl+{num}");
+        let shortcut_str = crate::platform::format_item_shortcut(num);
 
         let (text_c, bg_c, stroke_c) = crate::theme::shortcut_badge_colors(is_dark, is_selected);
 

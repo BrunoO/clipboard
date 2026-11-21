@@ -983,12 +983,8 @@ impl ClipboardApp {
 
     fn handle_quit_shortcut(&mut self, ctx: &egui::Context) {
         let quit_pressed = ctx.input(|i| {
-            #[cfg(target_os = "macos")]
-            let modifier = i.modifiers.command;
-            #[cfg(not(target_os = "macos"))]
-            let modifier = i.modifiers.ctrl;
-
-            modifier && i.key_pressed(egui::Key::Q)
+            crate::platform::is_primary_shortcut_modifier(i.modifiers)
+                && i.key_pressed(egui::Key::Q)
         });
 
         if quit_pressed {
@@ -1124,14 +1120,9 @@ impl ClipboardApp {
             self.hide_window(ctx, self.settings.restore_focus, false);
         }
 
-        let quit_tooltip = if cfg!(target_os = "macos") {
-            "Quit CipherClipboard (Cmd+Q)"
-        } else {
-            "Quit CipherClipboard (Ctrl+Q)"
-        };
         if ui
             .small_button(icons::button_icon(icons::POWER))
-            .on_hover_text(quit_tooltip)
+            .on_hover_text(crate::platform::quit_shortcut_tooltip())
             .clicked()
         {
             self.quit(ctx);
@@ -1283,12 +1274,8 @@ impl ClipboardApp {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        #[cfg(target_os = "macos")]
-                        let nav_hint = "↑/↓ or Tab • Enter • Cmd+1..9 • Esc";
-                        #[cfg(not(target_os = "macos"))]
-                        let nav_hint = "↑/↓ or Tab • Enter • Ctrl+1..9 • Esc";
                         ui.label(
-                            egui::RichText::new(nav_hint)
+                            egui::RichText::new(crate::platform::navigation_hint_label())
                                 .color(crate::theme::text_secondary(is_dark))
                                 .size(10.5_f32),
                         );
