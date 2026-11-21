@@ -811,6 +811,10 @@ impl ClipboardApp {
         if nav.delete_selected {
             self.delete_filtered_item(&filtered_indices, ctx);
         }
+
+        if nav.toggle_secret_selected {
+            self.toggle_secret_filtered_item(&filtered_indices, ctx);
+        }
     }
 
     fn apply_history_nav_step(&mut self, nav: HistoryNavInput, len: usize, ctx: &egui::Context) {
@@ -893,6 +897,18 @@ impl ClipboardApp {
                 self.scroll_to_selected = true;
                 self.show_toast(&format!("{} Entry deleted.", icons::TRASH));
                 ctx.request_repaint();
+            }
+        }
+    }
+
+    fn toggle_secret_filtered_item(&mut self, filtered_indices: &[usize], ctx: &egui::Context) {
+        if let Some(&item_idx) = filtered_indices.get(self.selected_index) {
+            if let Some(item) = self.items.get(item_idx) {
+                if item.kind != ItemKind::Image {
+                    let make_secret = item.kind != ItemKind::Secret;
+                    let id = item.id;
+                    self.dispatch_item_action(ItemAction::ToggleSecret(id, make_secret), ctx);
+                }
             }
         }
     }
@@ -1675,6 +1691,7 @@ struct HistoryNavInput {
     up: Option<NavStep>,
     copy_selected: bool,
     delete_selected: bool,
+    toggle_secret_selected: bool,
     copy_shortcut_slot: Option<usize>,
 }
 
@@ -1698,6 +1715,10 @@ fn read_history_nav_input(ctx: &egui::Context) -> HistoryNavInput {
                 nav.copy_shortcut_slot = Some(idx);
                 return;
             }
+        }
+
+        if i.consume_key(egui::Modifiers::COMMAND, egui::Key::L) {
+            nav.toggle_secret_selected = true;
         }
 
         if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
@@ -2169,5 +2190,21 @@ mod tests {
         ));
         app.handle_clipboard_auto_clear();
         assert!(app.pending_clipboard_clear.is_none());
+    }
+
+    #[test]
+    fn test_read_history_nav_input_consumes_cmd_l_for_toggle_secret() {
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::L,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            });
+        });
+        let nav = super::read_history_nav_input(&ctx);
+        assert!(nav.toggle_secret_selected);
     }
 }

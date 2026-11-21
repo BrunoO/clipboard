@@ -136,7 +136,7 @@ impl ClipboardApp {
             });
     }
 
-    fn dispatch_item_action(&mut self, action: ItemAction, ctx: &egui::Context) {
+    pub(super) fn dispatch_item_action(&mut self, action: ItemAction, ctx: &egui::Context) {
         match action {
             ItemAction::CopyText(content) => self.copy_text_to_clipboard(&content, ctx),
             ItemAction::CopySecret(secret) => self.copy_secret_to_clipboard(&secret, ctx),
@@ -163,9 +163,7 @@ impl ClipboardApp {
                     self.report_db_write_failure(operation, &error);
                     return;
                 }
-                if !make_secret {
-                    self.revealed_secrets.remove(&id);
-                }
+                self.revealed_secrets.remove(&id);
                 self.refresh_items();
                 let msg = if make_secret {
                     format!("{} Marked entry as Secret.", icons::LOCK)
@@ -477,9 +475,21 @@ impl ClipboardApp {
         if item.kind != ItemKind::Image {
             let is_secret = item.kind == ItemKind::Secret;
             let (lock_icon, lock_tip) = if is_secret {
-                (icons::LOCK_OPEN, "Unmark as Secret")
+                (
+                    icons::LOCK_OPEN,
+                    format!(
+                        "Unmark as Secret ({}+L)",
+                        crate::platform::PRIMARY_MODIFIER_NAME
+                    ),
+                )
             } else {
-                (icons::LOCK, "Mark as Secret (mask content)")
+                (
+                    icons::LOCK,
+                    format!(
+                        "Mark as Secret (mask content, {}+L)",
+                        crate::platform::PRIMARY_MODIFIER_NAME
+                    ),
+                )
             };
             if ui
                 .small_button(icons::button_icon(lock_icon))

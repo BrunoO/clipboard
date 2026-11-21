@@ -1,6 +1,6 @@
 # Feature Document: Manual Secret Classification ("Mark as Secret")
 
-> **Status:** Implemented (Baseline) + Proposed UX Enhancements  
+> **Status:** Implemented (Baseline + Keyboard Shortcut `Cmd/Ctrl+L`)  
 > **Date:** 2026-11-21  
 > **Related:** [FEATURE_TEXT_TRANSFORMATIONS.md](FEATURE_TEXT_TRANSFORMATIONS.md)
 
@@ -30,16 +30,16 @@ Although "convert an entry to a secret" can feel similar to "convert an entry to
 
 ## 3. Existing Implementation in `CipherClipboard`
 
-Manual secret conversion is **already implemented** in the codebase:
+Manual secret conversion is implemented in the codebase:
 
 1. **UI Trigger (`src/app/history_view.rs`):**
    - `render_secret_header_buttons` renders a lock icon button (`icons::LOCK` / `icons::LOCK_OPEN`) on every non-image entry (`item.kind != ItemKind::Image`).
-   - Tooltip: `"Mark as Secret (mask content)"` when unmarked; `"Unmark as Secret"` when already `ItemKind::Secret`.
+   - Tooltip: `"Mark as Secret (mask content, {MOD}+L)"` when unmarked; `"Unmark as Secret ({MOD}+L)"` when already `ItemKind::Secret` (interpolating `platform::PRIMARY_MODIFIER_NAME`).
    - For `ItemKind::Secret` entries, it also renders an eye toggle (`icons::EYE` / `icons::EYE_SLASH`) to temporarily reveal/mask content in the UI (`revealed_secrets` set, cleared on `hide_window`).
 
 2. **Action Dispatch (`src/app/history_view.rs`):**
-   - Clicking the lock button emits `ItemAction::ToggleSecret(item.id, !is_secret)`.
-   - `dispatch_item_action` calls `self.db.set_item_secret(id, make_secret)`, clears `revealed_secrets` when unmarking, refreshes the item list, and shows a confirmation toast.
+   - Clicking the lock button or pressing `Cmd+L` (macOS) / `Ctrl+L` (Windows/Linux) emits `ItemAction::ToggleSecret(item.id, !is_secret)`.
+   - `dispatch_item_action` calls `self.db.set_item_secret(id, make_secret)`, unconditionally removes the item ID from `revealed_secrets`, refreshes the item list, and shows a confirmation toast.
 
 3. **Database Mutation (`src/db.rs`):**
    - `Database::set_item_secret(id, is_secret)` ignores `image` rows, reads `content`, and updates `kind`:
@@ -53,19 +53,18 @@ Manual secret conversion is **already implemented** in the codebase:
 
 ---
 
-## 4. Proposed UX & Discoverability Enhancements
+## 4. UX & Discoverability Enhancements
 
-While the core functionality is complete, discoverability and keyboard-first ergonomics can be improved:
+1. **Keyboard Shortcut for Selected Entry (Implemented):**
+   - `Cmd+L` (macOS) or `Ctrl+L` (Windows/Linux) in history navigation toggles the secret status on the currently selected entry (`self.selected_index`).
+   - Surfaced dynamically in the lock button's hover tooltip via `{PRIMARY_MODIFIER_NAME}+L`.
 
-1. **Keyboard Shortcut for Selected Entry:**
-   - Bind a shortcut in `App::ui()` (e.g., `Cmd/Ctrl+L` or `Shift+S` when the search box is not focused) to toggle secret status on `self.selected_index`.
-   - Surface the shortcut in the lock button's hover tooltip.
+2. **Defensive Revealed-State Invalidation (Implemented):**
+   - In `dispatch_item_action`, `revealed_secrets.remove(&id)` is executed unconditionally whenever secret status toggles, preventing any newly marked secret from inadvertently remaining revealed.
+   - All revealed state continues to be wiped on window hide (`hide_window`).
 
-2. **Card Context Menu / Action Palette Integration:**
-   - When a right-click context menu or `Cmd/Ctrl+T` action palette is added for entries (see [FEATURE_TEXT_TRANSFORMATIONS.md](FEATURE_TEXT_TRANSFORMATIONS.md)), include **"Mark as Secret"** / **"Unmark as Secret"** under an *Entry / Security* section so users do not have to rely solely on the small header lock icon.
-
-3. **Revealed-State Audit (Optional):**
-   - Ensure `revealed_secrets` remains cleared on window hide (already done in `hide_window` in `src/app/mod.rs`) and consider clearing it on `ToggleSecret` when marking an entry *as* a secret (currently `revealed_secrets.remove(&id)` is only called when `!make_secret`, which is fine since newly marked secrets weren't in the set, though clearing unconditionally is harmless).
+3. **Card Context Menu / Action Palette Integration (Future):**
+   - When a right-click context menu or `Cmd/Ctrl+T` action palette is added for entries (see [FEATURE_TEXT_TRANSFORMATIONS.md](FEATURE_TEXT_TRANSFORMATIONS.md)), include **"Mark as Secret"** / **"Unmark as Secret"** under an *Entry / Security* section so users do not have to rely solely on the small header lock icon or shortcut.
 
 4. **Custom Secret Rules / Patterns (Future):**
    - Optional user-defined prefix or regex patterns in Settings for organization-specific tokens that `secret::is_likely_secret` cannot know ahead of time.
