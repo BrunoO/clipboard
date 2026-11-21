@@ -152,10 +152,13 @@ pub(super) fn setup_reopen_observer() {
                 decl.register();
             }
 
+            let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
+            if center.is_null() {
+                return;
+            }
             let observer_cls = class!(CipherReopenObserver);
             let observer: *mut Object = msg_send![observer_cls, new];
-            let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
-            if center.is_null() || observer.is_null() {
+            if observer.is_null() {
                 return;
             }
 

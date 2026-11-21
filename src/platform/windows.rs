@@ -12,8 +12,8 @@ use windows_sys::Win32::Security::Cryptography::{
     CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
 };
 use windows_sys::Win32::Security::{
-    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel,
-    TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, IsValidSid,
+    TokenIntegrityLevel, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
 };
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
@@ -665,7 +665,7 @@ pub(crate) fn target_is_elevated() -> bool {
             }
             if ok != 0 && ret_len >= min_len && ret_len <= buffer_len {
                 let info = &*std::ptr::addr_of!(buf).cast::<TOKEN_MANDATORY_LABEL>();
-                if !info.Label.Sid.is_null() {
+                if !info.Label.Sid.is_null() && IsValidSid(info.Label.Sid) != 0 {
                     let count = GetSidSubAuthorityCount(info.Label.Sid);
                     if !count.is_null() && *count > 0 {
                         let rid = GetSidSubAuthority(info.Label.Sid, u32::from(*count - 1));
