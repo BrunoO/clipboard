@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/tmp/arch-07-concurrency.json",
+    "sha256": "9c71f164446d1679f0f090c9c94e178b1a142a8c08f5566e22a804736036e77e",
+    "bytes": 2113
+  },
+  "artifact": {
+    "path": "/Users/brunoorsier/dev/clipboard/docs/architecture/07-concurrency-runtime.html",
+    "sha256": "77e319679e0f7715df847e15031de6f79a9e62d2d88a4e0215f532fa143fba57",
+    "bytes": 838650
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/07-concurrency-runtime.finalize.json",
+    "summaryReceipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/07-concurrency-runtime.finalize-summary.json",
+    "browserCheckReceipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/07-concurrency-runtime.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-21T08:28:52.129Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2611,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "resolvedCrossovers": 1,
+      "routesOverSuggestedBends": 2
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [
+        {
+          "left": {
+            "id": "c5",
+            "from": "ui",
+            "to": "paste",
+            "label": "",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "right": {
+            "id": "c7",
+            "from": "monitor",
+            "to": "db",
+            "label": "",
+            "collectionIndex": 6,
+            "artifactIndex": 7
+          },
+          "point": [
+            756,
+            180
+          ]
+        }
+      ],
+      "detours": [
+        {
+          "relationship": {
+            "id": "c1",
+            "from": "monitor",
+            "to": "channels",
+            "label": "",
+            "collectionIndex": 0,
+            "artifactIndex": 1
+          },
+          "bends": 3,
+          "stretch": 1
+        },
+        {
+          "relationship": {
+            "id": "c2",
+            "from": "hotkey",
+            "to": "channels",
+            "label": "",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "bends": 3,
+          "stretch": 1.249
+        }
+      ],
+      "truncated": false
+    },
+    "hints": [
+      "channels has 3 relationships facing its left side, which fits 2 ports: make that side at least 60px, or move some of those neighbours so they face another side of channels.",
+      "ui → paste crosses monitor → db: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "monitor → channels needs 3 bends: move node monitor or channels so they share a row or column with matching centers, or sit diagonally with a clear corner.",
+      "hotkey → channels needs 3 bends: move node hotkey or channels so they share a row or column with matching centers, or sit diagonally with a clear corner."
+    ],
+    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
+  }
+}

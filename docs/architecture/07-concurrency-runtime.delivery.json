@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "cdab9ffd-ccd6-4da2-8347-6b9e34bfe3ea",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/tmp/arch-07-concurrency.json",
+  "output": "/Users/brunoorsier/dev/clipboard/docs/architecture/07-concurrency-runtime.html",
+  "specification": {
+    "sha256": "9c71f164446d1679f0f090c9c94e178b1a142a8c08f5566e22a804736036e77e",
+    "bytes": 2113
+  },
+  "artifact": {
+    "sha256": "77e319679e0f7715df847e15031de6f79a9e62d2d88a4e0215f532fa143fba57",
+    "bytes": 838650
+  }
+}
