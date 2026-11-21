@@ -37,6 +37,39 @@ fn warn_if_local_cache_hardening_failed(permissions_degraded: bool) {
     }
 }
 
+/// Domain error type for encryption key retrieval and storage operations.
+#[derive(Debug)]
+pub(crate) enum KeyError {
+    /// I/O error reading or writing the local key file.
+    Io(std::io::Error),
+    /// An existing encrypted database was found on disk, but its encryption key could not be recovered.
+    ExistingDatabaseMissingKey(String),
+}
+
+impl std::fmt::Display for KeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(err) => write!(f, "Key store I/O error: {err}"),
+            Self::ExistingDatabaseMissingKey(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for KeyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(err) => Some(err),
+            Self::ExistingDatabaseMissingKey(_) => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for KeyError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
 /// Retrieves or securely generates a 256-bit encryption key wrapped in [`Zeroizing`],
 /// along with the [`KeyStorageMode`] indicating whether it is backed by the OS Keyring
 /// or a local fallback file.
@@ -51,12 +84,12 @@ fn warn_if_local_cache_hardening_failed(permissions_degraded: bool) {
 ///   restricted local key file only if the OS Keyring is unavailable (e.g., headless Linux).
 ///
 /// # Errors
-/// Returns an error if a key file cannot be read or written with restricted permissions,
+/// Returns [`KeyError`] if a key file cannot be read or written with restricted permissions,
 /// or if an existing encrypted database is found but its key cannot be recovered.
 pub(crate) fn get_or_create_encryption_key(
     data_dir: &Path,
     db_exists: bool,
-) -> Result<(Zeroizing<String>, KeyStorageMode), Box<dyn std::error::Error>> {
+) -> Result<(Zeroizing<String>, KeyStorageMode), KeyError> {
     get_or_create_encryption_key_with_mode(data_dir, db_exists, cfg!(debug_assertions))
 }
 
@@ -64,7 +97,7 @@ fn get_or_create_encryption_key_with_mode(
     data_dir: &Path,
     db_exists: bool,
     allow_key_file_cache: bool,
-) -> Result<(Zeroizing<String>, KeyStorageMode), Box<dyn std::error::Error>> {
+) -> Result<(Zeroizing<String>, KeyStorageMode), KeyError> {
     let key_file = data_dir.join(".encryption_key");
 
     if allow_key_file_cache {
@@ -126,7 +159,9 @@ fn get_or_create_encryption_key_with_mode(
 
     // Safety Check: If the database already exists on disk, we MUST NOT generate a new random key!
     if db_exists {
-        return Err(missing_key_error_message(data_dir).into());
+        return Err(KeyError::ExistingDatabaseMissingKey(
+            missing_key_error_message(data_dir),
+        ));
     }
 
     // Fresh setup: Generate a new random 256-bit key
@@ -378,7 +413,11 @@ mod tests {
         mock_keyring::reset();
         let dir = tempdir().unwrap();
         let res = get_or_create_encryption_key_with_mode(dir.path(), true, true);
-        assert!(res.is_err());
+        assert!(matches!(res, Err(KeyError::ExistingDatabaseMissingKey(_))));
+        if let Err(err) = res {
+            assert!(err.to_string().contains("existing encrypted database"));
+            assert!(std::error::Error::source(&err).is_none());
+        }
     }
 
     #[test]

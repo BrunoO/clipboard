@@ -159,6 +159,44 @@ impl std::fmt::Debug for Database {
     }
 }
 
+/// Domain error type for database opening, authentication, and schema migration.
+#[derive(Debug)]
+pub(crate) enum DbOpenError {
+    /// SQLite or `SQLCipher` error during connection, pragma, or query execution.
+    Sqlite(rusqlite::Error),
+    /// Schema migration failed for a column.
+    Migration {
+        sql: &'static str,
+        source: rusqlite::Error,
+    },
+}
+
+impl std::fmt::Display for DbOpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sqlite(err) => write!(f, "Database open error: {err}"),
+            Self::Migration { sql, source } => {
+                write!(f, "Schema migration failed for `{sql}`: {source}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DbOpenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Sqlite(err) => Some(err),
+            Self::Migration { source, .. } => Some(source),
+        }
+    }
+}
+
+impl From<rusqlite::Error> for DbOpenError {
+    fn from(err: rusqlite::Error) -> Self {
+        Self::Sqlite(err)
+    }
+}
+
 /// Returns `true` if the SQLite error represents an expected "duplicate column name" error
 /// when running `ALTER TABLE` schema migrations on an already-migrated database.
 fn is_duplicate_column_error(err: &rusqlite::Error) -> bool {
@@ -176,12 +214,12 @@ impl Database {
     /// enables WAL mode for high performance concurrency, and initializes or migrates the schema.
     ///
     /// # Errors
-    /// Returns an error if the file cannot be opened, the encryption key is rejected,
+    /// Returns [`DbOpenError`] if the file cannot be opened, the encryption key is rejected,
     /// or SQLite pragmas/schema initialization/migration fail.
     pub(crate) fn open(
         path: &Path,
         encryption_key: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> std::result::Result<Self, DbOpenError> {
         let conn = Connection::open(path)?;
 
         // Apply SQLCipher encryption key
@@ -237,7 +275,7 @@ impl Database {
         ] {
             if let Err(e) = conn.execute(sql, []) {
                 if !is_duplicate_column_error(&e) {
-                    return Err(format!("Schema migration failed for `{sql}`: {e}").into());
+                    return Err(DbOpenError::Migration { sql, source: e });
                 }
             }
         }
@@ -1502,7 +1540,10 @@ mod tests {
             "Database::open must fail when schema migration encounters an unexpected error"
         );
 
-        let err_msg = open_res.err().unwrap().to_string();
+        let err = open_res.err().unwrap();
+        assert!(matches!(err, DbOpenError::Migration { .. }));
+        assert!(std::error::Error::source(&err).is_some());
+        let err_msg = err.to_string();
         assert!(
             err_msg.contains(
                 "Schema migration failed for `ALTER TABLE clipboard_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'`"
