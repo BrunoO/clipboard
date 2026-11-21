@@ -1600,6 +1600,29 @@ impl eframe::App for ClipboardApp {
 }
 
 impl ClipboardApp {
+    /// Releases owned background resources in a deterministic, idempotent order.
+    ///
+    /// Both explicit shutdown and `Drop` use this path: clear any pending secret
+    /// clipboard payload first, stop and join hotkey/monitor/paste workers, then
+    /// remove the macOS reopen observer.
+    fn shutdown_resources(&mut self) {
+        self.clear_pending_secret_from_clipboard();
+
+        if let Some(hotkey) = self.hotkey_service.as_mut() {
+            hotkey.shutdown();
+        }
+
+        // The receiver may already be gone during `Drop`; the join below is authoritative.
+        let _ = self.monitor_shutdown_tx.send(());
+        if let Some(handle) = self.monitor_handle.take() {
+            // A panicked worker cannot be recovered here; avoid double-panicking during shutdown.
+            let _ = handle.join();
+        }
+
+        crate::platform::shutdown_paste_worker();
+        crate::platform::teardown_reopen_observer();
+    }
+
     /// Terminates the process right after cleanup on macOS.
     ///
     /// After the close request, winit's `NSApplication run` loop is still pumping and
@@ -1608,31 +1631,14 @@ impl ClipboardApp {
     /// our own cleanup finished, avoids that last `AppKit` flush.
     #[cfg(target_os = "macos")]
     fn shutdown_and_exit(&mut self) -> ! {
-        self.clear_pending_secret_from_clipboard();
-        if let Some(hotkey) = self.hotkey_service.as_mut() {
-            hotkey.shutdown();
-        }
-        let _ = self.monitor_shutdown_tx.send(());
-        if let Some(handle) = self.monitor_handle.take() {
-            let _ = handle.join();
-        }
-        crate::platform::shutdown_paste_worker();
-        crate::platform::teardown_reopen_observer();
+        self.shutdown_resources();
         std::process::exit(0);
     }
 }
 
 impl Drop for ClipboardApp {
     fn drop(&mut self) {
-        self.clear_pending_secret_from_clipboard();
-        if let Some(hotkey) = self.hotkey_service.as_mut() {
-            hotkey.shutdown();
-        }
-        let _ = self.monitor_shutdown_tx.send(());
-        if let Some(handle) = self.monitor_handle.take() {
-            let _ = handle.join();
-        }
-        crate::platform::shutdown_paste_worker();
+        self.shutdown_resources();
     }
 }
 
