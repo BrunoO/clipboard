@@ -31,7 +31,9 @@ pub(crate) use linux::QuoteHotkeyFallback;
 #[cfg(not(target_os = "linux"))]
 pub(crate) struct QuoteHotkeyFallback;
 
+// This type mirrors the Linux fallback's instance API so callers stay platform-agnostic.
 #[cfg(not(target_os = "linux"))]
+#[allow(clippy::unused_self, clippy::needless_pass_by_ref_mut)]
 impl QuoteHotkeyFallback {
     #[must_use]
     pub(crate) fn new(
