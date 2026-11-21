@@ -391,10 +391,14 @@ impl Database {
     }
 
     /// Prunes entries exceeding `max_limit` within an active SQLite transaction.
-    fn prune_in_tx(tx: &rusqlite::Transaction<'_>, max_limit: usize, preserve: bool) {
+    fn prune_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        max_limit: usize,
+        preserve: bool,
+    ) -> Result<(), rusqlite::Error> {
         if max_limit > 0 {
             let limit_i64 = i64::try_from(max_limit).unwrap_or(i64::MAX);
-            let result = if preserve {
+            if preserve {
                 tx.execute(
                     "DELETE FROM clipboard_history
                      WHERE kind != 'secret'
@@ -404,7 +408,7 @@ impl Database {
                            ORDER BY id DESC LIMIT ?1
                        )",
                     params![limit_i64],
-                )
+                )?;
             } else {
                 tx.execute(
                     "DELETE FROM clipboard_history
@@ -412,12 +416,10 @@ impl Database {
                          SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
                      )",
                     params![limit_i64],
-                )
-            };
-            if let Err(e) = result {
-                eprintln!("⚠️ Failed to prune clipboard history: {e}");
+                )?;
             }
         }
+        Ok(())
     }
 
     /// Inserts a new text clipboard entry, deduplicating against history.
@@ -474,7 +476,7 @@ impl Database {
         let new_id = tx.last_insert_rowid();
 
         // 3. Automatically prune older entries beyond max_history
-        Self::prune_in_tx(&tx, max_limit, preserve);
+        Self::prune_in_tx(&tx, max_limit, preserve)?;
         tx.commit()?;
 
         Ok(Some(new_id))
@@ -518,7 +520,7 @@ impl Database {
 
         let new_id = tx.last_insert_rowid();
 
-        Self::prune_in_tx(&tx, max_limit, preserve);
+        Self::prune_in_tx(&tx, max_limit, preserve)?;
         tx.commit()?;
 
         Ok(Some(new_id))
@@ -580,7 +582,7 @@ impl Database {
         let new_id = tx.last_insert_rowid();
 
         // 3. Automatically prune older entries beyond max_history
-        Self::prune_in_tx(&tx, max_limit, preserve);
+        Self::prune_in_tx(&tx, max_limit, preserve)?;
         tx.commit()?;
 
         Ok(Some(new_id))
@@ -1309,5 +1311,96 @@ mod tests {
         // Unfiltered query still returns the secret (so it appears in History/Secrets tab)
         let all = db.get_recent(10, None).unwrap();
         assert_eq!(all.len(), 4);
+    }
+
+    #[test]
+    fn test_prune_in_tx_failure_rolls_back_insert() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("prune_failure_rollback.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+        db.set_max_history(2);
+
+        // Populate two baseline entries
+        let id1 = db
+            .insert("initial entry 1")
+            .unwrap()
+            .expect("insert initial 1");
+        let id2 = db
+            .insert("initial entry 2")
+            .unwrap()
+            .expect("insert initial 2");
+
+        // Install a trigger that aborts any DELETE when clipboard_history exceeds max_limit (2),
+        // cleanly isolating the prune DELETE from deduplication DELETEs.
+        db.lock_conn()
+            .execute_batch(
+                "CREATE TRIGGER abort_prune BEFORE DELETE ON clipboard_history
+                 WHEN (SELECT count(*) FROM clipboard_history) > 2
+                 BEGIN
+                     SELECT RAISE(ABORT, 'forced prune failure');
+                 END;",
+            )
+            .unwrap();
+
+        // 1. insert() path: prune fails, returning Err and rolling back insert
+        let insert_res = db.insert("entry 3 - should fail");
+        assert!(
+            insert_res.is_err(),
+            "insert must return Err when prune fails"
+        );
+
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(
+            items.len(),
+            2,
+            "Transaction must rollback, leaving exactly 2 items"
+        );
+        assert_eq!(items[0].id, id2);
+        assert_eq!(items[1].id, id1);
+
+        // 2. insert_secret() path: prune fails, returning Err and rolling back secret insert
+        let secret_res = db.insert_secret("secret 3 - should fail");
+        assert!(
+            secret_res.is_err(),
+            "insert_secret must return Err when prune fails"
+        );
+
+        let items_after_secret = db.get_recent(10, None).unwrap();
+        assert_eq!(
+            items_after_secret.len(),
+            2,
+            "Transaction must rollback secret insert"
+        );
+        assert_eq!(items_after_secret[0].id, id2);
+        assert_eq!(items_after_secret[1].id, id1);
+
+        // 3. insert_image() path: prune fails, returning Err and rolling back image insert
+        let image_res = db.insert_image(10, 10, &[0x89, b'P', b'N', b'G']);
+        assert!(
+            image_res.is_err(),
+            "insert_image must return Err when prune fails"
+        );
+
+        let items_after_image = db.get_recent(10, None).unwrap();
+        assert_eq!(
+            items_after_image.len(),
+            2,
+            "Transaction must rollback image insert"
+        );
+        assert_eq!(items_after_image[0].id, id2);
+        assert_eq!(items_after_image[1].id, id1);
+
+        // 4. insert() with preserve_secrets_on_prune = true: also fails and rolls back
+        db.set_preserve_secrets_on_prune(true);
+        let insert_preserve_res = db.insert("entry 4 - should fail with preserve");
+        assert!(
+            insert_preserve_res.is_err(),
+            "insert with preserve must return Err when prune fails"
+        );
+
+        let items_after_preserve = db.get_recent(10, None).unwrap();
+        assert_eq!(items_after_preserve.len(), 2);
+        assert_eq!(items_after_preserve[0].id, id2);
+        assert_eq!(items_after_preserve[1].id, id1);
     }
 }
