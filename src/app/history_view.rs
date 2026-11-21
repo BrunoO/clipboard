@@ -271,7 +271,7 @@ impl ClipboardApp {
                     if !embedded.is_empty() {
                         ui.add_space(4.0);
                         let color_action =
-                            Self::render_embedded_colors(ui, &embedded, state.is_dark);
+                            Self::render_embedded_colors(ui, embedded, state.is_dark);
                         if !matches!(color_action, ItemAction::None) {
                             action = color_action;
                         }

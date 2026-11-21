@@ -36,6 +36,7 @@ pub(crate) struct ClipboardItem {
     pub(crate) width: Option<u32>,
     pub(crate) height: Option<u32>,
     pub(crate) created_at: String,
+    pub(crate) embedded_colors: Vec<crate::color::ParsedColor>,
 }
 
 impl ClipboardItem {
@@ -84,19 +85,10 @@ impl ClipboardItem {
         crate::color::parse_color(&self.content)
     }
 
-    /// Extracts distinct colors embedded within the text or code content.
+    /// Returns the precomputed distinct colors embedded within the text or code content.
     #[must_use]
-    pub(crate) fn embedded_colors(&self) -> Vec<crate::color::ParsedColor> {
-        if self.kind == ItemKind::Image
-            || self.kind == ItemKind::Url
-            || self.kind == ItemKind::Secret
-        {
-            return Vec::new();
-        }
-        if self.kind == ItemKind::Color {
-            return self.parsed_color().into_iter().collect();
-        }
-        crate::color::extract_colors(&self.content)
+    pub(crate) fn embedded_colors(&self) -> &[crate::color::ParsedColor] {
+        &self.embedded_colors
     }
 }
 
@@ -725,6 +717,13 @@ impl Database {
                         }
                     }
                 };
+                let embedded_colors = if kind == ItemKind::Text || kind == ItemKind::Code {
+                    crate::color::extract_colors(&r.content)
+                } else if kind == ItemKind::Color {
+                    crate::color::parse_color(&r.content).into_iter().collect()
+                } else {
+                    Vec::new()
+                };
                 ClipboardItem {
                     id: r.id,
                     kind,
@@ -732,6 +731,7 @@ impl Database {
                     width: r.width,
                     height: r.height,
                     created_at: r.created_at,
+                    embedded_colors,
                 }
             })
             .collect();
@@ -1523,5 +1523,20 @@ mod tests {
         assert!(!db.ignore_concealed());
         assert!(!db.auto_detect_secrets());
         assert!(db.preserve_secrets_on_prune());
+    }
+
+    #[test]
+    fn test_clipboard_item_precomputed_embedded_colors() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("embedded_colors.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        db.insert("Theme palette: primary #ff5733 and secondary rgb(0, 128, 255)")
+            .unwrap();
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 1);
+        let embedded = items[0].embedded_colors();
+        assert_eq!(embedded.len(), 2);
+        assert_eq!(embedded[0].to_hex(), "#FF5733");
     }
 }
