@@ -1587,6 +1587,7 @@ impl ClipboardApp {
         if let Some(handle) = self.monitor_handle.take() {
             let _ = handle.join();
         }
+        crate::platform::shutdown_paste_worker();
         crate::platform::teardown_reopen_observer();
         std::process::exit(0);
     }
@@ -1602,6 +1603,7 @@ impl Drop for ClipboardApp {
         if let Some(handle) = self.monitor_handle.take() {
             let _ = handle.join();
         }
+        crate::platform::shutdown_paste_worker();
     }
 }
 

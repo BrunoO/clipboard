@@ -259,6 +259,8 @@ fn simulate_paste_if_foreground() {
     }
 }
 
+// The sender lives only in `PasteWorker`; shutdown drops it so both the `recv`
+// and `recv_timeout` Disconnected arms below become reachable.
 fn paste_worker_loop(rx: &std::sync::mpsc::Receiver<PasteRequest>) {
     let mut pending: Option<PasteRequest> = None;
     loop {
@@ -271,8 +273,14 @@ fn paste_worker_loop(rx: &std::sync::mpsc::Receiver<PasteRequest>) {
             r
         };
         // Coalesce any burst of queued requests, keeping only the latest.
-        while let Ok(newer) = rx.try_recv() {
-            req = newer;
+        // A disconnected channel means shutdown already dropped the sender, so
+        // do not begin new focus/paste side effects for this request.
+        loop {
+            match rx.try_recv() {
+                Ok(newer) => req = newer,
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            }
         }
 
         // If auto_paste is active, focus MUST be switched to the target application
@@ -294,24 +302,86 @@ fn paste_worker_loop(rx: &std::sync::mpsc::Receiver<PasteRequest>) {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             }
 
+            // Shutdown may have dropped the sender just after the delay elapsed.
+            // Also honor a request that arrived in that narrow window.
+            match rx.try_recv() {
+                Ok(newer) => {
+                    pending = Some(newer);
+                    continue;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+
             simulate_paste_if_foreground();
         }
     }
 }
 
-fn paste_worker_tx() -> &'static std::sync::mpsc::Sender<PasteRequest> {
-    static TX: std::sync::OnceLock<std::sync::mpsc::Sender<PasteRequest>> =
-        std::sync::OnceLock::new();
-    TX.get_or_init(|| {
+/// Owned paste-worker state. Dropping the sender lets the worker exit through
+/// its existing `Disconnected` break path; the join handle is taken exactly once.
+#[derive(Debug)]
+struct PasteWorker {
+    sender: std::sync::Mutex<Option<std::sync::mpsc::Sender<PasteRequest>>>,
+    handle: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl PasteWorker {
+    fn send(&self, request: PasteRequest) {
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(tx) = sender.as_ref() {
+            let _ = tx.send(request);
+        }
+    }
+
+    /// Drops the only sender, then joins the worker so in-flight OS side effects complete.
+    fn shutdown(&self) {
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        drop(sender);
+
+        let handle = self
+            .handle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(handle) = handle {
+            if handle.join().is_err() {
+                log_message("ERROR", "focus-paste worker panicked during shutdown");
+            }
+        }
+    }
+}
+
+static PASTE_WORKER: std::sync::OnceLock<PasteWorker> = std::sync::OnceLock::new();
+
+fn paste_worker() -> &'static PasteWorker {
+    PASTE_WORKER.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<PasteRequest>();
-        if let Err(e) = std::thread::Builder::new()
+        let handle = std::thread::Builder::new()
             .name("focus-paste-worker".to_string())
-            .spawn(move || paste_worker_loop(&rx))
-        {
+            .spawn(move || paste_worker_loop(&rx));
+        if let Err(e) = &handle {
             log_message("ERROR", &format!("Failed to spawn focus-paste worker: {e}"));
         }
-        tx
+        PasteWorker {
+            sender: std::sync::Mutex::new(Some(tx)),
+            handle: std::sync::Mutex::new(handle.ok()),
+        }
     })
+}
+
+/// Shuts down the paste worker if it was started. Safe to call more than once.
+pub(crate) fn shutdown_paste_worker() {
+    if let Some(worker) = PASTE_WORKER.get() {
+        worker.shutdown();
+    }
 }
 
 /// Restores focus to the previous application and optionally simulates a paste keystroke.
@@ -324,7 +394,7 @@ pub(crate) fn restore_focus_and_paste(
         return;
     }
 
-    let _ = paste_worker_tx().send(PasteRequest {
+    paste_worker().send(PasteRequest {
         restore_focus,
         auto_paste,
         auto_paste_delay_ms,
@@ -348,5 +418,37 @@ mod tests {
         hide_application();
         order_front_main_window();
         setup_reopen_observer();
+    }
+
+    #[test]
+    fn test_paste_worker_shutdown_joins_and_is_idempotent() {
+        let (tx, rx) = std::sync::mpsc::channel::<PasteRequest>();
+        let handle = std::thread::Builder::new()
+            .name("test-focus-paste-worker".to_string())
+            .spawn(move || paste_worker_loop(&rx))
+            .unwrap();
+        let worker = PasteWorker {
+            sender: std::sync::Mutex::new(Some(tx)),
+            handle: std::sync::Mutex::new(Some(handle)),
+        };
+
+        worker.send(PasteRequest {
+            restore_focus: false,
+            auto_paste: false,
+            auto_paste_delay_ms: 0,
+        });
+        worker.shutdown();
+        worker.shutdown();
+
+        assert!(worker
+            .sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none());
+        assert!(worker
+            .handle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none());
     }
 }
