@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "sequence",
+  "quality": "showcase",
+  "specification": {
+    "path": "/tmp/arch-03-startup.json",
+    "sha256": "f9b80bf38a8d89b14575ea2628e9acefba03a09a60df7f0a419d01e5118ffc93",
+    "bytes": 3490
+  },
+  "artifact": {
+    "path": "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.html",
+    "sha256": "ef93798a1fd8a8679bf640baa13e42427888a2136ef4a3ad9f6f2127908dcbe8",
+    "bytes": 834897
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.finalize.json",
+    "summaryReceipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.finalize-summary.json",
+    "browserCheckReceipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-21T08:28:52.129Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2902,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}
