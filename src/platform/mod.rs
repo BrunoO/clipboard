@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+pub(crate) mod fs_security;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
