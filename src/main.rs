@@ -18,7 +18,7 @@ mod settings;
 mod theme;
 mod tray;
 
-use app::ClipboardApp;
+use app::{AppServices, ClipboardApp};
 use db::Database;
 use eframe::egui;
 use hotkey::HotkeyService;
@@ -131,18 +131,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (monitor_handle, monitor_shutdown_tx) =
                 monitor::start_clipboard_monitor(monitor_db, monitor_ctx, notify_tx);
 
-            Ok(Box::new(ClipboardApp::new(
-                cc,
-                db,
-                key_storage_mode,
+            let services = AppServices {
                 notify_rx,
                 hotkey_rx,
                 hotkey_service,
                 tray_rx,
                 tray_service,
-                settings,
                 monitor_shutdown_tx,
                 monitor_handle,
+            };
+
+            Ok(Box::new(ClipboardApp::new(
+                cc,
+                db,
+                key_storage_mode,
+                services,
+                settings,
             )))
         }),
     );

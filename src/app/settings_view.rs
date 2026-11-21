@@ -177,7 +177,7 @@ impl ClipboardApp {
         ui.separator();
         ui.add_space(4.0);
 
-        if self.recording_custom_hotkey {
+        if self.dialogs.recording_custom_hotkey {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("Press desired key combination…")
@@ -185,8 +185,8 @@ impl ClipboardApp {
                         .strong(),
                 );
                 if ui.button("Cancel").clicked() {
-                    self.recording_custom_hotkey = false;
-                    self.pending_custom_hotkey.clear();
+                    self.dialogs.recording_custom_hotkey = false;
+                    self.dialogs.pending_custom_hotkey.clear();
                 }
             });
             ui.add_space(4.0);
@@ -205,20 +205,20 @@ impl ClipboardApp {
                 self.settings.custom_hotkey.clone()
             };
             let response = ui.add(
-                egui::TextEdit::singleline(&mut self.pending_custom_hotkey)
+                egui::TextEdit::singleline(&mut self.dialogs.pending_custom_hotkey)
                     .hint_text(current)
                     .desired_width(200.0),
             );
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 self.apply_custom_hotkey();
             }
-            let btn_label = if self.pending_custom_hotkey.is_empty() {
+            let btn_label = if self.dialogs.pending_custom_hotkey.is_empty() {
                 "Record"
             } else {
                 "Apply"
             };
             if ui.button(btn_label).clicked() {
-                if self.pending_custom_hotkey.is_empty() {
+                if self.dialogs.pending_custom_hotkey.is_empty() {
                     self.start_recording_custom_hotkey();
                 } else {
                     self.apply_custom_hotkey();
@@ -228,7 +228,7 @@ impl ClipboardApp {
                 self.settings.custom_hotkey.clear();
                 self.persist_settings();
                 self.update_hotkeys_from_settings();
-                self.pending_custom_hotkey.clear();
+                self.dialogs.pending_custom_hotkey.clear();
             }
         });
         if !self.settings.custom_hotkey.is_empty() {
@@ -241,7 +241,7 @@ impl ClipboardApp {
     }
 
     fn render_hotkey_registration_status(&self, ui: &mut egui::Ui, is_dark: bool) {
-        let Some(service) = &self.hotkey_service else {
+        let Some(service) = &self.services.hotkey_service else {
             return;
         };
         let results = service.registration_results();
@@ -280,7 +280,7 @@ impl ClipboardApp {
     /// Updates hotkeys from current settings (handles Custom preset).
     /// Returns `true` if all requested hotkeys registered successfully (or none were requested).
     pub(super) fn update_hotkeys_from_settings(&mut self) -> bool {
-        if let Some(service) = &mut self.hotkey_service {
+        if let Some(service) = &mut self.services.hotkey_service {
             let hotkeys = self.settings.effective_hotkeys();
             let results = service.update_hotkeys(&hotkeys);
             results.iter().all(|r| r.success)
@@ -291,13 +291,15 @@ impl ClipboardApp {
 
     /// Starts recording a custom hotkey.
     pub(super) fn start_recording_custom_hotkey(&mut self) {
-        self.recording_custom_hotkey = true;
-        self.pending_custom_hotkey.clear();
+        self.dialogs.recording_custom_hotkey = true;
+        self.dialogs.pending_custom_hotkey.clear();
     }
 
     /// Applies the pending custom hotkey.
     pub(super) fn apply_custom_hotkey(&mut self) {
-        if let Some(parsed) = crate::settings::ParsedHotkey::parse(&self.pending_custom_hotkey) {
+        if let Some(parsed) =
+            crate::settings::ParsedHotkey::parse(&self.dialogs.pending_custom_hotkey)
+        {
             self.settings.custom_hotkey = parsed.format();
             let saved = self.persist_settings();
             let registered = self.update_hotkeys_from_settings();
@@ -317,8 +319,8 @@ impl ClipboardApp {
         } else {
             self.show_warning_toast(&format!("{} Invalid hotkey format", icons::WARNING));
         }
-        self.recording_custom_hotkey = false;
-        self.pending_custom_hotkey.clear();
+        self.dialogs.recording_custom_hotkey = false;
+        self.dialogs.pending_custom_hotkey.clear();
     }
 
     fn render_behavior_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
@@ -519,7 +521,7 @@ impl ClipboardApp {
                     .button(format!("{} Clear All History", icons::TRASH))
                     .clicked()
                 {
-                    self.show_clear_confirm_dialog = true;
+                    self.dialogs.show_clear_confirm_dialog = true;
                 }
             });
 
@@ -530,7 +532,7 @@ impl ClipboardApp {
                     .clicked()
                 {
                     self.settings.keyring_explanation_shown = false;
-                    self.show_keyring_explanation = true;
+                    self.dialogs.show_keyring_explanation = true;
                 }
             });
         });

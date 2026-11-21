@@ -170,7 +170,66 @@ struct Toast {
     shown_at: Instant,
 }
 
-#[allow(clippy::struct_excessive_bools)]
+/// Tracks window visibility, focus tracking, and interaction timestamps.
+#[derive(Debug)]
+pub(crate) struct WindowFocusState {
+    pub(crate) is_visible: bool,
+    pub(crate) has_been_focused: bool,
+    pub(crate) was_inactive_since_hidden: bool,
+    pub(crate) last_toggle_instant: Option<Instant>,
+    pub(crate) last_drag_or_move_instant: Option<Instant>,
+    pub(crate) last_outer_rect: Option<egui::Rect>,
+    pub(crate) last_hide_instant: Option<Instant>,
+}
+
+impl Default for WindowFocusState {
+    fn default() -> Self {
+        Self {
+            is_visible: true,
+            has_been_focused: false,
+            was_inactive_since_hidden: false,
+            last_toggle_instant: None,
+            last_drag_or_move_instant: None,
+            last_outer_rect: None,
+            last_hide_instant: None,
+        }
+    }
+}
+
+/// Holds inter-thread communication channels and background services.
+pub(crate) struct AppServices {
+    pub(crate) notify_rx: Receiver<()>,
+    pub(crate) hotkey_rx: Receiver<()>,
+    pub(crate) hotkey_service: Option<HotkeyService>,
+    pub(crate) tray_rx: Receiver<TrayAction>,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) tray_service: Option<TrayService>,
+    pub(crate) monitor_shutdown_tx: Sender<()>,
+    pub(crate) monitor_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AppServices {
+    /// Shuts down all background workers and joins threads.
+    pub(crate) fn shutdown(&mut self) {
+        if let Some(hotkey) = self.hotkey_service.as_mut() {
+            hotkey.shutdown();
+        }
+        let _ = self.monitor_shutdown_tx.send(());
+        if let Some(handle) = self.monitor_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Ephemeral dialog and modal interaction state.
+#[derive(Debug, Default)]
+pub(crate) struct DialogState {
+    pub(crate) show_clear_confirm_dialog: bool,
+    pub(crate) show_keyring_explanation: bool,
+    pub(crate) recording_custom_hotkey: bool,
+    pub(crate) pending_custom_hotkey: String,
+}
+
 pub(crate) struct ClipboardApp {
     db: Database,
     key_storage_mode: crate::crypto::KeyStorageMode,
@@ -182,53 +241,30 @@ pub(crate) struct ClipboardApp {
     toast: Option<Toast>,
     pending_toast: Option<(String, ToastSeverity)>,
     last_query_cached: String,
-    notify_rx: Receiver<()>,
-    hotkey_rx: Receiver<()>,
-    hotkey_service: Option<HotkeyService>,
-    tray_rx: Receiver<TrayAction>,
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    tray_service: Option<TrayService>,
+    services: AppServices,
     texture_cache: ImageTextureCache,
-    is_visible: bool,
-    has_been_focused: bool,
-    was_inactive_since_hidden: bool,
+    window_state: WindowFocusState,
     selected_index: usize,
     focus_search_input: bool,
-    last_toggle_instant: Option<Instant>,
     settings: AppSettings,
     active_view: ActiveView,
     password_gen: crate::password::PasswordGeneratorState,
     revealed_secrets: HashSet<i64>,
     pending_clipboard_clear: Option<(zeroize::Zeroizing<String>, Instant)>,
-    show_clear_confirm_dialog: bool,
+    dialogs: DialogState,
     scroll_to_selected: bool,
     current_is_dark: Option<bool>,
     title_bar_dark_mode: Option<bool>,
-    monitor_shutdown_tx: Sender<()>,
-    monitor_handle: Option<std::thread::JoinHandle<()>>,
-    recording_custom_hotkey: bool,
-    pending_custom_hotkey: String,
     is_quitting: bool,
-    show_keyring_explanation: bool,
-    last_drag_or_move_instant: Option<Instant>,
-    last_outer_rect: Option<egui::Rect>,
-    last_hide_instant: Option<Instant>,
 }
 
 impl ClipboardApp {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         _cc: &eframe::CreationContext<'_>,
         db: Database,
         key_storage_mode: crate::crypto::KeyStorageMode,
-        notify_rx: Receiver<()>,
-        hotkey_rx: Receiver<()>,
-        hotkey_service: Option<HotkeyService>,
-        tray_rx: Receiver<TrayAction>,
-        tray_service: Option<TrayService>,
+        services: AppServices,
         settings: AppSettings,
-        monitor_shutdown_tx: Sender<()>,
-        monitor_handle: Option<std::thread::JoinHandle<()>>,
     ) -> Self {
         db.apply_settings(&settings);
 
@@ -270,36 +306,21 @@ impl ClipboardApp {
             toast: startup_toast,
             pending_toast: None,
             last_query_cached: String::new(),
-            notify_rx,
-            hotkey_rx,
-            hotkey_service,
-            tray_rx,
-            tray_service,
+            services,
             texture_cache: ImageTextureCache::new(),
-            is_visible: true,
-            has_been_focused: false,
-            was_inactive_since_hidden: false,
+            window_state: WindowFocusState::default(),
             selected_index: 0,
             focus_search_input: true,
-            last_toggle_instant: None,
             settings,
             active_view: ActiveView::History,
             password_gen,
             revealed_secrets: HashSet::new(),
             pending_clipboard_clear: None,
-            show_clear_confirm_dialog: false,
+            dialogs: DialogState::default(),
             scroll_to_selected: false,
             current_is_dark: None,
             title_bar_dark_mode: None,
-            recording_custom_hotkey: false,
-            pending_custom_hotkey: String::new(),
-            monitor_shutdown_tx,
-            monitor_handle,
             is_quitting: false,
-            show_keyring_explanation: false,
-            last_drag_or_move_instant: None,
-            last_outer_rect: None,
-            last_hide_instant: None,
         }
     }
 
@@ -414,11 +435,11 @@ impl ClipboardApp {
 
     fn show_window(&mut self, ctx: &egui::Context) {
         crate::logging::log_message("INFO", "show_window called");
-        self.is_visible = true;
-        self.has_been_focused = false;
-        self.was_inactive_since_hidden = false;
+        self.window_state.is_visible = true;
+        self.window_state.has_been_focused = false;
+        self.window_state.was_inactive_since_hidden = false;
         self.selected_index = 0;
-        self.show_clear_confirm_dialog = false;
+        self.dialogs.show_clear_confirm_dialog = false;
         self.scroll_to_selected = true;
         // Restore at the OS level first (important on Windows, where a minimized
         // window may otherwise stay minimized even after Visible(true)).
@@ -435,14 +456,18 @@ impl ClipboardApp {
     }
 
     fn hide_window(&mut self, ctx: &egui::Context, restore_focus: bool, auto_paste: bool) {
-        self.is_visible = false;
-        self.has_been_focused = false;
-        self.was_inactive_since_hidden = false;
-        self.last_hide_instant = Some(Instant::now());
-        self.show_clear_confirm_dialog = false;
+        self.window_state.is_visible = false;
+        self.window_state.has_been_focused = false;
+        self.window_state.was_inactive_since_hidden = false;
+        self.window_state.last_hide_instant = Some(Instant::now());
+        self.dialogs.show_clear_confirm_dialog = false;
         self.revealed_secrets.clear();
 
-        let has_live_tray = self.tray_service.as_ref().is_some_and(TrayService::is_live);
+        let has_live_tray = self
+            .services
+            .tray_service
+            .as_ref()
+            .is_some_and(TrayService::is_live);
         platform::hide_window_viewport(ctx, has_live_tray);
 
         let mut auto_paste = auto_paste;
@@ -657,7 +682,7 @@ impl ClipboardApp {
 
     fn handle_hotkey_toggle(&mut self, ctx: &egui::Context) {
         let mut toggle_requested = false;
-        while self.hotkey_rx.try_recv().is_ok() {
+        while self.services.hotkey_rx.try_recv().is_ok() {
             toggle_requested = true;
         }
 
@@ -667,16 +692,17 @@ impl ClipboardApp {
 
         // Debounce hotkey presses to ignore rapid OS key repeats (200ms threshold)
         if self
+            .window_state
             .last_toggle_instant
             .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(200))
         {
             return;
         }
-        self.last_toggle_instant = Some(Instant::now());
+        self.window_state.last_toggle_instant = Some(Instant::now());
 
         let is_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
 
-        if self.is_visible && is_focused {
+        if self.window_state.is_visible && is_focused {
             // Window is already active and focused right in front of user: dismiss it.
             self.hide_window(ctx, self.settings.restore_focus, false);
         } else {
@@ -687,12 +713,12 @@ impl ClipboardApp {
     }
 
     fn handle_escape_key(&mut self, ctx: &egui::Context) {
-        if self.recording_custom_hotkey {
+        if self.dialogs.recording_custom_hotkey {
             return;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if self.show_clear_confirm_dialog {
-                self.show_clear_confirm_dialog = false;
+            if self.dialogs.show_clear_confirm_dialog {
+                self.dialogs.show_clear_confirm_dialog = false;
             } else if self.active_view != ActiveView::History {
                 self.active_view = ActiveView::History;
             } else {
@@ -718,18 +744,18 @@ impl ClipboardApp {
                 };
 
                 if *key == egui::Key::Escape {
-                    self.recording_custom_hotkey = false;
-                    self.pending_custom_hotkey.clear();
+                    self.dialogs.recording_custom_hotkey = false;
+                    self.dialogs.pending_custom_hotkey.clear();
                     return;
                 }
 
                 if *key == egui::Key::Backspace {
-                    self.pending_custom_hotkey.clear();
+                    self.dialogs.pending_custom_hotkey.clear();
                     return;
                 }
 
                 if let Some(combo) = format_recorded_hotkey(*modifiers, *key) {
-                    self.pending_custom_hotkey = combo;
+                    self.dialogs.pending_custom_hotkey = combo;
                     self.apply_custom_hotkey();
                     return;
                 }
@@ -738,12 +764,12 @@ impl ClipboardApp {
     }
 
     fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
-        if self.recording_custom_hotkey {
+        if self.dialogs.recording_custom_hotkey {
             self.handle_custom_hotkey_recording(ctx);
             return;
         }
 
-        if self.show_clear_confirm_dialog || !self.is_visible {
+        if self.dialogs.show_clear_confirm_dialog || !self.window_state.is_visible {
             return;
         }
 
@@ -880,25 +906,30 @@ impl ClipboardApp {
             )
         });
         if let Some(rect) = outer_rect {
-            if self.last_outer_rect.is_some_and(|prev| prev != rect) {
-                self.last_drag_or_move_instant = Some(Instant::now());
+            if self
+                .window_state
+                .last_outer_rect
+                .is_some_and(|prev| prev != rect)
+            {
+                self.window_state.last_drag_or_move_instant = Some(Instant::now());
             }
-            self.last_outer_rect = Some(rect);
+            self.window_state.last_outer_rect = Some(rect);
         }
 
         let active_state = crate::platform::is_app_active_state();
         let is_active = active_state.unwrap_or(false);
         let reopen_requested = crate::platform::take_reopen_requested();
 
-        if self.is_visible {
+        if self.window_state.is_visible {
             if is_focused {
-                self.has_been_focused = true;
-            } else if self.has_been_focused
+                self.window_state.has_been_focused = true;
+            } else if self.window_state.has_been_focused
                 && self.settings.hide_on_blur
                 && !ctx.input(|i| i.viewport().minimized.unwrap_or(false))
             {
                 let is_dragging_or_moving = pointer_down
                     || self
+                        .window_state
                         .last_drag_or_move_instant
                         .is_some_and(|t| t.elapsed() < Duration::from_millis(350));
 
@@ -917,11 +948,12 @@ impl ClipboardApp {
             }
         } else {
             if !is_active && !is_focused {
-                self.was_inactive_since_hidden = true;
+                self.window_state.was_inactive_since_hidden = true;
             }
 
-            let allow_focus_reopen = self.was_inactive_since_hidden
+            let allow_focus_reopen = self.window_state.was_inactive_since_hidden
                 && self
+                    .window_state
                     .last_hide_instant
                     .is_none_or(|t| t.elapsed() >= Duration::from_millis(350));
 
@@ -945,7 +977,7 @@ impl ClipboardApp {
 
     fn handle_tray_events(&mut self, ctx: &egui::Context) {
         let mut latest_action = None;
-        while let Ok(action) = self.tray_rx.try_recv() {
+        while let Ok(action) = self.services.tray_rx.try_recv() {
             crate::logging::log_message("INFO", &format!("tray event received: {action:?}"));
             latest_action = Some(action);
         }
@@ -983,7 +1015,7 @@ impl ClipboardApp {
 
     fn handle_monitor_updates(&mut self) {
         let mut new_items_detected = false;
-        while self.notify_rx.try_recv().is_ok() {
+        while self.services.notify_rx.try_recv().is_ok() {
             new_items_detected = true;
         }
 
@@ -1075,7 +1107,7 @@ impl ClipboardApp {
                     .strong(),
             );
             if title_resp.interact(egui::Sense::drag()).drag_started() {
-                self.last_drag_or_move_instant = Some(Instant::now());
+                self.window_state.last_drag_or_move_instant = Some(Instant::now());
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
 
@@ -1149,7 +1181,7 @@ impl ClipboardApp {
                 .on_hover_text("Clear clipboard history")
                 .clicked()
         {
-            self.show_clear_confirm_dialog = true;
+            self.dialogs.show_clear_confirm_dialog = true;
         }
     }
 
@@ -1343,15 +1375,15 @@ impl ClipboardApp {
     }
 
     fn render_clear_confirm_modal(&mut self, ctx: &egui::Context, is_dark: bool) {
-        if !self.show_clear_confirm_dialog {
+        if !self.dialogs.show_clear_confirm_dialog {
             return;
         }
 
         if Self::render_modal_backdrop(ctx, "clear_confirm_backdrop") {
-            self.show_clear_confirm_dialog = false;
+            self.dialogs.show_clear_confirm_dialog = false;
         }
 
-        let mut open = self.show_clear_confirm_dialog;
+        let mut open = self.dialogs.show_clear_confirm_dialog;
         Self::modal_window(
             format!("{} Clear History?", icons::WARNING),
             &mut open,
@@ -1391,7 +1423,7 @@ impl ClipboardApp {
                         .add_sized([btn_width, btn_height], egui::Button::new("Cancel"))
                         .clicked()
                     {
-                        self.show_clear_confirm_dialog = false;
+                        self.dialogs.show_clear_confirm_dialog = false;
                     }
 
                     let clear_btn = egui::Button::new(
@@ -1405,7 +1437,7 @@ impl ClipboardApp {
                             Ok(()) => {
                                 self.texture_cache.clear();
                                 self.refresh_items();
-                                self.show_clear_confirm_dialog = false;
+                                self.dialogs.show_clear_confirm_dialog = false;
                                 self.show_toast(&format!("{} History cleared.", icons::CHECK));
                             }
                             Err(ClearError::Delete(error)) => {
@@ -1418,7 +1450,7 @@ impl ClipboardApp {
                                 );
                                 self.texture_cache.clear();
                                 self.refresh_items();
-                                self.show_clear_confirm_dialog = false;
+                                self.dialogs.show_clear_confirm_dialog = false;
                                 self.show_error_toast(
                                     "History rows were removed, but secure compaction failed. Restart and clear again to purge residual data.",
                                 );
@@ -1431,18 +1463,18 @@ impl ClipboardApp {
         });
 
         if !open {
-            self.show_clear_confirm_dialog = false;
+            self.dialogs.show_clear_confirm_dialog = false;
         }
     }
 
     fn render_keyring_explanation_modal(&mut self, ctx: &egui::Context, is_dark: bool) {
-        if !self.show_keyring_explanation {
+        if !self.dialogs.show_keyring_explanation {
             return;
         }
 
         if Self::render_modal_backdrop(ctx, "keyring_explanation_backdrop") {
             // Allow dismissing by clicking the backdrop.
-            self.show_keyring_explanation = false;
+            self.dialogs.show_keyring_explanation = false;
             self.settings.keyring_explanation_shown = true;
             self.persist_settings();
         }
@@ -1465,7 +1497,7 @@ impl ClipboardApp {
             crate::theme::text_secondary(is_dark)
         };
 
-        let mut open = self.show_keyring_explanation;
+        let mut open = self.dialogs.show_keyring_explanation;
         Self::modal_window(
             format!("{title_icon} {title}"),
             &mut open,
@@ -1502,7 +1534,7 @@ impl ClipboardApp {
                         )
                         .clicked()
                     {
-                        self.show_keyring_explanation = false;
+                        self.dialogs.show_keyring_explanation = false;
                         self.settings.keyring_explanation_shown = true;
                         self.persist_settings();
                     }
@@ -1512,7 +1544,7 @@ impl ClipboardApp {
         });
 
         if !open {
-            self.show_keyring_explanation = false;
+            self.dialogs.show_keyring_explanation = false;
             self.settings.keyring_explanation_shown = true;
             self.persist_settings();
         }
@@ -1557,7 +1589,7 @@ impl eframe::App for ClipboardApp {
         // invisible/minimized windows directly via UserEvent::RequestRepaint.
         // Only tick briefly after hiding until the OS finishes deactivating our app
         // so `was_inactive_since_hidden` latches; afterwards sleep at 0% idle CPU.
-        if !self.is_visible && !self.was_inactive_since_hidden {
+        if !self.window_state.is_visible && !self.window_state.was_inactive_since_hidden {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
@@ -1579,11 +1611,11 @@ impl eframe::App for ClipboardApp {
         self.handle_keyboard_navigation(&ctx);
 
         // Show keyring explanation dialog on first run (informational)
-        if !self.settings.keyring_explanation_shown && !self.show_keyring_explanation {
-            self.show_keyring_explanation = true;
+        if !self.settings.keyring_explanation_shown && !self.dialogs.show_keyring_explanation {
+            self.dialogs.show_keyring_explanation = true;
         }
 
-        if !self.is_visible {
+        if !self.window_state.is_visible {
             return;
         }
 
@@ -1608,18 +1640,7 @@ impl ClipboardApp {
     /// remove the macOS reopen observer.
     fn shutdown_resources(&mut self) {
         self.clear_pending_secret_from_clipboard();
-
-        if let Some(hotkey) = self.hotkey_service.as_mut() {
-            hotkey.shutdown();
-        }
-
-        // The receiver may already be gone during `Drop`; the join below is authoritative.
-        let _ = self.monitor_shutdown_tx.send(());
-        if let Some(handle) = self.monitor_handle.take() {
-            // A panicked worker cannot be recovered here; avoid double-panicking during shutdown.
-            let _ = handle.join();
-        }
-
+        self.services.shutdown();
         crate::platform::shutdown_paste_worker();
         crate::platform::teardown_reopen_observer();
     }
@@ -1855,7 +1876,8 @@ fn render_view_toggle_button(
 #[cfg(test)]
 mod tests {
     use super::{
-        clipboard_clear_is_due, monitor_update_needs_refresh, ClipboardApp, ToastSeverity,
+        clipboard_clear_is_due, monitor_update_needs_refresh, AppServices, ClipboardApp,
+        DialogState, ToastSeverity, WindowFocusState,
     };
     use eframe::egui;
     use std::time::{Duration, Instant};
@@ -1896,46 +1918,42 @@ mod tests {
             toast: None,
             pending_toast: None,
             last_query_cached: String::new(),
-            notify_rx,
-            hotkey_rx,
-            hotkey_service: None,
-            tray_rx,
-            tray_service: None,
+            services: AppServices {
+                notify_rx,
+                hotkey_rx,
+                hotkey_service: None,
+                tray_rx,
+                tray_service: None,
+                monitor_shutdown_tx: shutdown_tx,
+                monitor_handle: None,
+            },
             texture_cache: super::ImageTextureCache::new(),
-            is_visible: true,
-            has_been_focused: false,
-            was_inactive_since_hidden: false,
+            window_state: WindowFocusState {
+                is_visible: true,
+                ..Default::default()
+            },
             selected_index: 0,
             focus_search_input: true,
-            last_toggle_instant: None,
             settings: crate::settings::AppSettings::default(),
             active_view: super::ActiveView::History,
             password_gen: crate::password::PasswordGeneratorState::default(),
             revealed_secrets: std::collections::HashSet::new(),
             pending_clipboard_clear: None,
-            show_clear_confirm_dialog: false,
+            dialogs: DialogState::default(),
             scroll_to_selected: false,
             current_is_dark: None,
             title_bar_dark_mode: None,
-            recording_custom_hotkey: false,
-            pending_custom_hotkey: String::new(),
-            monitor_shutdown_tx: shutdown_tx,
-            monitor_handle: None,
             is_quitting: false,
-            show_keyring_explanation: false,
-            last_drag_or_move_instant: None,
-            last_outer_rect: None,
-            last_hide_instant: None,
         };
 
         assert!(!app.is_quitting);
 
         // Verify TrayAction::Show restores visibility and surfaces any pending toast
-        app.is_visible = false;
+        app.window_state.is_visible = false;
         app.pending_toast = Some(("Auto-paste blocked".to_string(), ToastSeverity::Warning));
         tray_tx.send(super::TrayAction::Show).unwrap();
         app.handle_tray_events(&ctx);
-        assert!(app.is_visible);
+        assert!(app.window_state.is_visible);
         assert!(app.pending_toast.is_none());
         assert_eq!(
             app.toast.as_ref().map(|toast| toast.message.as_str()),
@@ -1947,10 +1965,10 @@ mod tests {
         );
 
         // Verify TrayAction::OpenSettings switches view and shows window
-        app.is_visible = false;
+        app.window_state.is_visible = false;
         tray_tx.send(super::TrayAction::OpenSettings).unwrap();
         app.handle_tray_events(&ctx);
-        assert!(app.is_visible);
+        assert!(app.window_state.is_visible);
         assert_eq!(app.active_view, super::ActiveView::Settings);
 
         // Verify TrayAction::Quit sets is_quitting
@@ -2007,36 +2025,32 @@ mod tests {
             toast: None,
             pending_toast: None,
             last_query_cached: String::new(),
-            notify_rx,
-            hotkey_rx,
-            hotkey_service: None,
-            tray_rx,
-            tray_service: None,
+            services: AppServices {
+                notify_rx,
+                hotkey_rx,
+                hotkey_service: None,
+                tray_rx,
+                tray_service: None,
+                monitor_shutdown_tx: shutdown_tx,
+                monitor_handle: None,
+            },
             texture_cache: super::ImageTextureCache::new(),
-            is_visible: true,
-            has_been_focused: false,
-            was_inactive_since_hidden: false,
+            window_state: WindowFocusState {
+                is_visible: true,
+                ..Default::default()
+            },
             selected_index: 0,
             focus_search_input: true,
-            last_toggle_instant: None,
             settings: crate::settings::AppSettings::default(),
             active_view: super::ActiveView::Settings,
             password_gen: crate::password::PasswordGeneratorState::default(),
             revealed_secrets: std::collections::HashSet::new(),
             pending_clipboard_clear: None,
-            show_clear_confirm_dialog: false,
+            dialogs: DialogState::default(),
             scroll_to_selected: false,
             current_is_dark: None,
             title_bar_dark_mode: None,
-            recording_custom_hotkey: false,
-            pending_custom_hotkey: String::new(),
-            monitor_shutdown_tx: shutdown_tx,
-            monitor_handle: None,
             is_quitting: false,
-            show_keyring_explanation: false,
-            last_drag_or_move_instant: None,
-            last_outer_rect: None,
-            last_hide_instant: None,
         };
 
         let ctx = egui::Context::default();
@@ -2065,36 +2079,32 @@ mod tests {
             toast: None,
             pending_toast: None,
             last_query_cached: String::new(),
-            notify_rx,
-            hotkey_rx,
-            hotkey_service: None,
-            tray_rx,
-            tray_service: None,
+            services: AppServices {
+                notify_rx,
+                hotkey_rx,
+                hotkey_service: None,
+                tray_rx,
+                tray_service: None,
+                monitor_shutdown_tx: shutdown_tx,
+                monitor_handle: None,
+            },
             texture_cache: super::ImageTextureCache::new(),
-            is_visible: true,
-            has_been_focused: false,
-            was_inactive_since_hidden: false,
+            window_state: WindowFocusState {
+                is_visible: true,
+                ..Default::default()
+            },
             selected_index: 0,
             focus_search_input: true,
-            last_toggle_instant: None,
             settings: crate::settings::AppSettings::default(),
             active_view: super::ActiveView::History,
             password_gen: crate::password::PasswordGeneratorState::default(),
             revealed_secrets: std::collections::HashSet::new(),
             pending_clipboard_clear: None,
-            show_clear_confirm_dialog: false,
+            dialogs: DialogState::default(),
             scroll_to_selected: false,
             current_is_dark: None,
             title_bar_dark_mode: None,
-            recording_custom_hotkey: false,
-            pending_custom_hotkey: String::new(),
-            monitor_shutdown_tx: shutdown_tx,
-            monitor_handle: None,
             is_quitting: false,
-            show_keyring_explanation: false,
-            last_drag_or_move_instant: None,
-            last_outer_rect: None,
-            last_hide_instant: None,
         };
 
         (app, notify_tx, dir)
