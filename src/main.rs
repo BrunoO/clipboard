@@ -63,35 +63,17 @@ fn install_panic_hook() {
     }));
 }
 
-#[allow(clippy::too_many_lines)]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Starting CipherClipboard (Encrypted Clipboard Manager)...");
 
-    // 1. Resolve application data directory (cross-platform: macOS, Windows, Linux)
-    let data_dir = get_app_data_dir();
-    fs::create_dir_all(&data_dir)?;
-    crypto::set_restricted_dir_permissions(&data_dir);
+    // 1. Resolve and initialize application data directory
+    let data_dir = prepare_app_data_dir()?;
     #[cfg(debug_assertions)]
     println!("📁 Data directory: {}", data_dir.display());
 
     // 1b. Enforce single-instance execution so two monitors don't race on the database
-    let lock_path = data_dir.join(".instance.lock");
-    let _instance_lock = match SingleInstanceLock::acquire(&lock_path)? {
-        AcquireResult::Acquired(lock) => lock,
-        AcquireResult::AlreadyRunning { pid } => {
-            platform::activate_existing_instance(pid);
-
-            if let Some(pid) = pid {
-                println!(
-                    "ℹ️ CipherClipboard is already running (PID {pid}). Brought existing window to front."
-                );
-            } else {
-                println!(
-                    "ℹ️ CipherClipboard is already running. Brought existing window to front."
-                );
-            }
-            return Ok(());
-        }
+    let Some(_instance_lock) = acquire_instance_lock(&data_dir)? else {
+        return Ok(());
     };
 
     // 2. Open or initialize the SQLCipher encrypted database (key is zeroized on scope exit)
@@ -109,24 +91,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("⚙️  Loaded settings: hotkey preset {:?}", settings.hotkey);
 
     // 6. Configure window options for eframe
-    let mut viewport = platform::configure_viewport_chrome(
-        egui::ViewportBuilder::default()
-            .with_inner_size([440.0, 580.0])
-            .with_min_inner_size([320.0, 400.0])
-            .with_title("CipherClipboard"),
-    );
-
-    // Load bundled icon for the window title bar and taskbar
-    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
-        viewport = viewport.with_icon(icon);
-    }
-
-    let native_options = eframe::NativeOptions {
-        viewport,
-        renderer: eframe::Renderer::Wgpu,
-        ..Default::default()
-    };
-
+    let native_options = build_native_options();
     crate::logging::log_message("INFO", "CipherClipboard starting");
 
     // 7. Setup inter-thread channels (bounded capacity 1 for coalesced wakeup signals)
@@ -139,24 +104,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "CipherClipboard",
         native_options,
         Box::new(move |cc| {
-            // Probe native system fonts (San Francisco, Segoe UI) and register Material icons
-            // Register outlined before filled so outline is the default fallback for inline icons,
-            // while filled remains available explicitly (e.g. for selected/active states).
-            let mut fonts = egui::FontDefinitions::default();
-            theme::setup_fonts(&mut fonts);
-            cc.egui_ctx.set_fonts(fonts);
-            let mut outlined = egui_material_icons::font_insert_outlined();
-            outlined.data.tweak.scale = 1.20;
-            outlined.data.tweak.y_offset_factor = 0.0;
-            let mut filled = egui_material_icons::font_insert();
-            filled.data.tweak.scale = 1.20;
-            filled.data.tweak.y_offset_factor = 0.0;
-            cc.egui_ctx.add_font(outlined);
-            cc.egui_ctx.add_font(filled);
-
-            // Apply platform-adaptive HIG visuals (Dark or Light)
-            let is_dark = settings.theme.resolve(&cc.egui_ctx);
-            theme::setup_theme(&cc.egui_ctx, is_dark);
+            setup_egui_context(&cc.egui_ctx, settings.theme);
 
             // Initialize OS activation & reopen observers (macOS Dock click / Cmd+Tab)
             platform::set_repaint_context(&cc.egui_ctx);
@@ -205,6 +153,85 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     result?;
 
     Ok(())
+}
+
+/// Resolves the local application data directory, creates it if necessary, and secures its file permissions.
+fn prepare_app_data_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let data_dir = get_app_data_dir();
+    fs::create_dir_all(&data_dir)?;
+    crypto::set_restricted_dir_permissions(&data_dir);
+    Ok(data_dir)
+}
+
+/// Attempts to acquire the single-instance lock file.
+///
+/// Returns `Ok(Some(lock))` if this process is the primary instance, or `Ok(None)` if another instance
+/// is already running (after requesting that instance to activate its window).
+fn acquire_instance_lock(
+    data_dir: &std::path::Path,
+) -> Result<Option<SingleInstanceLock>, Box<dyn std::error::Error>> {
+    let lock_path = data_dir.join(".instance.lock");
+    match SingleInstanceLock::acquire(&lock_path)? {
+        AcquireResult::Acquired(lock) => Ok(Some(lock)),
+        AcquireResult::AlreadyRunning { pid } => {
+            platform::activate_existing_instance(pid);
+
+            if let Some(pid) = pid {
+                println!(
+                    "ℹ️ CipherClipboard is already running (PID {pid}). Brought existing window to front."
+                );
+            } else {
+                println!(
+                    "ℹ️ CipherClipboard is already running. Brought existing window to front."
+                );
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// Builds the `eframe::NativeOptions` configuring the initial window dimensions, minimum size,
+/// title bar, platform viewport chrome, and application icon.
+fn build_native_options() -> eframe::NativeOptions {
+    let mut viewport = platform::configure_viewport_chrome(
+        egui::ViewportBuilder::default()
+            .with_inner_size([440.0, 580.0])
+            .with_min_inner_size([320.0, 400.0])
+            .with_title("CipherClipboard"),
+    );
+
+    // Load bundled icon for the window title bar and taskbar
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
+        viewport = viewport.with_icon(icon);
+    }
+
+    eframe::NativeOptions {
+        viewport,
+        renderer: eframe::Renderer::Wgpu,
+        ..Default::default()
+    }
+}
+
+/// Configures fonts, icon packs, and platform-adaptive HIG theme for the egui context.
+fn setup_egui_context(ctx: &egui::Context, theme_mode: settings::AppThemeMode) {
+    // Probe native system fonts (San Francisco, Segoe UI) and register Material icons
+    // Register outlined before filled so outline is the default fallback for inline icons,
+    // while filled remains available explicitly (e.g. for selected/active states).
+    let mut fonts = egui::FontDefinitions::default();
+    theme::setup_fonts(&mut fonts);
+    ctx.set_fonts(fonts);
+    let mut outlined = egui_material_icons::font_insert_outlined();
+    outlined.data.tweak.scale = 1.20;
+    outlined.data.tweak.y_offset_factor = 0.0;
+    let mut filled = egui_material_icons::font_insert();
+    filled.data.tweak.scale = 1.20;
+    filled.data.tweak.y_offset_factor = 0.0;
+    ctx.add_font(outlined);
+    ctx.add_font(filled);
+
+    // Apply platform-adaptive HIG visuals (Dark or Light)
+    let is_dark = theme_mode.resolve(ctx);
+    theme::setup_theme(ctx, is_dark);
 }
 
 /// CI smoke-test hook (active in debug builds only; a no-op in release builds).
@@ -266,4 +293,27 @@ fn get_app_data_dir() -> PathBuf {
             }
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_native_options_defaults() {
+        let options = build_native_options();
+        assert_eq!(options.renderer, eframe::Renderer::Wgpu);
+        assert_eq!(options.viewport.title, Some("CipherClipboard".to_string()));
+        assert_eq!(options.viewport.inner_size, Some(egui::vec2(440.0, 580.0)));
+        assert_eq!(
+            options.viewport.min_inner_size,
+            Some(egui::vec2(320.0, 400.0))
+        );
+    }
+
+    #[test]
+    fn test_get_app_data_dir_not_empty() {
+        let dir = get_app_data_dir();
+        assert!(!dir.as_os_str().is_empty());
+    }
 }
