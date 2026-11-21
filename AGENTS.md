@@ -14,7 +14,8 @@ Before modifying crypto, database, clipboard monitoring, FFI (`src/platform/`), 
 
 Before adding OS-specific behavior, FFI bindings, or cross-platform UI/dependency upgrades, read [`docs/MULTIPLATFORM_LESSONS.md`](docs/MULTIPLATFORM_LESSONS.md) and preserve all invariants documented there:
 
-- Keep `src/platform/mod.rs` and `src/platform/linux.rs` 100% safe Rust; expose single-OS APIs via `platform::windows::*` / `platform::macos::*` and use OS-agnostic names for cross-platform capabilities.
+- **Confine platform `#[cfg(target_os = ...)]` / `#[cfg(unix)]` attributes to `src/platform/` (`mod.rs`, `fs_security.rs`, `linux.rs`, `macos.rs`, `windows.rs`).** Do not scatter OS-conditional `#[cfg]` blocks across application, UI, settings, hotkey, theme, or crypto modules; instead, expose OS-agnostic capability helpers, constants, or no-op fallback types from `src/platform/`.
+- Keep `src/platform/mod.rs`, `src/platform/fs_security.rs`, and `src/platform/linux.rs` 100% safe Rust; expose single-OS APIs via `platform::windows::*` / `platform::macos::*` and use OS-agnostic names for cross-platform capabilities.
 - Standardize on `#[cfg(target_os = "windows")]` (use `#[cfg(unix)]` only for POSIX APIs), collapse repetitive theme `#[cfg]` blocks via `platform_select`, and keep unit tests host/layout-agnostic.
 
 ## Concurrency & Performance
