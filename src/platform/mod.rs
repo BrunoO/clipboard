@@ -18,6 +18,13 @@ pub(crate) mod macos;
 pub(crate) mod windows;
 
 #[cfg(target_os = "linux")]
+use linux as backend;
+#[cfg(target_os = "macos")]
+use macos as backend;
+#[cfg(target_os = "windows")]
+use windows as backend;
+
+#[cfg(target_os = "linux")]
 pub(crate) use linux::QuoteHotkeyFallback;
 
 /// No-op Quote-key global hotkey fallback on non-Linux platforms.
@@ -68,17 +75,13 @@ pub(crate) fn is_app_active() -> bool {
     allow(clippy::unnecessary_wraps)
 )]
 pub(crate) fn is_app_active_state() -> Option<bool> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        Some(macos::is_active())
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Some(windows::is_active())
+        Some(backend::is_active())
     }
     #[cfg(target_os = "linux")]
     {
-        linux::is_active()
+        backend::is_active()
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
@@ -236,13 +239,9 @@ use crate::logging::log_message;
 /// the monitor thread to skip reading/copying unchanged clipboard payloads.
 #[must_use]
 pub(crate) fn clipboard_change_token() -> Option<u64> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        macos::clipboard_change_token()
-    }
-    #[cfg(target_os = "windows")]
-    {
-        windows::clipboard_change_token()
+        backend::clipboard_change_token()
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -254,17 +253,9 @@ pub(crate) fn clipboard_change_token() -> Option<u64> {
 /// by password managers (e.g. 1Password, Bitwarden, `KeePass`, `KeePassXC`, macOS Keychain).
 #[must_use]
 pub(crate) fn is_clipboard_concealed() -> bool {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        macos::is_clipboard_concealed()
-    }
-    #[cfg(target_os = "windows")]
-    {
-        windows::is_clipboard_concealed()
-    }
-    #[cfg(target_os = "linux")]
-    {
-        linux::is_clipboard_concealed()
+        backend::is_clipboard_concealed()
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
@@ -348,14 +339,8 @@ pub(crate) const fn uipi_should_skip_paste(
 /// so OS clipboard history, cloud sync, Universal Clipboard, and other clipboard
 /// managers do not record or broadcast secrets copied by `CipherClipboard`.
 pub(crate) fn mark_clipboard_concealed() {
-    #[cfg(target_os = "macos")]
-    macos::mark_clipboard_concealed();
-
-    #[cfg(target_os = "windows")]
-    windows::mark_clipboard_concealed();
-
-    #[cfg(target_os = "linux")]
-    linux::mark_clipboard_concealed();
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    backend::mark_clipboard_concealed();
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     let _ = concealed_marker_support();
@@ -370,11 +355,8 @@ pub(crate) fn hide_application() {
 
 /// Unhides and orders the main window front at the OS level.
 pub(crate) fn order_front_main_window() {
-    #[cfg(target_os = "macos")]
-    macos::order_front_main_window();
-
-    #[cfg(target_os = "windows")]
-    windows::order_front_main_window();
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    backend::order_front_main_window();
 }
 
 /// Checks and clears any pending reopen requests triggered by OS events (e.g. Dock icon click).
@@ -404,14 +386,8 @@ pub(crate) fn teardown_reopen_observer() {
 
 /// Captures the current frontmost application/window before `CipherClipboard` gains focus.
 pub(crate) fn capture_active_window() {
-    #[cfg(target_os = "macos")]
-    macos::capture_frontmost();
-
-    #[cfg(target_os = "windows")]
-    windows::capture_frontmost();
-
-    #[cfg(target_os = "linux")]
-    linux::capture_frontmost();
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    backend::capture_frontmost();
 }
 
 #[derive(Clone, Copy)]
@@ -422,51 +398,24 @@ struct PasteRequest {
 }
 
 fn restore_focus_platform() {
-    #[cfg(target_os = "macos")]
-    macos::restore_focus();
-
-    #[cfg(target_os = "windows")]
-    windows::restore_focus();
-
-    #[cfg(target_os = "linux")]
-    linux::restore_focus();
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    backend::restore_focus();
 }
 
 fn simulate_paste_if_foreground() {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        if !macos::is_target_foreground() {
+        if !backend::is_target_foreground() {
             log_message(
                 "WARN",
-                "Auto-paste skipped: captured target application is not frontmost",
+                "Auto-paste skipped: captured target window/application is not in the foreground",
             );
             return;
         }
-        macos::simulate_paste();
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        if !windows::is_target_foreground() {
-            log_message(
-                "WARN",
-                "Auto-paste skipped: captured target window is not in the foreground",
-            );
-            return;
-        }
-        let _ = windows::simulate_paste();
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        if !linux::is_target_foreground() {
-            log_message(
-                "WARN",
-                "Auto-paste skipped: captured target window is not active",
-            );
-            return;
-        }
-        linux::simulate_paste();
+        #[cfg(target_os = "windows")]
+        let _ = backend::simulate_paste();
+        #[cfg(not(target_os = "windows"))]
+        backend::simulate_paste();
     }
 }
 
