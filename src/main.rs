@@ -112,7 +112,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let settings = AppSettings::load(&db);
     db.set_max_history(settings.max_history);
     db.set_ignore_concealed(settings.ignore_concealed);
-    let _ = db.prune_history(settings.max_history);
+    if let Err(e) = db.prune_history(settings.max_history) {
+        logging::log_message("WARN", &format!("Startup history prune failed: {e}"));
+    }
     #[cfg(debug_assertions)]
     println!("⚙️  Loaded settings: hotkey preset {:?}", settings.hotkey);
 
