@@ -10,17 +10,25 @@ use std::sync::Mutex;
 static PREVIOUS_APP_PID: AtomicI32 = AtomicI32::new(0);
 static REPAINT_CTX: Mutex<Option<eframe::egui::Context>> = Mutex::new(None);
 
+/// Locks `mutex`, recovering and reporting poison instead of silently dropping state.
+fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, site: &str) -> std::sync::MutexGuard<'a, T> {
+    mutex.lock().unwrap_or_else(|poisoned| {
+        crate::logging::log_message(
+            "WARN",
+            &format!("Recovered poisoned mutex at {site} (REPAINT_CTX)"),
+        );
+        poisoned.into_inner()
+    })
+}
+
 pub(super) fn set_repaint_context(ctx: &eframe::egui::Context) {
-    if let Ok(mut lock) = REPAINT_CTX.lock() {
-        *lock = Some(ctx.clone());
-    }
+    *lock_or_recover(&REPAINT_CTX, "set_repaint_context") = Some(ctx.clone());
 }
 
 fn request_repaint() {
-    if let Ok(lock) = REPAINT_CTX.lock() {
-        if let Some(ctx) = lock.as_ref() {
-            ctx.request_repaint();
-        }
+    let lock = lock_or_recover(&REPAINT_CTX, "request_repaint");
+    if let Some(ctx) = lock.as_ref() {
+        ctx.request_repaint();
     }
 }
 
@@ -205,9 +213,7 @@ pub(super) fn teardown_reopen_observer() {
         });
     }
     // Release the cloned egui::Context held in the global static on shutdown.
-    let mut lock = REPAINT_CTX
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut lock = lock_or_recover(&REPAINT_CTX, "teardown_reopen_observer");
     *lock = None;
 }
 
@@ -452,4 +458,23 @@ pub(super) fn mark_clipboard_concealed() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_or_recover_recovers_poisoned_mutex() {
+        let mutex = Mutex::new(0_u8);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = mutex.lock().unwrap();
+            panic!("intentional poison for poison-recovery test");
+        }));
+        assert!(result.is_err());
+        assert!(mutex.is_poisoned());
+
+        *lock_or_recover(&mutex, "test") = 42;
+        assert_eq!(*lock_or_recover(&mutex, "test-assert"), 42);
+    }
 }
