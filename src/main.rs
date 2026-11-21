@@ -34,8 +34,7 @@ fn main() {
     if let Err(e) = run() {
         eprintln!("Error: {e}");
         logging::log_message("ERROR", &format!("Startup failed: {e}"));
-        #[cfg(target_os = "windows")]
-        platform::windows::show_error_dialog(&format!("CipherClipboard failed to start:\n\n{e}"));
+        platform::show_startup_error_dialog(&format!("CipherClipboard failed to start:\n\n{e}"));
         std::process::exit(1);
     }
 }
@@ -61,13 +60,7 @@ fn install_panic_hook() {
         let summary = format!("Thread '{thread_name}' panicked at {location}: {payload}");
         eprintln!("💥 {summary}\n{backtrace}");
         logging::log_message("PANIC", &format!("{summary}\n{backtrace}"));
-
-        #[cfg(all(target_os = "windows", not(debug_assertions)))]
-        platform::windows::show_error_dialog(&format!(
-            "CipherClipboard encountered an unexpected error and must close.\n\n\
-             {summary}\n\n\
-             Diagnostics were written to %LOCALAPPDATA%\\cipherclipboard\\app.log."
-        ));
+        platform::show_panic_error_dialog(&summary);
     }));
 }
 
@@ -87,8 +80,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _instance_lock = match SingleInstanceLock::acquire(&lock_path)? {
         AcquireResult::Acquired(lock) => lock,
         AcquireResult::AlreadyRunning { pid } => {
-            #[cfg(target_os = "windows")]
-            platform::windows::activate_existing_instance(pid);
+            platform::activate_existing_instance(pid);
 
             if let Some(pid) = pid {
                 println!(
@@ -120,18 +112,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("⚙️  Loaded settings: hotkey preset {:?}", settings.hotkey);
 
     // 6. Configure window options for eframe
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([440.0, 580.0])
-        .with_min_inner_size([320.0, 400.0])
-        .with_title("CipherClipboard");
-
-    #[cfg(target_os = "macos")]
-    {
-        viewport = viewport
-            .with_fullsize_content_view(true)
-            .with_titlebar_shown(false)
-            .with_title_shown(false);
-    }
+    let mut viewport = platform::configure_viewport_chrome(
+        egui::ViewportBuilder::default()
+            .with_inner_size([440.0, 580.0])
+            .with_min_inner_size([320.0, 400.0])
+            .with_title("CipherClipboard"),
+    );
 
     // Load bundled icon for the window title bar and taskbar
     if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {

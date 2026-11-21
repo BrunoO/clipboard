@@ -55,33 +55,21 @@ impl HotkeyPreset {
     #[must_use]
     pub(crate) const fn display_name(self) -> &'static str {
         let labels = self.platform_labels();
-        if cfg!(target_os = "macos") {
-            labels.0
-        } else {
-            labels.1
-        }
+        crate::platform::platform_select(labels.0, labels.1, labels.1)
     }
 
     /// Short badge for header display.
     #[must_use]
     pub(crate) const fn badge(self) -> &'static str {
         let labels = self.platform_labels();
-        if cfg!(target_os = "macos") {
-            labels.2
-        } else {
-            labels.3
-        }
+        crate::platform::platform_select(labels.2, labels.3, labels.3)
     }
 
     /// Converts this preset into the corresponding `global_hotkey::hotkey::HotKey` objects.
     /// Returns empty vec for `None` or `Custom` (custom hotkeys are resolved via settings).
     #[must_use]
     pub(crate) fn to_hotkeys(self) -> Vec<HotKey> {
-        let base_mod = if cfg!(target_os = "macos") {
-            Modifiers::META
-        } else {
-            Modifiers::CONTROL
-        };
+        let base_mod = crate::platform::primary_hotkey_modifier();
 
         match self {
             Self::Universal => vec![HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyV)],
@@ -467,7 +455,7 @@ const fn default_preserve_secrets_on_prune() -> bool {
 }
 
 const fn default_hide_on_blur() -> bool {
-    !cfg!(target_os = "windows")
+    crate::platform::default_hide_on_blur()
 }
 
 const fn default_restore_focus() -> bool {

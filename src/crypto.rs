@@ -350,24 +350,7 @@ mod tests {
 
         save_key_file(&key_file, &test_key).unwrap();
         assert!(key_file.exists());
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let metadata = fs::metadata(&key_file).unwrap();
-            let mode = metadata.permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600, "Key file permissions must be 0600 on Unix");
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            let raw_on_disk = fs::read(&key_file).unwrap();
-            assert_ne!(
-                raw_on_disk.as_slice(),
-                test_key.as_bytes(),
-                "Windows fallback key file must be DPAPI-encrypted on disk"
-            );
-        }
+        crate::platform::fs_security::assert_protected_key_file_on_disk(&key_file, &test_key);
 
         let (loaded, mode) = get_or_create_encryption_key(dir.path(), false).unwrap();
         assert_eq!(loaded.as_str(), test_key.as_str());

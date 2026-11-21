@@ -96,21 +96,7 @@ pub(crate) fn setup_fonts(fonts: &mut FontDefinitions) {
 // Platform-Adaptive Color Palette (Dark & Light)
 // ---------------------------------------------------------------------------
 
-const fn platform_select<T: Copy>(macos: T, windows: T, other: T) -> T {
-    let _ = (macos, windows, other);
-    #[cfg(target_os = "macos")]
-    {
-        macos
-    }
-    #[cfg(target_os = "windows")]
-    {
-        windows
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        other
-    }
-}
+use crate::platform::platform_select;
 
 const fn themed_platform_color(
     is_dark: bool,

@@ -115,6 +115,21 @@ pub(crate) fn set_restricted_dir_permissions(path: &Path) {
 #[cfg(not(unix))]
 pub(crate) const fn set_restricted_dir_permissions(_path: &Path) {}
 
+/// Opens or creates a file in append mode with owner-only (`0o600`) permissions on Unix.
+///
+/// # Errors
+/// Returns the underlying I/O error if the file cannot be opened or created.
+pub(crate) fn open_restricted_append_file(path: &Path) -> std::io::Result<fs::File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
 /// Restricts a fallback key file and returns `true` when hardening could not be applied.
 #[cfg(unix)]
 pub(crate) fn set_restricted_permissions(path: &Path) -> bool {
@@ -230,6 +245,28 @@ pub(crate) fn set_restricted_permissions(path: &Path) -> bool {
 pub(crate) fn set_restricted_permissions(_path: &Path) -> bool {
     // No platform-specific hardening implemented.
     false
+}
+
+#[cfg(test)]
+pub(crate) fn assert_protected_key_file_on_disk(path: &Path, expected_key: &str) {
+    let _ = (path, expected_key);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = fs::metadata(path).unwrap();
+        let mode = metadata.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "Key file permissions must be 0600 on Unix");
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let raw_on_disk = fs::read(path).unwrap();
+        assert_ne!(
+            raw_on_disk.as_slice(),
+            expected_key.as_bytes(),
+            "Windows fallback key file must be DPAPI-encrypted on disk"
+        );
+    }
 }
 
 #[cfg(test)]

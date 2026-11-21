@@ -1537,9 +1537,8 @@ fn clipboard_clear_is_due(now: Instant, deadline: Instant) -> bool {
 
 impl eframe::App for ClipboardApp {
     /// On macOS, exit right after cleanup to dodge an `AppKit` Touch Bar observer crash.
-    #[cfg(target_os = "macos")]
     fn on_exit(&mut self) {
-        if self.is_quitting {
+        if crate::platform::requires_immediate_exit_on_quit() && self.is_quitting {
             self.shutdown_and_exit();
         }
     }
@@ -1637,7 +1636,6 @@ impl ClipboardApp {
     /// `AppKit`'s display cycle invalidates `_NSTouchBarFinderObservation` on the already
     /// torn-down `WinitView`, raising an uncaught `NSRangeException`. Exiting here, once
     /// our own cleanup finished, avoids that last `AppKit` flush.
-    #[cfg(target_os = "macos")]
     fn shutdown_and_exit(&mut self) -> ! {
         self.shutdown_resources();
         std::process::exit(0);
@@ -1734,8 +1732,7 @@ fn format_recorded_hotkey(modifiers: egui::Modifiers, key: egui::Key) -> Option<
     if modifiers.shift {
         parts.push("Shift");
     }
-    #[cfg(target_os = "macos")]
-    if modifiers.mac_cmd || modifiers.command {
+    if crate::platform::has_recorded_command_modifier(modifiers) {
         parts.push("Cmd");
     }
     parts.push(key_name);

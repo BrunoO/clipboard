@@ -62,14 +62,7 @@ pub(crate) fn log_message(level: &str, message: &str) {
             let _ = std::fs::rename(path, &backup);
         }
     }
-    let mut opts = std::fs::OpenOptions::new();
-    opts.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    if let Ok(mut file) = opts.open(path) {
+    if let Ok(mut file) = crate::platform::fs_security::open_restricted_append_file(path) {
         let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
         let _ = writeln!(file, "[{ts}] [{level}] {message}");
     }

@@ -53,6 +53,162 @@ impl QuoteHotkeyFallback {
     pub(crate) const fn shutdown(&mut self) {}
 }
 
+/// Platform-backed system tray icon handle (implemented on Windows, no-op elsewhere).
+pub(crate) struct SystemTrayBackend {
+    #[cfg(target_os = "windows")]
+    tray_icon: tray_icon::TrayIcon,
+}
+
+impl std::fmt::Debug for SystemTrayBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SystemTrayBackend").finish_non_exhaustive()
+    }
+}
+
+impl SystemTrayBackend {
+    /// Initializes the OS system tray icon where supported (Windows) and wires click/menu
+    /// events to `tray_tx` + `ctx.request_repaint()`.
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(unused_variables, clippy::missing_const_for_fn)
+    )]
+    pub(crate) fn new(
+        tray_tx: &std::sync::mpsc::Sender<crate::tray::TrayAction>,
+        ctx: &eframe::egui::Context,
+    ) -> Option<Self> {
+        #[cfg(target_os = "windows")]
+        {
+            match Self::init_windows(tray_tx.clone(), ctx.clone()) {
+                Ok(service) => Some(service),
+                Err(e) => {
+                    eprintln!("⚠️ Failed to initialize Windows system tray icon: {e}");
+                    crate::logging::log_message(
+                        "WARN",
+                        &format!("Failed to initialize Windows system tray icon: {e}"),
+                    );
+                    None
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn init_windows(
+        tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
+        ctx: eframe::egui::Context,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        use crate::tray::TrayAction;
+        use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+        use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+        let (rgba, width, height) = crate::tray::load_tray_icon_rgba()?;
+        let icon = Icon::from_rgba(rgba, width, height)?;
+
+        let menu = Menu::new();
+        let show_item = MenuItem::new("Show CipherClipboard", true, None);
+        let settings_item = MenuItem::new("Settings...", true, None);
+        let separator = PredefinedMenuItem::separator();
+        let quit_item = MenuItem::new("Quit CipherClipboard", true, None);
+
+        menu.append_items(&[&show_item, &settings_item, &separator, &quit_item])?;
+
+        let tray_icon = TrayIconBuilder::new()
+            .with_menu(Box::new(menu))
+            .with_tooltip("CipherClipboard")
+            .with_icon(icon)
+            .with_menu_on_left_click(false)
+            .build()?;
+
+        // `build()` ignores Shell_NotifyIconW(NIM_ADD) failures and only retries
+        // on TaskbarCreated. Without this check a "successful" tray init can hide
+        // the window with no icon and no taskbar button left to restore it.
+        // Allow a brief window for the shell to publish the icon rect.
+        let mut icon_live = false;
+        for _ in 0..5 {
+            if tray_icon.rect().is_some() {
+                icon_live = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if !icon_live {
+            return Err("Windows did not accept the tray icon (shell not ready)".into());
+        }
+
+        let tx_click = tray_tx.clone();
+        let ctx_click = ctx.clone();
+        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            }
+            | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } = event
+            {
+                // Capture whatever app is foreground right now before we restore
+                // CipherClipboard, so subsequent paste/restore targets it.
+                capture_active_window();
+                // Always send Show (not Toggle): clicking the tray icon while the
+                // window is behind another app must bring it to the front. The
+                // callback runs on tray-icon's helper thread, which does not own
+                // the winit window and cannot set it foreground reliably.
+                let _ = tx_click.send(TrayAction::Show);
+                ctx_click.request_repaint();
+            }
+        }));
+
+        let show_id = show_item.id().clone();
+        let settings_id = settings_item.id().clone();
+        let quit_id = quit_item.id().clone();
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            if event.id == show_id {
+                capture_active_window();
+                let _ = tray_tx.send(TrayAction::Show);
+                ctx.request_repaint();
+            } else if event.id == settings_id {
+                let _ = tray_tx.send(TrayAction::OpenSettings);
+                ctx.request_repaint();
+            } else if event.id == quit_id {
+                let _ = tray_tx.send(TrayAction::Quit);
+                ctx.request_repaint();
+            }
+        }));
+
+        Ok(Self { tray_icon })
+    }
+
+    /// True only while the shell still has a registered notification-area icon.
+    /// Rechecked when hiding in case Explorer restarted or the icon was removed.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn is_live(&self) -> bool {
+        self.tray_icon.rect().is_some()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[allow(dead_code, clippy::unused_self)]
+    pub(crate) fn is_live(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for SystemTrayBackend {
+    fn drop(&mut self) {
+        use tray_icon::menu::MenuEvent;
+        use tray_icon::TrayIconEvent;
+        // These handlers are process-global and hold cloned channels/contexts.
+        TrayIconEvent::set_event_handler::<fn(tray_icon::TrayIconEvent)>(None);
+        MenuEvent::set_event_handler::<fn(MenuEvent)>(None);
+    }
+}
+
 /// Stores a clone of the `egui::Context` to immediately trigger repaints on OS activation.
 pub(crate) fn set_repaint_context(ctx: &eframe::egui::Context) {
     #[cfg(target_os = "macos")]
@@ -164,6 +320,87 @@ pub(crate) fn set_title_bar_dark_mode(is_dark: bool) {
     }
 }
 
+/// Displays a native OS error dialog on startup failure where supported (Windows `MessageBoxW`).
+pub(crate) fn show_startup_error_dialog(message: &str) {
+    #[cfg(target_os = "windows")]
+    windows::show_error_dialog(message);
+    #[cfg(not(target_os = "windows"))]
+    let _ = message;
+}
+
+/// Displays a native OS crash dialog inside the panic hook on release builds where supported (Windows).
+pub(crate) fn show_panic_error_dialog(summary: &str) {
+    #[cfg(all(target_os = "windows", not(debug_assertions)))]
+    windows::show_error_dialog(&format!(
+        "CipherClipboard encountered an unexpected error and must close.\n\n\
+         {summary}\n\n\
+         Diagnostics were written to %LOCALAPPDATA%\\cipherclipboard\\app.log."
+    ));
+    #[cfg(not(all(target_os = "windows", not(debug_assertions))))]
+    let _ = summary;
+}
+
+/// Attempts to bring an already-running `CipherClipboard` instance to the foreground.
+pub(crate) fn activate_existing_instance(pid: Option<u32>) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = windows::activate_existing_instance(pid);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = pid;
+}
+
+/// Applies platform-specific window chrome options to the root `egui::ViewportBuilder`
+/// (macOS full-size content view with hidden titlebar).
+#[must_use]
+pub(crate) fn configure_viewport_chrome(
+    viewport: eframe::egui::ViewportBuilder,
+) -> eframe::egui::ViewportBuilder {
+    #[cfg(target_os = "macos")]
+    {
+        viewport
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        viewport
+    }
+}
+
+/// Returns `true` if `eframe::App::on_exit` must terminate the process immediately after
+/// deterministic resource cleanup to avoid `AppKit` Touch Bar KVO teardown crashes (macOS).
+#[must_use]
+pub(crate) const fn requires_immediate_exit_on_quit() -> bool {
+    cfg!(target_os = "macos")
+}
+
+/// Returns `true` when the `Cmd` / `Super` modifier should be recorded in custom hotkeys
+/// from `egui::Modifiers` (macOS `mac_cmd` / `command`).
+#[must_use]
+pub(crate) const fn has_recorded_command_modifier(modifiers: eframe::egui::Modifiers) -> bool {
+    cfg!(target_os = "macos") && (modifiers.mac_cmd || modifiers.command)
+}
+
+/// Selects a platform-specific constant at compile time (`macos`, `windows`, or `other`).
+#[must_use]
+pub(crate) const fn platform_select<T: Copy>(macos: T, windows: T, other: T) -> T {
+    let _ = (macos, windows, other);
+    #[cfg(target_os = "macos")]
+    {
+        macos
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        other
+    }
+}
+
 /// Human-readable name of the primary shortcut modifier key (`Cmd` on macOS, `Ctrl` elsewhere).
 pub(crate) const PRIMARY_MODIFIER_NAME: &str = if cfg!(target_os = "macos") {
     "Cmd"
@@ -177,6 +414,23 @@ pub(crate) const META_MODIFIER_NAME: &str = if cfg!(target_os = "macos") {
 } else {
     "Win"
 };
+
+/// Returns the default global-hotkey primary modifier for presets (`META` on macOS, `CONTROL` elsewhere).
+#[must_use]
+pub(crate) const fn primary_hotkey_modifier() -> global_hotkey::hotkey::Modifiers {
+    if cfg!(target_os = "macos") {
+        global_hotkey::hotkey::Modifiers::META
+    } else {
+        global_hotkey::hotkey::Modifiers::CONTROL
+    }
+}
+
+/// Returns the platform default for `hide_on_blur` (`false` on Windows where clicking outside
+/// while interacting with the taskbar/tray is common, `true` elsewhere).
+#[must_use]
+pub(crate) const fn default_hide_on_blur() -> bool {
+    !cfg!(target_os = "windows")
+}
 
 /// Returns the user-facing navigation hint displayed in the bottom bar.
 #[must_use]
