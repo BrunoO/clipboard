@@ -55,8 +55,7 @@ pub(crate) fn read_protected_key_file(
         if ciphertext.is_empty() {
             return Ok(None);
         }
-        let plain_bytes =
-            super::windows::dpapi_unprotect(&ciphertext).map_err(std::io::Error::other)?;
+        let plain_bytes = super::windows::dpapi_unprotect(&ciphertext)?;
         let utf8 = std::str::from_utf8(&plain_bytes)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         Zeroizing::new(utf8.to_owned())
@@ -100,8 +99,7 @@ pub(crate) fn write_protected_key_file(path: &Path, key: &str) -> Result<bool, s
     };
     #[cfg(target_os = "windows")]
     let permissions_degraded = {
-        let protected =
-            super::windows::dpapi_protect(key.as_bytes()).map_err(std::io::Error::other)?;
+        let protected = super::windows::dpapi_protect(key.as_bytes())?;
         fs::write(path, &protected)?;
         set_restricted_permissions(path)
     };

@@ -740,12 +740,12 @@ const DPAPI_ENTROPY: &[u8] = b"CipherClipboard-DPAPI-v1";
 /// Encrypts `plaintext` with DPAPI using the application entropy.
 ///
 /// # Errors
-/// Returns an error if the input is too large for DPAPI or `CryptProtectData` fails.
-pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
+/// Returns an [`std::io::Error`] if the input is too large for DPAPI or `CryptProtectData` fails.
+pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, std::io::Error> {
     let in_len = u32::try_from(plaintext.len())
-        .map_err(|_| "DPAPI plaintext exceeds u32::MAX bytes".to_string())?;
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let entropy_len = u32::try_from(DPAPI_ENTROPY.len())
-        .map_err(|_| "DPAPI entropy length invalid".to_string())?;
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
     let in_blob = CRYPT_INTEGER_BLOB {
         cbData: in_len,
@@ -773,7 +773,7 @@ pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
         )
     };
     if ok == 0 || out_blob.pbData.is_null() {
-        return Err("Windows DPAPI CryptProtectData failed".to_string());
+        return Err(std::io::Error::last_os_error());
     }
 
     let out_len = usize::try_from(out_blob.cbData).unwrap_or(0);
@@ -790,15 +790,17 @@ pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
 /// Decrypts DPAPI ciphertext produced by [`dpapi_protect`].
 ///
 /// # Errors
-/// Returns an error if the input is too large for DPAPI, `CryptUnprotectData`
+/// Returns an [`std::io::Error`] if the input is too large for DPAPI, `CryptUnprotectData`
 /// fails, or the ciphertext was not produced with the application entropy.
-pub(crate) fn dpapi_unprotect(ciphertext: &[u8]) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
+pub(crate) fn dpapi_unprotect(
+    ciphertext: &[u8],
+) -> Result<zeroize::Zeroizing<Vec<u8>>, std::io::Error> {
     use zeroize::Zeroize;
 
     let in_len = u32::try_from(ciphertext.len())
-        .map_err(|_| "DPAPI ciphertext exceeds u32::MAX bytes".to_string())?;
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let entropy_len = u32::try_from(DPAPI_ENTROPY.len())
-        .map_err(|_| "DPAPI entropy length invalid".to_string())?;
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
     let in_blob = CRYPT_INTEGER_BLOB {
         cbData: in_len,
@@ -826,7 +828,7 @@ pub(crate) fn dpapi_unprotect(ciphertext: &[u8]) -> Result<zeroize::Zeroizing<Ve
         )
     };
     if ok == 0 || out_blob.pbData.is_null() {
-        return Err("Windows DPAPI CryptUnprotectData failed".to_string());
+        return Err(std::io::Error::last_os_error());
     }
 
     let out_len = usize::try_from(out_blob.cbData).unwrap_or(0);
