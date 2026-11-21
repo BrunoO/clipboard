@@ -349,3 +349,263 @@ fn poll_selection_for_hint(conn: &RustConnection, win: u32, hint_atom: u32) -> b
     }
     false
 }
+
+// ---------------------------------------------------------------------------
+// X11 Quote-Key Global Hotkey Fallback
+// ---------------------------------------------------------------------------
+
+mod x11_quote_hotkey {
+    use eframe::egui;
+    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+    use std::sync::mpsc::{self, Sender, SyncSender};
+    use std::thread;
+    use std::time::Duration;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ConnectionExt, GrabMode, KeyButMask, ModMask, Window};
+    use x11rb::protocol::Event;
+
+    enum Msg {
+        Register(HotKey, Sender<Result<(), ()>>),
+        Clear,
+        Shutdown,
+    }
+
+    /// Fallback X11 key-grab listener used when `global-hotkey` fails to register
+    /// `Code::Quote` on certain Linux X11 keyboard layouts.
+    pub(crate) struct QuoteHotkeyFallback {
+        tx: Sender<Msg>,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl QuoteHotkeyFallback {
+        pub(crate) fn new(hotkey_tx: SyncSender<()>, ctx: egui::Context) -> Self {
+            let (tx, rx) = mpsc::channel::<Msg>();
+            let handle = thread::Builder::new()
+                .name("x11-quote-hotkey".to_string())
+                .spawn(move || run_loop(&rx, &hotkey_tx, &ctx))
+                .ok();
+            Self { tx, handle }
+        }
+
+        pub(crate) fn try_register(&self, hk: HotKey) -> bool {
+            if hk.key != Code::Quote {
+                return false;
+            }
+            let (reply_tx, reply_rx) = mpsc::channel();
+            if self.tx.send(Msg::Register(hk, reply_tx)).is_err() {
+                return false;
+            }
+            matches!(reply_rx.recv(), Ok(Ok(())))
+        }
+
+        pub(crate) fn clear(&self) {
+            let _ = self.tx.send(Msg::Clear);
+        }
+
+        pub(crate) fn shutdown(&mut self) {
+            let _ = self.tx.send(Msg::Shutdown);
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn mods_to_x11(mods: Modifiers) -> ModMask {
+        let mut mask = ModMask::default();
+        if mods.contains(Modifiers::CONTROL) {
+            mask |= ModMask::CONTROL;
+        }
+        if mods.contains(Modifiers::SHIFT) {
+            mask |= ModMask::SHIFT;
+        }
+        if mods.contains(Modifiers::ALT) {
+            mask |= ModMask::M1;
+        }
+        if mods.contains(Modifiers::META) {
+            mask |= ModMask::M4;
+        }
+        mask
+    }
+
+    fn ignored_mods() -> [ModMask; 4] {
+        [
+            ModMask::default(),
+            ModMask::M2,
+            ModMask::LOCK,
+            ModMask::M2 | ModMask::LOCK,
+        ]
+    }
+
+    fn find_quote_keycode<C: Connection>(conn: &C) -> Option<u8> {
+        const XK_UGRAVE: u32 = 0x00f9;
+        const XK_APOSTROPHE: u32 = 0x0027;
+        let min_kc = conn.setup().min_keycode;
+        let max_kc = conn.setup().max_keycode;
+        let count = max_kc.checked_sub(min_kc)?.saturating_add(1);
+        let mapping = conn
+            .get_keyboard_mapping(min_kc, count)
+            .ok()?
+            .reply()
+            .ok()?;
+        let per_kc = usize::from(mapping.keysyms_per_keycode);
+        if per_kc == 0 {
+            return None;
+        }
+        for target in [XK_UGRAVE, XK_APOSTROPHE] {
+            for (idx, chunk) in mapping.keysyms.chunks(per_kc).enumerate() {
+                if chunk.contains(&target) {
+                    if let Ok(offset) = u8::try_from(idx) {
+                        if let Some(kc) = min_kc.checked_add(offset) {
+                            return Some(kc);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn ungrab_all<C: Connection>(conn: &C, root: Window, grabs: &mut Vec<(u8, ModMask)>) {
+        for (kc, mods) in grabs.drain(..) {
+            for m in ignored_mods() {
+                let _ = conn.ungrab_key(kc, root, mods | m);
+            }
+        }
+        let _ = conn.flush();
+    }
+
+    fn drain_until_shutdown(rx: &mpsc::Receiver<Msg>) {
+        while let Ok(msg) = rx.recv() {
+            match msg {
+                Msg::Register(_, reply) => {
+                    let _ = reply.send(Err(()));
+                }
+                Msg::Clear => {}
+                Msg::Shutdown => break,
+            }
+        }
+    }
+
+    fn poll_x11_key_events(
+        conn: &x11rb::rust_connection::RustConnection,
+        grabs: &[(u8, ModMask)],
+        full_mask: KeyButMask,
+        hotkey_tx: &SyncSender<()>,
+        ctx: &egui::Context,
+    ) {
+        while let Ok(Some(event)) = conn.poll_for_event() {
+            if let Event::KeyPress(ev) = event {
+                let ev_mods = ModMask::from((ev.state & full_mask).bits());
+                if grabs
+                    .iter()
+                    .any(|&(kc, mods)| kc == ev.detail && mods == ev_mods)
+                {
+                    crate::platform::capture_active_window();
+                    // Best-effort coalesced wakeup; a full or closed channel needs no action.
+                    let _ = hotkey_tx.try_send(());
+                    ctx.request_repaint();
+                }
+            }
+        }
+    }
+
+    fn grab_quote_key(
+        conn: &x11rb::rust_connection::RustConnection,
+        root: u32,
+        grabs: &mut Vec<(u8, ModMask)>,
+        hk: HotKey,
+    ) -> Result<(), ()> {
+        let kc = find_quote_keycode(conn).ok_or(())?;
+        let mods = mods_to_x11(hk.mods);
+        let ok = ignored_mods().into_iter().all(|m| {
+            conn.grab_key(false, root, mods | m, kc, GrabMode::ASYNC, GrabMode::ASYNC)
+                .is_ok()
+        });
+        let _ = conn.flush();
+        if ok {
+            grabs.push((kc, mods));
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn handle_x11_msg(
+        conn: &x11rb::rust_connection::RustConnection,
+        root: u32,
+        grabs: &mut Vec<(u8, ModMask)>,
+        msg: Msg,
+    ) -> bool {
+        match msg {
+            Msg::Register(hk, reply) => {
+                let _ = reply.send(grab_quote_key(conn, root, grabs, hk));
+                true
+            }
+            Msg::Clear => {
+                ungrab_all(conn, root, grabs);
+                true
+            }
+            Msg::Shutdown => {
+                ungrab_all(conn, root, grabs);
+                false
+            }
+        }
+    }
+
+    fn run_loop(rx: &mpsc::Receiver<Msg>, hotkey_tx: &SyncSender<()>, ctx: &egui::Context) {
+        let Ok((conn, screen_num)) = x11rb::connect(None) else {
+            // Still drain messages until shutdown so callers don't block
+            drain_until_shutdown(rx);
+            return;
+        };
+        let Some(root) = conn.setup().roots.get(screen_num).map(|s| s.root) else {
+            return;
+        };
+
+        let mut grabs: Vec<(u8, ModMask)> = Vec::new();
+        let full_mask =
+            KeyButMask::CONTROL | KeyButMask::SHIFT | KeyButMask::MOD4 | KeyButMask::MOD1;
+
+        loop {
+            if !grabs.is_empty() {
+                poll_x11_key_events(&conn, &grabs, full_mask, hotkey_tx, ctx);
+            }
+
+            let next_msg = if grabs.is_empty() {
+                // Zero idle wakeups while no fallback Quote hotkey is registered.
+                rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+            } else {
+                rx.recv_timeout(Duration::from_millis(50))
+            };
+
+            match next_msg {
+                Ok(msg) => {
+                    if !handle_x11_msg(&conn, root, &mut grabs, msg) {
+                        return;
+                    }
+                    loop {
+                        match rx.try_recv() {
+                            Ok(msg) => {
+                                if !handle_x11_msg(&conn, root, &mut grabs, msg) {
+                                    return;
+                                }
+                            }
+                            Err(mpsc::TryRecvError::Empty) => break,
+                            Err(mpsc::TryRecvError::Disconnected) => {
+                                ungrab_all(&conn, root, &mut grabs);
+                                return;
+                            }
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    ungrab_all(&conn, root, &mut grabs);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+pub(crate) use x11_quote_hotkey::QuoteHotkeyFallback;

@@ -17,6 +17,33 @@ pub(crate) mod macos;
 #[cfg(target_os = "windows")]
 pub(crate) mod windows;
 
+#[cfg(target_os = "linux")]
+pub(crate) use linux::QuoteHotkeyFallback;
+
+/// No-op Quote-key global hotkey fallback on non-Linux platforms.
+#[cfg(not(target_os = "linux"))]
+pub(crate) struct QuoteHotkeyFallback;
+
+#[cfg(not(target_os = "linux"))]
+impl QuoteHotkeyFallback {
+    #[must_use]
+    pub(crate) fn new(
+        _hotkey_tx: std::sync::mpsc::SyncSender<()>,
+        _ctx: eframe::egui::Context,
+    ) -> Self {
+        Self
+    }
+
+    #[must_use]
+    pub(crate) const fn try_register(&self, _hk: global_hotkey::hotkey::HotKey) -> bool {
+        false
+    }
+
+    pub(crate) const fn clear(&self) {}
+
+    pub(crate) const fn shutdown(&mut self) {}
+}
+
 /// Stores a clone of the `egui::Context` to immediately trigger repaints on OS activation.
 pub(crate) fn set_repaint_context(ctx: &eframe::egui::Context) {
     #[cfg(target_os = "macos")]
