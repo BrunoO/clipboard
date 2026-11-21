@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "151ea062-1b5d-4d51-b4d4-c595a119c360",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/tmp/arch-08-security.json",
+  "output": "/Users/brunoorsier/dev/clipboard/docs/architecture/08-security-trust-boundaries.html",
+  "specification": {
+    "sha256": "f45166e16ccd186432a7c74730b058a71829441a4caf1392b8c36d2d01508d82",
+    "bytes": 3637
+  },
+  "artifact": {
+    "sha256": "1506b88f531984ad72502a7734e1f20db658a3dbf11750450b4982f08c8b4696",
+    "bytes": 838661
+  }
+}
