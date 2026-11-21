@@ -224,7 +224,7 @@ impl ClipboardApp {
             }
             if !self.settings.custom_hotkey.is_empty() && ui.button("Clear").clicked() {
                 self.settings.custom_hotkey.clear();
-                let _ = self.settings.save(&self.db);
+                self.persist_settings();
                 self.update_hotkeys_from_settings();
                 self.pending_custom_hotkey.clear();
             }
@@ -335,7 +335,7 @@ impl ClipboardApp {
                 .changed()
             {
                 self.settings.hide_on_copy = hide_on_copy;
-                let _ = self.settings.save(&self.db);
+                self.persist_settings();
             }
 
             let mut hide_on_blur = self.settings.hide_on_blur;
@@ -344,7 +344,7 @@ impl ClipboardApp {
                 .changed()
             {
                 self.settings.hide_on_blur = hide_on_blur;
-                let _ = self.settings.save(&self.db);
+                self.persist_settings();
             }
 
             let mut restore_focus = self.settings.restore_focus;
@@ -356,7 +356,7 @@ impl ClipboardApp {
                 .changed()
             {
                 self.settings.restore_focus = restore_focus;
-                let _ = self.settings.save(&self.db);
+                self.persist_settings();
             }
 
             let mut auto_paste = self.settings.auto_paste;
@@ -368,7 +368,7 @@ impl ClipboardApp {
                 .changed()
             {
                 self.settings.auto_paste = auto_paste;
-                let _ = self.settings.save(&self.db);
+                self.persist_settings();
             }
 
             #[cfg(target_os = "macos")]
@@ -427,7 +427,7 @@ impl ClipboardApp {
                             self.settings.max_history = limit;
                             self.db.set_max_history(limit);
                             let _ = self.db.prune_history(limit);
-                            let _ = self.settings.save(&self.db);
+                            self.persist_settings();
                             self.refresh_items();
                         }
                     }
@@ -474,7 +474,7 @@ impl ClipboardApp {
                 .changed()
             {
                 self.db.set_ignore_concealed(self.settings.ignore_concealed);
-                let _ = self.settings.save(&self.db);
+                self.persist_settings();
             }
 
             ui.add_space(4.0);
@@ -490,7 +490,7 @@ impl ClipboardApp {
             {
                 self.db
                     .set_auto_detect_secrets(self.settings.auto_detect_secrets);
-                let _ = self.settings.save(&self.db);
+                self.persist_settings();
             }
 
             ui.add_space(6.0);
@@ -531,7 +531,7 @@ impl ClipboardApp {
                         let label = format_secret_clear_secs(secs);
                         if ui.selectable_value(&mut clear_secs, secs, label).clicked() {
                             self.settings.auto_clear_secret_secs = secs;
-                            let _ = self.settings.save(&self.db);
+                            self.persist_settings();
                         }
                     }
                 });

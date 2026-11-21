@@ -331,6 +331,16 @@ impl ClipboardApp {
         ));
     }
 
+    fn persist_settings(&mut self) {
+        if let Err(error) = self.settings.save(&self.db) {
+            crate::logging::log_message("ERROR", &format!("Failed to save settings: {error}"));
+            self.show_error_toast(&format!(
+                "{} Failed to save settings. Changes will be lost on restart.",
+                icons::WARNING
+            ));
+        }
+    }
+
     fn show_toast_severity(&mut self, message: &str, severity: ToastSeverity) {
         self.toast = Some(Toast {
             message: message.to_string(),
@@ -1392,7 +1402,7 @@ impl ClipboardApp {
             // Allow dismissing by clicking the backdrop.
             self.show_keyring_explanation = false;
             self.settings.keyring_explanation_shown = true;
-            let _ = self.settings.save(&self.db);
+            self.persist_settings();
         }
 
         let (title_icon, title, heading, body) =
@@ -1448,7 +1458,7 @@ impl ClipboardApp {
                     {
                         self.show_keyring_explanation = false;
                         self.settings.keyring_explanation_shown = true;
-                        let _ = self.settings.save(&self.db);
+                        self.persist_settings();
                     }
                 });
                 ui.add_space(4.0_f32);
@@ -1458,7 +1468,7 @@ impl ClipboardApp {
         if !open {
             self.show_keyring_explanation = false;
             self.settings.keyring_explanation_shown = true;
-            let _ = self.settings.save(&self.db);
+            self.persist_settings();
         }
     }
 }

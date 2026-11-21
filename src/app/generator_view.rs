@@ -7,7 +7,7 @@ impl ClipboardApp {
         self.settings.password_config = self.password_gen.config.clone();
         self.settings.generator_skip_history = self.password_gen.skip_history;
         self.settings.generator_reveal_value = self.password_gen.reveal_value;
-        let _ = self.settings.save(&self.db);
+        self.persist_settings();
     }
 
     pub(super) fn render_generator_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
