@@ -1,5 +1,3 @@
-#![allow(clippy::missing_const_for_fn)]
-
 //! Cross-platform focus restoration and simulated paste automation.
 //!
 //! When `CipherClipboard` is summoned via a global hotkey, it takes OS window focus.
@@ -61,6 +59,13 @@ pub(crate) fn is_app_active_state() -> Option<bool> {
 /// Returns `true` on Windows when the current keyboard layout produces `ù` for the
 /// physical key in the US `Quote` position (French/Belgian AZERTY layouts).
 #[must_use]
+#[cfg_attr(
+    not(target_os = "windows"),
+    expect(
+        clippy::missing_const_for_fn,
+        reason = "non-Windows stub keeps the cross-platform facade uniform"
+    )
+)]
 pub(crate) fn quote_key_is_ugrave() -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -73,6 +78,13 @@ pub(crate) fn quote_key_is_ugrave() -> bool {
 }
 
 /// Applies the platform title-bar dark mode attribute where supported (Windows DWM).
+#[cfg_attr(
+    not(target_os = "windows"),
+    expect(
+        clippy::missing_const_for_fn,
+        reason = "non-Windows stub keeps the cross-platform facade uniform"
+    )
+)]
 pub(crate) fn set_title_bar_dark_mode(is_dark: bool) {
     #[cfg(target_os = "windows")]
     {

@@ -1571,7 +1571,10 @@ fn format_recorded_hotkey(modifiers: egui::Modifiers, key: egui::Key) -> Option<
     Some(parts.join("+"))
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "exhaustive egui::Key mapping is kept in one place for hotkey editor auditability"
+)]
 fn egui_key_to_hotkey_name(key: egui::Key) -> Option<&'static str> {
     let name = match key {
         egui::Key::Space => "Space",
