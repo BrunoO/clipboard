@@ -141,6 +141,19 @@ impl FilterCounts {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToastSeverity {
+    Success,
+    Warning,
+    Error,
+}
+
+struct Toast {
+    message: String,
+    severity: ToastSeverity,
+    shown_at: Instant,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct ClipboardApp {
     db: Database,
@@ -150,8 +163,8 @@ pub(crate) struct ClipboardApp {
     items: Vec<ClipboardItem>,
     filter_counts: FilterCounts,
     clipboard_writer: Option<Clipboard>,
-    toast: Option<(String, Instant)>,
-    pending_toast: Option<String>,
+    toast: Option<Toast>,
+    pending_toast: Option<(String, ToastSeverity)>,
     last_query_cached: String,
     notify_rx: Receiver<()>,
     hotkey_rx: Receiver<()>,
@@ -213,10 +226,11 @@ impl ClipboardApp {
             Ok(items) => items,
             Err(e) => {
                 eprintln!("⚠️ Failed to load clipboard history: {e}");
-                startup_toast = Some((
-                    format!("{} Failed to load history: {e}", icons::WARNING),
-                    Instant::now(),
-                ));
+                startup_toast = Some(Toast {
+                    message: format!("{} Failed to load history: {e}", icons::WARNING),
+                    severity: ToastSeverity::Error,
+                    shown_at: Instant::now(),
+                });
                 Vec::new()
             }
         };
@@ -298,7 +312,50 @@ impl ClipboardApp {
     }
 
     fn show_toast(&mut self, message: &str) {
-        self.toast = Some((message.to_string(), Instant::now()));
+        self.show_toast_severity(message, ToastSeverity::Success);
+    }
+
+    fn show_warning_toast(&mut self, message: &str) {
+        self.show_toast_severity(message, ToastSeverity::Warning);
+    }
+
+    fn show_error_toast(&mut self, message: &str) {
+        self.show_toast_severity(message, ToastSeverity::Error);
+    }
+
+    fn show_toast_severity(&mut self, message: &str, severity: ToastSeverity) {
+        self.toast = Some(Toast {
+            message: message.to_string(),
+            severity,
+            shown_at: Instant::now(),
+        });
+    }
+
+    const fn keyring_explanation_copy(
+        mode: crate::crypto::KeyStorageMode,
+    ) -> (&'static str, &'static str, &'static str, &'static str) {
+        match mode {
+            crate::crypto::KeyStorageMode::OsKeyring => (
+                icons::SHIELD_CHECK,
+                "Secure Key Storage",
+                "CipherClipboard uses your OS keyring",
+                "To keep your clipboard history encrypted, CipherClipboard stores a 256-bit \
+                 encryption key in your operating system's secure credential store (macOS \
+                 Keychain, Windows Credential Manager, or Linux Secret Service). You may see an \
+                 OS permission prompt the first time this happens. This prompt will not appear \
+                 again unless you reinstall or reset the app.",
+            ),
+            crate::crypto::KeyStorageMode::LocalFileFallback => (
+                icons::WARNING,
+                "Local Key File Fallback",
+                "CipherClipboard is using a local key file",
+                "The OS keyring was unavailable, so CipherClipboard generated a restricted local \
+                 .encryption_key file in the app data directory. Your history stays encrypted, \
+                 but this is a degraded state. Unlock the keyring and restart if you want the key \
+                 migrated. This prompt will not appear again unless you reinstall or reset the \
+                 app.",
+            ),
+        }
     }
 
     fn show_window(&mut self, ctx: &egui::Context) {
@@ -316,8 +373,8 @@ impl ClipboardApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         self.refresh_items();
-        if let Some(msg) = self.pending_toast.take() {
-            self.show_toast(&msg);
+        if let Some((msg, severity)) = self.pending_toast.take() {
+            self.show_toast_severity(&msg, severity);
         }
         self.focus_search_input = true;
         ctx.request_repaint();
@@ -363,10 +420,11 @@ impl ClipboardApp {
                 "WARN",
                 "Auto-paste blocked: target app runs as Administrator",
             );
-            self.pending_toast = Some(
+            self.pending_toast = Some((
                 "Auto-paste blocked: target app runs as Administrator. Paste manually (Ctrl+V)."
                     .to_string(),
-            );
+                ToastSeverity::Warning,
+            ));
         }
 
         if restore_focus || auto_paste {
@@ -431,12 +489,12 @@ impl ClipboardApp {
 
     fn copy_text_to_clipboard(&mut self, content: &str, ctx: &egui::Context) {
         let Some(cb) = self.ensure_clipboard_writer() else {
-            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            self.show_warning_toast(&format!("{} Clipboard unavailable", icons::WARNING));
             return;
         };
         if let Err(e) = cb.set_text(content.to_string()) {
             eprintln!("Failed to write text to clipboard: {e}");
-            self.show_toast(&format!(
+            self.show_error_toast(&format!(
                 "{} Failed to copy text to clipboard",
                 icons::WARNING
             ));
@@ -450,13 +508,13 @@ impl ClipboardApp {
         self.db.skip_next_capture(secret);
         let Some(cb) = self.ensure_clipboard_writer() else {
             self.db.clear_skip_capture();
-            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            self.show_warning_toast(&format!("{} Clipboard unavailable", icons::WARNING));
             return;
         };
         if let Err(e) = cb.set_text(secret.to_string()) {
             self.db.clear_skip_capture();
             eprintln!("Failed to write secret to clipboard: {e}");
-            self.show_toast(&format!(
+            self.show_error_toast(&format!(
                 "{} Failed to copy secret to clipboard",
                 icons::WARNING
             ));
@@ -486,13 +544,13 @@ impl ClipboardApp {
 
         let Some(cb) = self.ensure_clipboard_writer() else {
             self.db.clear_skip_capture();
-            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            self.show_warning_toast(&format!("{} Clipboard unavailable", icons::WARNING));
             return;
         };
         if let Err(e) = cb.set_text(secret.as_str()) {
             self.db.clear_skip_capture();
             eprintln!("Failed to write generated password to clipboard: {e}");
-            self.show_toast(&format!(
+            self.show_error_toast(&format!(
                 "{} Failed to copy password to clipboard",
                 icons::WARNING
             ));
@@ -517,7 +575,7 @@ impl ClipboardApp {
 
     fn copy_image_to_clipboard(&mut self, png_bytes: &[u8], ctx: &egui::Context) {
         let Some(cb) = self.ensure_clipboard_writer() else {
-            self.show_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            self.show_warning_toast(&format!("{} Clipboard unavailable", icons::WARNING));
             return;
         };
         match media::png_to_rgba(png_bytes) {
@@ -529,7 +587,7 @@ impl ClipboardApp {
                 };
                 if let Err(e) = cb.set_image(img_data) {
                     eprintln!("Failed to write image to clipboard: {e}");
-                    self.show_toast(&format!(
+                    self.show_error_toast(&format!(
                         "{} Failed to copy image to clipboard",
                         icons::WARNING
                     ));
@@ -540,7 +598,7 @@ impl ClipboardApp {
             }
             Err(e) => {
                 eprintln!("Failed to decode PNG image for clipboard copy: {e}");
-                self.show_toast(&format!(
+                self.show_error_toast(&format!(
                     "{} Failed to decode image for clipboard",
                     icons::WARNING
                 ));
@@ -1094,13 +1152,14 @@ impl ClipboardApp {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if let Some((msg, time)) = &self.toast {
-                        if time.elapsed() < Duration::from_secs(2) {
-                            ui.label(
-                                egui::RichText::new(msg)
-                                    .color(crate::theme::success_color(is_dark))
-                                    .strong(),
-                            );
+                    if let Some(toast) = &self.toast {
+                        if toast.shown_at.elapsed() < Duration::from_secs(2) {
+                            let color = match toast.severity {
+                                ToastSeverity::Success => crate::theme::success_color(is_dark),
+                                ToastSeverity::Warning => crate::theme::warning_color(is_dark),
+                                ToastSeverity::Error => crate::theme::error_color(is_dark),
+                            };
+                            ui.label(egui::RichText::new(&toast.message).color(color).strong());
                         } else {
                             self.toast = None;
                         }
@@ -1307,9 +1366,23 @@ impl ClipboardApp {
             let _ = self.settings.save(&self.db);
         }
 
+        let (title_icon, title, heading, body) =
+            Self::keyring_explanation_copy(self.key_storage_mode);
+        let is_fallback = self.key_storage_mode == crate::crypto::KeyStorageMode::LocalFileFallback;
+        let heading_color = if is_fallback {
+            crate::theme::warning_color(is_dark)
+        } else {
+            crate::theme::text_primary(is_dark)
+        };
+        let body_color = if is_fallback {
+            crate::theme::warning_color(is_dark)
+        } else {
+            crate::theme::text_secondary(is_dark)
+        };
+
         let mut open = self.show_keyring_explanation;
         Self::modal_window(
-            format!("{} Secure Key Storage", icons::SHIELD_CHECK),
+            format!("{title_icon} {title}"),
             &mut open,
             ctx,
             is_dark,
@@ -1320,24 +1393,13 @@ impl ClipboardApp {
             ui.vertical_centered(|ui| {
                 ui.add_space(4.0_f32);
                 ui.label(
-                    egui::RichText::new("CipherClipboard uses your OS keyring")
-                        .color(crate::theme::text_primary(is_dark))
+                    egui::RichText::new(heading)
+                        .color(heading_color)
                         .strong()
                         .size(15.0_f32),
                 );
                 ui.add_space(8.0_f32);
-                ui.label(
-                    egui::RichText::new(
-                        "To keep your clipboard history encrypted, CipherClipboard stores a \
-                         256-bit encryption key in your operating system's secure credential \
-                         store (macOS Keychain, Windows Credential Manager, or Linux Secret \
-                         Service). You may see an OS permission prompt the first time this \
-                         happens. This prompt will not appear again unless you reinstall or \
-                         reset the app.",
-                    )
-                    .size(12.0_f32)
-                    .color(crate::theme::text_secondary(is_dark)),
-                );
+                ui.label(egui::RichText::new(body).size(12.0_f32).color(body_color));
                 ui.add_space(16.0_f32);
 
                 ui.horizontal(|ui| {
@@ -1692,7 +1754,7 @@ fn render_view_toggle_button(
 
 #[cfg(test)]
 mod tests {
-    use super::ClipboardApp;
+    use super::{ClipboardApp, ToastSeverity};
     use eframe::egui;
 
     #[test]
@@ -1767,14 +1829,18 @@ mod tests {
 
         // Verify TrayAction::Show restores visibility and surfaces any pending toast
         app.is_visible = false;
-        app.pending_toast = Some("Auto-paste blocked".to_string());
+        app.pending_toast = Some(("Auto-paste blocked".to_string(), ToastSeverity::Warning));
         tray_tx.send(super::TrayAction::Show).unwrap();
         app.handle_tray_events(&ctx);
         assert!(app.is_visible);
         assert!(app.pending_toast.is_none());
         assert_eq!(
-            app.toast.as_ref().map(|(msg, _)| msg.as_str()),
+            app.toast.as_ref().map(|toast| toast.message.as_str()),
             Some("Auto-paste blocked")
+        );
+        assert_eq!(
+            app.toast.as_ref().map(|toast| toast.severity),
+            Some(ToastSeverity::Warning)
         );
 
         // Verify TrayAction::OpenSettings switches view and shows window
@@ -1788,5 +1854,23 @@ mod tests {
         tray_tx.send(super::TrayAction::Quit).unwrap();
         app.handle_tray_events(&ctx);
         assert!(app.is_quitting);
+    }
+
+    #[test]
+    fn test_keyring_explanation_copy_matches_storage_mode() {
+        let (os_icon, os_title, os_heading, os_body) =
+            ClipboardApp::keyring_explanation_copy(crate::crypto::KeyStorageMode::OsKeyring);
+        assert_eq!(os_title, "Secure Key Storage");
+        assert!(os_heading.contains("OS keyring"));
+        assert!(os_body.contains("credential store"));
+
+        let (fallback_icon, fallback_title, fallback_heading, fallback_body) =
+            ClipboardApp::keyring_explanation_copy(
+                crate::crypto::KeyStorageMode::LocalFileFallback,
+            );
+        assert_eq!(fallback_title, "Local Key File Fallback");
+        assert!(fallback_heading.contains("local key file"));
+        assert!(fallback_body.contains(".encryption_key"));
+        assert_ne!(os_icon, fallback_icon);
     }
 }

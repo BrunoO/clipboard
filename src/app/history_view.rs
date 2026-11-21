@@ -185,7 +185,7 @@ impl ClipboardApp {
 
     fn open_url_in_browser(&mut self, raw_url: &str) {
         let Some(safe_url) = sanitize_browser_url(raw_url) else {
-            self.show_toast(&format!(
+            self.show_warning_toast(&format!(
                 "{} Blocked invalid or unsupported URL scheme.",
                 icons::WARNING
             ));
@@ -193,7 +193,7 @@ impl ClipboardApp {
         };
         if let Err(e) = webbrowser::open(&safe_url) {
             eprintln!("Failed to open link in browser: {e}");
-            self.show_toast(&format!("{} Failed to open browser.", icons::WARNING));
+            self.show_warning_toast(&format!("{} Failed to open browser.", icons::WARNING));
         } else {
             self.show_toast(&format!(
                 "{} Opened in default browser!",

@@ -142,7 +142,7 @@ impl ClipboardApp {
                         preset.badge()
                     ));
                 } else {
-                    self.show_toast(&format!(
+                    self.show_warning_toast(&format!(
                         "{} Could not register {} (may be in use by OS)",
                         icons::WARNING,
                         preset.badge()
@@ -162,7 +162,7 @@ impl ClipboardApp {
                     icons::CHECK
                 ));
             } else {
-                self.show_toast(&format!(
+                self.show_warning_toast(&format!(
                     "{} Could not re-register hotkeys (may be in use by OS)",
                     icons::WARNING
                 ));
@@ -307,14 +307,14 @@ impl ClipboardApp {
                     self.settings.custom_hotkey
                 ));
             } else {
-                self.show_toast(&format!(
+                self.show_warning_toast(&format!(
                     "{} Could not register {} (may be in use by OS)",
                     icons::WARNING,
                     self.settings.custom_hotkey
                 ));
             }
         } else {
-            self.show_toast(&format!("{} Invalid hotkey format", icons::WARNING));
+            self.show_warning_toast(&format!("{} Invalid hotkey format", icons::WARNING));
         }
         self.recording_custom_hotkey = false;
         self.pending_custom_hotkey.clear();

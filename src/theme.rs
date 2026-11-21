@@ -388,6 +388,16 @@ pub(crate) const fn warning_color(is_dark: bool) -> Color32 {
     }
 }
 
+/// High-contrast error message color for failure toasts.
+#[must_use]
+pub(crate) const fn error_color(is_dark: bool) -> Color32 {
+    if is_dark {
+        Color32::from_rgb(255, 110, 110)
+    } else {
+        Color32::from_rgb(180, 25, 25)
+    }
+}
+
 /// High-contrast interactive URL link color (WCAG AA compliant: >= 5.5:1 contrast).
 #[must_use]
 pub(crate) const fn link_color(is_dark: bool) -> Color32 {
