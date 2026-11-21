@@ -167,13 +167,25 @@ impl std::fmt::Debug for Database {
     }
 }
 
+/// Returns `true` if the SQLite error represents an expected "duplicate column name" error
+/// when running `ALTER TABLE` schema migrations on an already-migrated database.
+fn is_duplicate_column_error(err: &rusqlite::Error) -> bool {
+    if let rusqlite::Error::SqliteFailure(ffi_err, Some(msg)) = err {
+        // SQLite uses generic SQLITE_ERROR (extended_code 1) for duplicate column additions,
+        // with the error message prefixed by "duplicate column name".
+        ffi_err.extended_code == 1 && msg.starts_with("duplicate column name")
+    } else {
+        false
+    }
+}
+
 impl Database {
     /// Opens or creates the SQLite database, unlocks it with the `SQLCipher` key,
     /// enables WAL mode for high performance concurrency, and initializes or migrates the schema.
     ///
     /// # Errors
     /// Returns an error if the file cannot be opened, the encryption key is rejected,
-    /// or SQLite pragmas/schema initialization fail.
+    /// or SQLite pragmas/schema initialization/migration fail.
     pub(crate) fn open(
         path: &Path,
         encryption_key: &str,
@@ -221,7 +233,10 @@ impl Database {
             );",
         )?;
 
-        // Graceful migration: ensure all columns exist if created with an older schema
+        // Graceful migration: ensure all columns exist if created with an older schema.
+        // SQLite does not support `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so duplicate-column
+        // errors from already migrated schemas are filtered via `is_duplicate_column_error`.
+        // Any unexpected migration failure immediately aborts `Database::open`.
         for sql in [
             "ALTER TABLE clipboard_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'",
             "ALTER TABLE clipboard_history ADD COLUMN image_data BLOB",
@@ -229,9 +244,8 @@ impl Database {
             "ALTER TABLE clipboard_history ADD COLUMN height INTEGER",
         ] {
             if let Err(e) = conn.execute(sql, []) {
-                let msg = e.to_string();
-                if !msg.contains("duplicate column name") {
-                    eprintln!("⚠️ Schema migration failed for `{sql}`: {e}");
+                if !is_duplicate_column_error(&e) {
+                    return Err(format!("Schema migration failed for `{sql}`: {e}").into());
                 }
             }
         }
@@ -1402,5 +1416,77 @@ mod tests {
         assert_eq!(items_after_preserve.len(), 2);
         assert_eq!(items_after_preserve[0].id, id2);
         assert_eq!(items_after_preserve[1].id, id1);
+    }
+
+    #[test]
+    fn test_is_duplicate_column_error_classifier() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("dup_column_classifier.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("CREATE TABLE t (col1 TEXT);").unwrap();
+
+        // Adding col1 again produces an actual duplicate column error
+        let dup_err = conn
+            .execute("ALTER TABLE t ADD COLUMN col1 TEXT", [])
+            .unwrap_err();
+        assert!(
+            is_duplicate_column_error(&dup_err),
+            "Expected duplicate column error to be classified as true"
+        );
+
+        // A syntax error or missing table error must NOT be classified as duplicate column error
+        let syntax_err = conn.execute("INVALID SQL STATEMENT", []).unwrap_err();
+        assert!(
+            !is_duplicate_column_error(&syntax_err),
+            "Syntax error must not be classified as duplicate column error"
+        );
+
+        let missing_table_err = conn
+            .execute("ALTER TABLE nonexistent ADD COLUMN col1 TEXT", [])
+            .unwrap_err();
+        assert!(
+            !is_duplicate_column_error(&missing_table_err),
+            "Missing table error must not be classified as duplicate column error"
+        );
+    }
+
+    #[test]
+    fn test_schema_migration_unexpected_error_aborts_open() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("migration_failure.db");
+        let key = test_hex_key(1);
+
+        // Pre-create an encrypted database where clipboard_history already has the maximum
+        // number of columns allowed by SQLite (2000).
+        // During Database::open, the migration statement attempting to ALTER TABLE fails because
+        // the table exceeds SQLite's column limit. Since this is not a duplicate column error,
+        // it exercises the unexpected migration failure abort path.
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.pragma_update(None, "key", &key).unwrap();
+            let mut cols = String::with_capacity(2000 * 8);
+            for i in 0..1998 {
+                use std::fmt::Write as _;
+                let _ = write!(cols, ", c{i} INT");
+            }
+            conn.execute_batch(&format!(
+                "CREATE TABLE clipboard_history (id INTEGER PRIMARY KEY, kind TEXT{cols});"
+            ))
+            .unwrap();
+        }
+
+        let open_res = Database::open(&db_path, &key);
+        assert!(
+            open_res.is_err(),
+            "Database::open must fail when schema migration encounters an unexpected error"
+        );
+
+        let err_msg = open_res.err().unwrap().to_string();
+        assert!(
+            err_msg.contains(
+                "Schema migration failed for `ALTER TABLE clipboard_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'`"
+            ),
+            "Error message must provide migration context with failing SQL statement, got: {err_msg}"
+        );
     }
 }
