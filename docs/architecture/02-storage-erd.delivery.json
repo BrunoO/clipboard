@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "493889bc-1e0c-4435-b2f4-190b73c744b9",
+  "status": "current",
+  "command": "deliver",
+  "type": "erd",
+  "input": "/tmp/arch-02-storage.json",
+  "output": "/Users/brunoorsier/dev/clipboard/docs/architecture/02-storage-erd.html",
+  "specification": {
+    "sha256": "235425de4e854b07e6a08dfda0b718beea724adc34ce95dd486e0569d80b2667",
+    "bytes": 2082
+  },
+  "artifact": {
+    "sha256": "75350d7f2f254e2dcd1ba7f43542f69f137ab68ebc39700eaeb225dfd56c31ef",
+    "bytes": 839148
+  }
+}
