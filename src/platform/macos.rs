@@ -266,7 +266,7 @@ pub(crate) fn open_accessibility_settings() {
 }
 
 pub(super) fn capture_frontmost() {
-    // SAFETY: Autoreleased; `NSWorkspace` and its frontmost app are null-checked before messaging, and only the PID scalar is read.
+    // SAFETY: Autoreleased; `NSWorkspace` and its frontmost app are null-checked before messaging, and PIDs are converted/compared without truncation.
     objc::rc::autoreleasepool(|| unsafe {
         let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
         if workspace.is_null() {
@@ -277,7 +277,9 @@ pub(super) fn capture_frontmost() {
             return;
         }
         let pid: i32 = msg_send![frontmost, processIdentifier];
-        let our_pid = std::process::id() as i32;
+        let Ok(our_pid) = i32::try_from(std::process::id()) else {
+            return;
+        };
 
         if pid > 0 && pid != our_pid {
             PREVIOUS_APP_PID.store(pid, Ordering::Relaxed);
@@ -435,8 +437,8 @@ pub(super) fn mark_clipboard_concealed() {
         }
         let nil_obj: *mut Object = std::ptr::null_mut();
         for marker in [
-            b"org.nspasteboard.ConcealedType\0".as_slice(),
-            b"org.nspasteboard.TransientType\0".as_slice(),
+            c"org.nspasteboard.ConcealedType",
+            c"org.nspasteboard.TransientType",
         ] {
             let type_str: *mut Object =
                 msg_send![class!(NSString), stringWithUTF8String: marker.as_ptr()];
