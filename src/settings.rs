@@ -558,8 +558,8 @@ impl AppSettings {
     /// Saves the settings to the database.
     ///
     /// # Errors
-    /// Returns an error if settings serialization or the database write fails.
-    pub(crate) fn save(&self, db: &Database) -> Result<(), Box<dyn std::error::Error>> {
+    /// Returns [`SettingsError`] if settings serialization or the database write fails.
+    pub(crate) fn save(&self, db: &Database) -> Result<(), SettingsError> {
         let json = serde_json::to_string(self)?;
         db.set_setting(Self::SETTINGS_KEY, &json)?;
         Ok(())
@@ -572,6 +572,45 @@ impl AppSettings {
                 .map_or_else(Vec::new, |parsed| vec![parsed.to_hotkey()]),
             _ => self.hotkey.to_hotkeys(),
         }
+    }
+}
+
+/// Domain error type for settings persistence operations.
+#[derive(Debug)]
+pub(crate) enum SettingsError {
+    /// Failed to serialize settings to JSON.
+    Serialization(serde_json::Error),
+    /// Failed to write serialized settings into the database.
+    Database(rusqlite::Error),
+}
+
+impl std::fmt::Display for SettingsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Serialization(err) => write!(f, "Failed to serialize settings: {err}"),
+            Self::Database(err) => write!(f, "Failed to write settings to database: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for SettingsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Serialization(err) => Some(err),
+            Self::Database(err) => Some(err),
+        }
+    }
+}
+
+impl From<serde_json::Error> for SettingsError {
+    fn from(err: serde_json::Error) -> Self {
+        Self::Serialization(err)
+    }
+}
+
+impl From<rusqlite::Error> for SettingsError {
+    fn from(err: rusqlite::Error) -> Self {
+        Self::Database(err)
     }
 }
 
@@ -738,5 +777,13 @@ mod tests {
 
         let loaded = AppSettings::load(&db);
         assert_eq!(loaded, AppSettings::default());
+    }
+
+    #[test]
+    fn test_settings_error_display() {
+        let json_err = serde_json::from_str::<AppSettings>("{invalid").unwrap_err();
+        let err = SettingsError::Serialization(json_err);
+        assert!(err.to_string().contains("Failed to serialize settings"));
+        assert!(std::error::Error::source(&err).is_some());
     }
 }

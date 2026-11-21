@@ -3,24 +3,70 @@ use std::io::Cursor;
 
 const MAX_IMAGE_PIXELS: usize = 40_000_000; // Guard against decompression bombs (~40 MP)
 
+/// Domain error type for media encoding and decoding operations.
+#[derive(Debug)]
+pub(crate) enum MediaError {
+    /// Dimension value exceeds the host system integer limits.
+    DimensionOverflow,
+    /// Image dimensions exceed the maximum safe decompression guard (~40 MP) or are zero.
+    ExcessiveDimensions { width: usize, height: usize },
+    /// Buffer length does not match width * height * 4 for RGBA format.
+    InvalidBufferLength,
+    /// Underling image codec error.
+    Image(image::ImageError),
+}
+
+impl std::fmt::Display for MediaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DimensionOverflow => write!(f, "Image dimensions exceed integer limits"),
+            Self::ExcessiveDimensions { width, height } => {
+                write!(
+                    f,
+                    "Image dimensions ({width}x{height}) exceed maximum safe limit of {MAX_IMAGE_PIXELS} pixels"
+                )
+            }
+            Self::InvalidBufferLength => write!(f, "Invalid image dimensions or byte length"),
+            Self::Image(err) => write!(f, "Image processing error: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for MediaError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Image(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<image::ImageError> for MediaError {
+    fn from(err: image::ImageError) -> Self {
+        Self::Image(err)
+    }
+}
+
+impl From<std::num::TryFromIntError> for MediaError {
+    fn from(_: std::num::TryFromIntError) -> Self {
+        Self::DimensionOverflow
+    }
+}
+
 /// Encodes raw RGBA bytes into PNG format.
 ///
 /// # Errors
-/// Returns an error if the dimensions or buffer length are invalid, the image
+/// Returns [`MediaError`] if the dimensions or buffer length are invalid, the image
 /// exceeds the allocation guard, or PNG encoding fails.
-pub(crate) fn rgba_to_png(
-    width: usize,
-    height: usize,
-    rgba: &[u8],
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+pub(crate) fn rgba_to_png(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, MediaError> {
     if width.saturating_mul(height) > MAX_IMAGE_PIXELS {
-        return Err("Image dimensions exceed maximum safe limit".into());
+        return Err(MediaError::ExcessiveDimensions { width, height });
     }
     let width_u32 = u32::try_from(width)?;
     let height_u32 = u32::try_from(height)?;
 
     let img: RgbaImage = ImageBuffer::from_raw(width_u32, height_u32, rgba.to_vec())
-        .ok_or("Invalid image dimensions or byte length")?;
+        .ok_or(MediaError::InvalidBufferLength)?;
 
     let mut png_bytes = Vec::new();
     img.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)?;
@@ -31,18 +77,16 @@ pub(crate) fn rgba_to_png(
 /// and applying decoder memory limits *before* allocating the pixel buffer.
 ///
 /// # Errors
-/// Returns an error if the PNG header is invalid, the image exceeds the allocation
+/// Returns [`MediaError`] if the PNG header is invalid, the image exceeds the allocation
 /// guard, or decoding to RGBA fails.
-pub(crate) fn png_to_rgba(
-    png_bytes: &[u8],
-) -> Result<(usize, usize, Vec<u8>), Box<dyn std::error::Error + Send + Sync>> {
+pub(crate) fn png_to_rgba(png_bytes: &[u8]) -> Result<(usize, usize, Vec<u8>), MediaError> {
     let (header_w, header_h) =
         image::ImageReader::with_format(Cursor::new(png_bytes), image::ImageFormat::Png)
             .into_dimensions()?;
     let width = usize::try_from(header_w)?;
     let height = usize::try_from(header_h)?;
     if width == 0 || height == 0 || width.saturating_mul(height) > MAX_IMAGE_PIXELS {
-        return Err("Image dimensions exceed maximum safe limit".into());
+        return Err(MediaError::ExcessiveDimensions { width, height });
     }
 
     let mut reader =
@@ -88,7 +132,21 @@ mod tests {
     #[test]
     fn test_oversized_image_rejected() {
         let err = rgba_to_png(10_000, 10_000, &[]).unwrap_err();
+        assert!(matches!(
+            err,
+            MediaError::ExcessiveDimensions {
+                width: 10_000,
+                height: 10_000
+            }
+        ));
         assert!(err.to_string().contains("exceed maximum safe limit"));
+    }
+
+    #[test]
+    fn test_invalid_buffer_length_rejected() {
+        let err = rgba_to_png(2, 2, &[255, 0, 0]).unwrap_err();
+        assert!(matches!(err, MediaError::InvalidBufferLength));
+        assert_eq!(err.to_string(), "Invalid image dimensions or byte length");
     }
 
     #[test]
@@ -108,6 +166,13 @@ mod tests {
         crafted.extend_from_slice(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]);
 
         let err = png_to_rgba(&crafted).unwrap_err();
+        assert!(matches!(
+            err,
+            MediaError::ExcessiveDimensions {
+                width: 10_000,
+                height: 10_000
+            }
+        ));
         assert!(
             err.to_string().contains("exceed maximum safe limit"),
             "Unexpected error: {err}"
