@@ -134,26 +134,52 @@ The table below catalogs high-value transformations for a clipboard manager, not
 | **5. Encoding & Escaping** | Base64 encode/decode (UTF-8 validated); URL percent-encode/decode; JSON string escape/unescape; HTML entity encode/decode; Hex encode/decode | Text, Code, URL | `url` and `serde_json` already in `Cargo.toml` |
 | **6. Structured Data & Code** | JSON Prettify *(exists)*, JSON Minify, JSON Sort Keys; CSV/TSV ↔ Markdown table or JSON; Unix epoch (s/ms) ↔ ISO-8601 | Code, numeric Text | `serde_json` and `chrono` already in `Cargo.toml` |
 | **7. URL & Extraction** | Strip tracking params (`utm_*`, `fbclid`, `gclid`, `mc_eid`, `igshid`, `ref`); Extract all URLs / Emails / IPs / Numbers from text | URL, Text, Code | `url::Url` already used in `src/db.rs` |
-| **8. Color & Media** | `#HEX` / `RGB` / `HSL` / `ARGB` *(exists in `src/color.rs`)*; Future: Image → Base64 data URI, resize/compress | Color, Image | Color is the existing precedent |
+| **8. Color & Media** | `#HEX` / `RGB` / `HSL` / `ARGB` *(exists in `src/color.rs`)*; **Image → Text (OCR)** *(see Section 6)*; Future: Image → Base64 data URI, resize/compress | Color, Image | Color is the existing precedent |
 
 ---
 
-## 6. Architecture, Security & Concurrency Invariants
+## 6. Media-to-Text Transformation: Image OCR
+
+Extracting text from a copied screenshot or image (`ItemKind::Image -> String`) is an on-demand, non-destructive transformation that fits directly into the `Transform` model while delegating platform-specific OCR to `src/platform/`.
+
+### 6.1 Platform Capabilities & APIs
+- **macOS (`src/platform/macos.rs`) — Apple Vision Framework (`VNRecognizeTextRequest`):**
+  - Available natively since **macOS 10.15+** (offline, hardware-accelerated, automatic language detection/correction).
+  - Pass the stored PNG bytes directly as `NSData` to `VNImageRequestHandler::initWithData:options:`, execute `VNRecognizeTextRequest` (`VNRequestTextRecognitionLevelAccurate`, `usesLanguageCorrection = true`), and collect `topCandidates(1)` from each `VNRecognizedTextObservation`.
+  - Uses `objc = "0.2"` already in `Cargo.toml` (wrapped in `autoreleasepool`, with all `unsafe` confined to `src/platform/macos.rs`) — **zero new crate dependencies**.
+- **Windows 10/11 (`src/platform/windows.rs`) — WinRT `Windows.Media.Ocr` (`OcrEngine`):**
+  - Available natively on **Windows 10/11**, offline, using installed Windows OCR language packs via `OcrEngine::TryCreateFromUserProfileLanguages()`.
+  - Decodes PNG bytes into a `SoftwareBitmap` (RGBA/BGRA8), calls `OcrEngine::RecognizeAsync`, and extracts `OcrResult::Lines()` / `Text()`.
+  - **Crate note:** `Cargo.toml` currently uses `windows-sys = "0.61"` (C-style Win32 bindings only, no WinRT COM projections). Implementing this cleanly requires adding the official `windows` crate under `[target.'cfg(target_os = "windows")'.dependencies]` with `Media_Ocr` / `Graphics_Imaging` features.
+  - **Graceful degradation:** If no Windows OCR language pack is installed (`TryCreateFromUserProfileLanguages()` returns `None`), return `OcrError::NoLanguagePack` and surface a warning toast.
+- **Linux (`src/platform/linux.rs`):**
+  - Linux has no built-in OS-wide OCR API.
+  - Expose `platform::supports_image_ocr() -> bool` (`false` in MVP, or `true` if `tesseract` is detected on `$PATH` as an optional CLI fallback without bundling native C++ Tesseract/Leptonica libraries).
+
+### 6.2 Concurrency & UI Integration
+- **Background execution (`docs/CONCURRENCY_AND_PERF_LESSONS.md`):** Because OCR can take 50–500 ms and WinRT/Vision calls block, OCR **must not** run on the `eframe` UI thread or inside `Mutex<Connection>`. Load the PNG bytes from `Database`, run `platform::extract_text_from_png(&png_bytes)` on a named background worker thread, and deliver the result to `App::logic()` via a channel.
+- **UI trigger:** Show an **`Extract Text`** button in `render_kind_extra_buttons` (and card context menu) when `item.kind == ItemKind::Image && platform::supports_image_ocr()`.
+- **Output:** Copy extracted text to the clipboard (or optionally allow saving as a new `Text` entry) with a toast reporting character/line count or `"No text detected in image."`.
+
+---
+
+## 7. Architecture, Security & Concurrency Invariants
 
 Any implementation must preserve the project's documented invariants:
-- **No `unsafe` (`Cargo.toml` / `AGENTS.md`):** `src/transform.rs` must be 100% safe Rust.
-- **Multiplatform (`docs/MULTIPLATFORM_LESSONS.md`):** Transformations are pure string/data operations with zero `#[cfg(target_os = ...)]` blocks. Keyboard shortcut labels (e.g., `Shift+Enter`) should use `src/platform/` helpers if platform-specific modifier naming is displayed.
+- **No `unsafe` (`Cargo.toml` / `AGENTS.md`):** `src/transform.rs` and `src/platform/mod.rs` / `linux.rs` must remain 100% safe Rust; any OCR FFI `unsafe` is strictly confined to `src/platform/macos.rs` and `src/platform/windows.rs`.
+- **Multiplatform (`docs/MULTIPLATFORM_LESSONS.md`):** Pure text transformations have zero `#[cfg(target_os = ...)]` blocks. Platform-dependent capabilities like OCR and shortcut labels are exposed via OS-agnostic helpers in `src/platform/mod.rs` (e.g., `supports_image_ocr()`, `extract_text_from_png()`).
 - **Secret handling (`docs/SECURITY_LESSONS.md`):**
-  - Never log clipboard or transformed content in release builds.
+  - Never log clipboard, OCR-extracted, or transformed content in release builds.
   - Wrap secret inputs/outputs in `zeroize::Zeroizing` where retained, and always dispatch `ItemKind::Secret` transforms through `copy_secret_to_clipboard` (`skip_next_capture`, `mark_clipboard_concealed()`, auto-clear timer).
 - **Performance & Concurrency (`docs/CONCURRENCY_AND_PERF_LESSONS.md`):**
-  - Transformations run on demand when the user triggers an action (or in bounded preview slices), never inside `Mutex<Connection>` critical sections and never blocking the `clipboard-monitor` thread with heavy work.
-  - Guard against pathological inputs (note `monitor.rs` already caps `MAX_TEXT_LENGTH` at 500 KB).
+  - Text transformations run on demand when the user triggers an action (or in bounded preview slices), never inside `Mutex<Connection>` critical sections and never blocking `clipboard-monitor`.
+  - Blocking/heavy transforms like Image OCR run on a dedicated named background worker, communicating results back to `App::logic()`.
+  - Guard against pathological inputs (note `monitor.rs` already caps `MAX_TEXT_LENGTH` at 500 KB and `MAX_IMAGE_PIXELS` at 40 MP).
 - **Static analysis:** Keep `clippy::pedantic` / `clippy::nursery` clean (`cargo fmt -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets`).
 
 ---
 
-## 7. Recommended Phased Rollout
+## 8. Recommended Phased Rollout
 
 1. **Phase 1 — Core Module & "Strip Source Formatting" MVP:**
    - Add `src/transform.rs` with `strip_source_formatting`, `has_strippable_formatting`, and comprehensive unit tests (ANSI, HTML entities/tags, Markdown, zero-width chars, CRLF/NBSP).
@@ -162,14 +188,18 @@ Any implementation must preserve the project's documented invariants:
 2. **Phase 2 — High-Value Generalized Transforms + Context Menu:**
    - Add Whitespace/PDF unwrap, Case/Identifier conversions, Line operations, JSON Minify, and URL tracking-param stripping (all zero new crates).
    - Add `Transform ▾` / right-click context menu on cards grouped by category.
-3. **Phase 3 — Quick Transform Palette & Optional Auto-Rules:**
+3. **Phase 3 — Image OCR (`ItemKind::Image -> Text`):**
+   - Add `platform::supports_image_ocr()` and `platform::extract_text_from_png()` (macOS Vision first with zero new crates, then Windows `windows` crate WinRT `OcrEngine`, plus optional Linux `tesseract` fallback).
+   - Wire background OCR worker → `App::logic()` → clipboard copy + toast.
+4. **Phase 4 — Quick Transform Palette & Optional Auto-Rules:**
    - Add `Cmd/Ctrl+T` searchable Transform Palette with live before/after preview.
    - Evaluate opt-in capture-time auto-transforms (e.g., URL tracking param stripping) in `AppSettings`.
 
 ---
 
-## 8. Open Questions
+## 9. Open Questions
 
-1. **History capture on transform:** When a user copies a transformed/raw version of an existing entry, should `db.skip_next_capture` be called (keeping history clean) or omitted (saving the transformed output as a new entry)?
+1. **History capture on transform:** When a user copies a transformed/raw/OCR version of an existing entry, should `db.skip_next_capture` be called (keeping history clean) or omitted (saving the transformed output as a new entry)?
 2. **URL tracking parameter list:** Should tracking-parameter stripping use a curated built-in list (`utm_*`, `fbclid`, `gclid`, etc.) with a Settings toggle for auto-strip?
 3. **Destructive vs. non-destructive:** Should Phase 1/2 remain strictly copy-only (like `Prettify`), or also offer *"Replace entry in history"*?
+4. **Linux OCR fallback:** Should `src/platform/linux.rs` return `Unsupported` in MVP, or shell out to `tesseract` when present on `$PATH`?
