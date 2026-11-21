@@ -319,13 +319,24 @@ impl ClipboardApp {
         } else {
             Some(self.search_query.as_str())
         };
-        self.items = self
-            .db
-            .get_recent(self.settings.max_history, filter)
-            .unwrap_or_default();
-        self.filter_counts = FilterCounts::from_items(&self.items);
-        let active_ids: HashSet<i64> = self.items.iter().map(|it| it.id).collect();
-        self.texture_cache.retain_active(&active_ids);
+        match self.db.get_recent(self.settings.max_history, filter) {
+            Ok(items) => {
+                self.items = items;
+                self.filter_counts = FilterCounts::from_items(&self.items);
+                let active_ids: HashSet<i64> = self.items.iter().map(|it| it.id).collect();
+                self.texture_cache.retain_active(&active_ids);
+            }
+            Err(error) => {
+                crate::logging::log_message(
+                    "ERROR",
+                    &format!("Failed to load clipboard history: {error}"),
+                );
+                self.show_error_toast(&format!(
+                    "{} Failed to load clipboard history.",
+                    icons::WARNING
+                ));
+            }
+        }
     }
 
     fn show_toast(&mut self, message: &str) {
