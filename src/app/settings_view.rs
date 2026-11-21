@@ -453,30 +453,7 @@ impl ClipboardApp {
                 .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );
-            if matches!(
-                self.key_storage_mode,
-                crate::crypto::KeyStorageMode::LocalFileFallback
-                    | crate::crypto::KeyStorageMode::LocalFileFallbackDegraded
-            ) {
-                let permissions_degraded = self.key_storage_mode
-                    == crate::crypto::KeyStorageMode::LocalFileFallbackDegraded;
-                let warning = if permissions_degraded {
-                    "Keyring fallback active, but key file permissions could not be restricted (Windows ACL hardening failed or USERNAME/USERDOMAIN was unavailable). Unlock the keyring and restart to migrate the key."
-                } else {
-                    "Keyring fallback active: the encryption key is stored in a restricted local file (.encryption_key) because the OS Keyring was unavailable."
-                };
-                let color = if permissions_degraded {
-                    crate::theme::error_color(is_dark)
-                } else {
-                    crate::theme::warning_color(is_dark)
-                };
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new(format!("{} {warning}", icons::WARNING))
-                        .color(color)
-                        .size(11.0),
-                );
-            }
+            Self::render_keyring_fallback_notice(ui, self.key_storage_mode, is_dark);
 
             ui.add_space(6.0);
             if ui
@@ -509,6 +486,23 @@ impl ClipboardApp {
                 self.persist_settings();
             }
 
+            ui.add_space(4.0);
+            if ui
+                .checkbox(
+                    &mut self.settings.preserve_secrets_on_prune,
+                    "Preserve secrets during history pruning",
+                )
+                .on_hover_text(
+                    "Prevents passwords, API keys, and generated secrets from being automatically deleted when history reaches the item limit.",
+                )
+                .changed()
+            {
+                self.db
+                    .set_preserve_secrets_on_prune(self.settings.preserve_secrets_on_prune);
+                self.persist_settings();
+                self.refresh_items();
+            }
+
             ui.add_space(6.0);
             self.render_auto_clear_secret_selector(ui);
 
@@ -533,6 +527,37 @@ impl ClipboardApp {
                 }
             });
         });
+    }
+
+    fn render_keyring_fallback_notice(
+        ui: &mut egui::Ui,
+        key_storage_mode: crate::crypto::KeyStorageMode,
+        is_dark: bool,
+    ) {
+        if matches!(
+            key_storage_mode,
+            crate::crypto::KeyStorageMode::LocalFileFallback
+                | crate::crypto::KeyStorageMode::LocalFileFallbackDegraded
+        ) {
+            let permissions_degraded =
+                key_storage_mode == crate::crypto::KeyStorageMode::LocalFileFallbackDegraded;
+            let warning = if permissions_degraded {
+                "Keyring fallback active, but key file permissions could not be restricted (Windows ACL hardening failed or USERNAME/USERDOMAIN was unavailable). Unlock the keyring and restart to migrate the key."
+            } else {
+                "Keyring fallback active: the encryption key is stored in a restricted local file (.encryption_key) because the OS Keyring was unavailable."
+            };
+            let color = if permissions_degraded {
+                crate::theme::error_color(is_dark)
+            } else {
+                crate::theme::warning_color(is_dark)
+            };
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(format!("{} {warning}", icons::WARNING))
+                    .color(color)
+                    .size(11.0),
+            );
+        }
     }
 
     fn render_auto_clear_secret_selector(&mut self, ui: &mut egui::Ui) {

@@ -112,6 +112,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let settings = AppSettings::load(&db);
     db.set_max_history(settings.max_history);
     db.set_ignore_concealed(settings.ignore_concealed);
+    db.set_preserve_secrets_on_prune(settings.preserve_secrets_on_prune);
     let _ = db.prune_history(settings.max_history);
     #[cfg(debug_assertions)]
     println!("⚙️  Loaded settings: hotkey preset {:?}", settings.hotkey);

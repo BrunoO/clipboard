@@ -475,6 +475,12 @@ pub(crate) struct AppSettings {
     pub(crate) generator_reveal_value: bool,
     #[serde(default = "default_keyring_explanation_shown")]
     pub(crate) keyring_explanation_shown: bool,
+    #[serde(default = "default_preserve_secrets_on_prune")]
+    pub(crate) preserve_secrets_on_prune: bool,
+}
+
+const fn default_preserve_secrets_on_prune() -> bool {
+    false
 }
 
 const fn default_hide_on_blur() -> bool {
@@ -543,6 +549,7 @@ impl Default for AppSettings {
             generator_skip_history: true,
             generator_reveal_value: true,
             keyring_explanation_shown: false,
+            preserve_secrets_on_prune: false,
         }
     }
 }
@@ -611,6 +618,7 @@ mod tests {
         modified.password_config.mode = crate::password::GeneratorMode::Passphrase;
         modified.password_config.word_count = 6;
         modified.password_config.capitalize = true;
+        modified.preserve_secrets_on_prune = true;
         modified.save(&db).expect("Save should succeed");
 
         // Reload
@@ -632,6 +640,7 @@ mod tests {
         );
         assert_eq!(reloaded.password_config.word_count, 6);
         assert!(reloaded.password_config.capitalize);
+        assert!(reloaded.preserve_secrets_on_prune);
     }
 
     #[test]

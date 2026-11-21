@@ -217,6 +217,7 @@ impl ClipboardApp {
         db.set_max_history(settings.max_history);
         db.set_ignore_concealed(settings.ignore_concealed);
         db.set_auto_detect_secrets(settings.auto_detect_secrets);
+        db.set_preserve_secrets_on_prune(settings.preserve_secrets_on_prune);
         if let Err(e) = db.prune_history(settings.max_history) {
             eprintln!("⚠️ Failed to prune history at startup: {e}");
         }
