@@ -28,6 +28,13 @@ pub(crate) fn log_file_path() -> Option<&'static std::path::Path> {
 }
 
 pub(crate) fn log_message(level: &str, message: &str) {
+    // Unit tests intentionally exercise failure paths (forced VACUUM failures,
+    // poisoned-mutex recovery). Writing those diagnostics to the user's real
+    // app.log makes production logs look corrupt, so keep test runs silent.
+    if cfg!(test) {
+        return;
+    }
+
     let Some(dir) = log_dir() else {
         return;
     };
