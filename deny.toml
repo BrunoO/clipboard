@@ -12,7 +12,7 @@ targets = [
 unmaintained = "workspace"
 ignore = [
     # chrono unmaintained advisory RUSTSEC-2026-0543
-    { id = "RUSTSEC-2026-0543", reason = "Used only for local timestamp string formatting in db.rs" },
+    { id = "RUSTSEC-2026-0543", reason = "Used only for local timestamp string formatting in db.rs and logging.rs" },
 ]
 
 [licenses]
@@ -42,6 +42,9 @@ allow = [
 ignore = true
 
 [bans]
+# Duplicate-version baseline (2026-11-21): windows-sys 0.52.0 (winit), 0.59.0
+# (global-hotkey), and 0.61.2 (direct plus arboard/eframe/etc.) are currently
+# required by transitive constraints. Keep `warn` until an upgrade can unify them.
 multiple-versions = "warn"
 wildcards = "deny"
 highlight = "all"
