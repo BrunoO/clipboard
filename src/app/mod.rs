@@ -4,7 +4,7 @@ mod settings_view;
 
 use history_view::ItemAction;
 
-use crate::db::{ClipboardItem, Database, ItemKind};
+use crate::db::{ClearError, ClipboardItem, Database, ItemKind};
 use crate::hotkey::HotkeyService;
 use crate::icons;
 use crate::media;
@@ -321,6 +321,14 @@ impl ClipboardApp {
 
     fn show_error_toast(&mut self, message: &str) {
         self.show_toast_severity(message, ToastSeverity::Error);
+    }
+
+    fn report_db_write_failure(&mut self, operation: &str, error: &dyn std::error::Error) {
+        crate::logging::log_message("ERROR", &format!("Failed to {operation}: {error}"));
+        self.show_error_toast(&format!(
+            "{} Failed to {operation}. Nothing was changed.",
+            icons::WARNING
+        ));
     }
 
     fn show_toast_severity(&mut self, message: &str, severity: ToastSeverity) {
@@ -792,7 +800,10 @@ impl ClipboardApp {
         if let Some(&item_idx) = filtered_indices.get(self.selected_index) {
             if let Some(item) = self.items.get(item_idx) {
                 let id = item.id;
-                let _ = self.db.delete(id);
+                if let Err(error) = self.db.delete(id) {
+                    self.report_db_write_failure("delete entry", &error);
+                    return;
+                }
                 self.texture_cache.remove(id);
                 self.refresh_items();
                 let new_count = self.get_filtered_indices().len();
@@ -1338,11 +1349,29 @@ impl ClipboardApp {
                     .fill(egui::Color32::from_rgb(220, 53, 69));
 
                     if ui.add_sized([btn_width, btn_height], clear_btn).clicked() {
-                        let _ = self.db.clear();
-                        self.texture_cache.clear();
-                        self.refresh_items();
-                        self.show_clear_confirm_dialog = false;
-                        self.show_toast(&format!("{} History cleared.", icons::CHECK));
+                        match self.db.clear() {
+                            Ok(()) => {
+                                self.texture_cache.clear();
+                                self.refresh_items();
+                                self.show_clear_confirm_dialog = false;
+                                self.show_toast(&format!("{} History cleared.", icons::CHECK));
+                            }
+                            Err(ClearError::Delete(error)) => {
+                                self.report_db_write_failure("clear history", &error);
+                            }
+                            Err(error @ ClearError::Compaction { .. }) => {
+                                crate::logging::log_message(
+                                    "ERROR",
+                                    &format!("Failed to clear history: {error}"),
+                                );
+                                self.texture_cache.clear();
+                                self.refresh_items();
+                                self.show_clear_confirm_dialog = false;
+                                self.show_error_toast(
+                                    "History rows were removed, but secure compaction failed. Restart and clear again to purge residual data.",
+                                );
+                            }
+                        }
                     }
                 });
                 ui.add_space(4.0_f32);

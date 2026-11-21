@@ -1,5 +1,6 @@
 use chrono::Local;
 use rusqlite::{params, Connection, Result};
+use std::fmt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -97,6 +98,54 @@ impl ClipboardItem {
             return self.parsed_color().into_iter().collect();
         }
         crate::color::extract_colors(&self.content)
+    }
+}
+
+/// Failure modes for a full history clear.
+#[derive(Debug)]
+pub(crate) enum ClearError {
+    /// Row deletion failed, so no history was removed.
+    Delete(Box<rusqlite::Error>),
+    /// Rows were removed, but secure compaction could not be completed.
+    Compaction {
+        vacuum: Option<Box<rusqlite::Error>>,
+        wal_checkpoint: Option<Box<rusqlite::Error>>,
+    },
+}
+
+impl fmt::Display for ClearError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Delete(error) => write!(f, "failed to delete clipboard history: {error}"),
+            Self::Compaction {
+                vacuum,
+                wal_checkpoint,
+            } => {
+                write!(f, "history rows were deleted but secure compaction failed")?;
+                if let Some(error) = vacuum {
+                    write!(f, "; VACUUM: {error}")?;
+                }
+                if let Some(error) = wal_checkpoint {
+                    write!(f, "; WAL checkpoint: {error}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for ClearError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Delete(error) => Some(error.as_ref() as _),
+            Self::Compaction {
+                vacuum,
+                wal_checkpoint,
+            } => vacuum
+                .as_ref()
+                .or(wal_checkpoint.as_ref())
+                .map(|error| error.as_ref() as _),
+        }
     }
 }
 
@@ -617,16 +666,42 @@ impl Database {
         Ok(())
     }
 
-    /// Clears all clipboard history, compacts the database, and truncates the WAL file
+    /// Deletes all history and then securely compacts the database and WAL
     /// so previously deleted secrets do not linger on disk.
-    pub(crate) fn clear(&self) -> Result<(), rusqlite::Error> {
+    ///
+    /// # Errors
+    /// Returns [`ClearError::Delete`] if row deletion fails, or
+    /// [`ClearError::Compaction`] if rows were removed but `VACUUM` or WAL
+    /// truncation failed. Callers must not report success for either case.
+    pub(crate) fn clear(&self) -> Result<(), ClearError> {
         let conn = self.lock_conn();
-        conn.execute("DELETE FROM clipboard_history", [])?;
-        if let Err(e) = conn.execute_batch("VACUUM;") {
-            eprintln!("⚠️ Failed to VACUUM database after clear: {e}");
+        conn.execute("DELETE FROM clipboard_history", [])
+            .map_err(|error| ClearError::Delete(Box::new(error)))?;
+
+        let vacuum_error = conn.execute_batch("VACUUM;").err().map(Box::new);
+        let wal_checkpoint_error = conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .err()
+            .map(Box::new);
+
+        if let Some(error) = &vacuum_error {
+            crate::logging::log_message(
+                "ERROR",
+                &format!("Failed to VACUUM database after clear: {error}"),
+            );
         }
-        if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
-            eprintln!("⚠️ Failed to truncate WAL after clear: {e}");
+        if let Some(error) = &wal_checkpoint_error {
+            crate::logging::log_message(
+                "ERROR",
+                &format!("Failed to truncate WAL after clear: {error}"),
+            );
+        }
+
+        if vacuum_error.is_some() || wal_checkpoint_error.is_some() {
+            return Err(ClearError::Compaction {
+                vacuum: vacuum_error,
+                wal_checkpoint: wal_checkpoint_error,
+            });
         }
         Ok(())
     }
@@ -1001,6 +1076,42 @@ mod tests {
                 "WAL file must be truncated to 0 bytes after clear()"
             );
         }
+    }
+
+    #[test]
+    fn test_clear_reports_delete_failure() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("clear_delete_failure.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+        db.insert("fixture entry").unwrap();
+
+        db.lock_conn()
+            .pragma_update(None, "query_only", "ON")
+            .unwrap();
+
+        assert!(matches!(db.clear(), Err(ClearError::Delete(_))));
+    }
+
+    #[test]
+    fn test_clear_reports_compaction_failure_after_deleting_rows() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("clear_compaction_failure.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+        db.insert("fixture entry").unwrap();
+
+        // An open transaction on the same connection makes VACUUM fail after
+        // the DELETE succeeds, exercising the compaction error path.
+        db.lock_conn().execute_batch("BEGIN").unwrap();
+        let result = db.clear();
+        db.lock_conn().execute_batch("ROLLBACK").unwrap();
+
+        assert!(matches!(
+            result,
+            Err(ClearError::Compaction {
+                vacuum: Some(_),
+                ..
+            })
+        ));
     }
 
     #[test]

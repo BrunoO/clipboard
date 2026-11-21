@@ -155,7 +155,15 @@ impl ClipboardApp {
             }
             ItemAction::OpenBrowser(url) => self.open_url_in_browser(&url),
             ItemAction::ToggleSecret(id, make_secret) => {
-                let _ = self.db.set_item_secret(id, make_secret);
+                let operation = if make_secret {
+                    "mark entry as secret"
+                } else {
+                    "unmark entry as secret"
+                };
+                if let Err(error) = self.db.set_item_secret(id, make_secret) {
+                    self.report_db_write_failure(operation, &error);
+                    return;
+                }
                 if !make_secret {
                     self.revealed_secrets.remove(&id);
                 }
@@ -173,7 +181,10 @@ impl ClipboardApp {
                 }
             }
             ItemAction::Delete(id) => {
-                let _ = self.db.delete(id);
+                if let Err(error) = self.db.delete(id) {
+                    self.report_db_write_failure("delete entry", &error);
+                    return;
+                }
                 self.revealed_secrets.remove(&id);
                 self.texture_cache.remove(id);
                 self.refresh_items();
