@@ -21,11 +21,13 @@ const MAX_CACHED_TEXTURES: usize = 24;
 
 /// Bound-capped LRU texture cache for clipboard image previews.
 /// Drops `egui::TextureHandle` references when capacity is exceeded or items are purged,
-/// immediately freeing underlying GPU VRAM.
+/// immediately freeing underlying GPU VRAM. Failed loads are remembered so a broken
+/// blob is not retried on every frame.
 #[derive(Default)]
 pub(crate) struct ImageTextureCache {
     textures: HashMap<i64, egui::TextureHandle>,
     access_order: VecDeque<i64>,
+    failed_ids: HashSet<i64>,
 }
 
 impl ImageTextureCache {
@@ -37,7 +39,7 @@ impl ImageTextureCache {
     pub(crate) fn get_or_load(
         &mut self,
         id: i64,
-        png_bytes: &[u8],
+        db: &Database,
         ctx: &egui::Context,
     ) -> Option<&egui::TextureHandle> {
         if self.textures.contains_key(&id) {
@@ -47,8 +49,18 @@ impl ImageTextureCache {
             self.access_order.push_back(id);
             return self.textures.get(&id);
         }
+        if self.failed_ids.contains(&id) {
+            return None;
+        }
 
-        let (w, h, rgba) = media::png_to_rgba(png_bytes).ok()?;
+        let Ok(Some(png_bytes)) = db.get_image_data(id) else {
+            self.failed_ids.insert(id);
+            return None;
+        };
+        let Ok((w, h, rgba)) = media::png_to_rgba(&png_bytes) else {
+            self.failed_ids.insert(id);
+            return None;
+        };
         let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
         let handle = ctx.load_texture(
             format!("clip_img_{id}"),
@@ -65,12 +77,14 @@ impl ImageTextureCache {
         }
 
         self.access_order.push_back(id);
+        self.failed_ids.remove(&id);
         self.textures.insert(id, handle);
         self.textures.get(&id)
     }
 
     pub(crate) fn remove(&mut self, id: i64) {
         self.textures.remove(&id);
+        self.failed_ids.remove(&id);
         if let Some(pos) = self.access_order.iter().position(|&x| x == id) {
             self.access_order.remove(pos);
         }
@@ -79,11 +93,13 @@ impl ImageTextureCache {
     pub(crate) fn clear(&mut self) {
         self.textures.clear();
         self.access_order.clear();
+        self.failed_ids.clear();
     }
 
     pub(crate) fn retain_active(&mut self, active_ids: &HashSet<i64>) {
         self.textures.retain(|id, _| active_ids.contains(id));
         self.access_order.retain(|id| active_ids.contains(id));
+        self.failed_ids.retain(|id| active_ids.contains(id));
     }
 }
 
@@ -801,15 +817,28 @@ impl ClipboardApp {
         }
     }
 
+    fn copy_image_by_id(&mut self, id: i64, ctx: &egui::Context) {
+        match self.db.get_image_data(id) {
+            Ok(Some(png_bytes)) => self.copy_image_to_clipboard(&png_bytes, ctx),
+            Ok(None) => self.show_warning_toast(&format!(
+                "{} Image data is no longer available.",
+                icons::WARNING
+            )),
+            Err(error) => {
+                self.show_error_toast(&format!("{} Failed to load image: {error}", icons::WARNING));
+            }
+        }
+    }
+
     fn copy_filtered_item(&mut self, filtered_indices: &[usize], slot: usize, ctx: &egui::Context) {
         if let Some(&item_idx) = filtered_indices.get(slot) {
-            let copy_action = self.items.get(item_idx).and_then(|item| match item.kind {
-                ItemKind::Image => item.image_data.clone().map(ItemAction::CopyImage),
-                ItemKind::Secret => Some(ItemAction::CopySecret(item.content.clone())),
-                _ => Some(ItemAction::CopyText(item.content.clone())),
+            let copy_action = self.items.get(item_idx).map(|item| match item.kind {
+                ItemKind::Image => ItemAction::CopyImage(item.id),
+                ItemKind::Secret => ItemAction::CopySecret(item.content.clone()),
+                _ => ItemAction::CopyText(item.content.clone()),
             });
             match copy_action {
-                Some(ItemAction::CopyImage(png)) => self.copy_image_to_clipboard(&png, ctx),
+                Some(ItemAction::CopyImage(id)) => self.copy_image_by_id(id, ctx),
                 Some(ItemAction::CopySecret(secret)) => self.copy_secret_to_clipboard(&secret, ctx),
                 Some(ItemAction::CopyText(text)) => self.copy_text_to_clipboard(&text, ctx),
                 _ => {}

@@ -1,5 +1,5 @@
 use super::{ClipboardApp, ContentFilter, ImageTextureCache};
-use crate::db::{ClipboardItem, ItemKind};
+use crate::db::{ClipboardItem, Database, ItemKind};
 use crate::icons;
 use eframe::egui;
 
@@ -9,7 +9,7 @@ pub(super) enum ItemAction {
     CopySecret(String),
     CopyFormattedJson(String),
     CopyColor(String, String),
-    CopyImage(Vec<u8>),
+    CopyImage(i64),
     OpenBrowser(String),
     ToggleSecret(i64, bool),
     ToggleRevealSecret(i64),
@@ -105,6 +105,7 @@ impl ClipboardApp {
                         let (item_action, clicked) = Self::render_clipboard_item(
                             ui,
                             item,
+                            &self.db,
                             &mut self.texture_cache,
                             ctx,
                             ItemRenderState {
@@ -150,9 +151,7 @@ impl ClipboardApp {
                 self.copy_text_to_clipboard(&val, ctx);
                 self.show_toast(&format!("{} Copied {name}: {val}", icons::CHECK));
             }
-            ItemAction::CopyImage(png_bytes) => {
-                self.copy_image_to_clipboard(&png_bytes, ctx);
-            }
+            ItemAction::CopyImage(id) => self.copy_image_by_id(id, ctx),
             ItemAction::OpenBrowser(url) => self.open_url_in_browser(&url),
             ItemAction::ToggleSecret(id, make_secret) => {
                 let operation = if make_secret {
@@ -216,6 +215,7 @@ impl ClipboardApp {
     fn render_clipboard_item(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
+        db: &Database,
         texture_cache: &mut ImageTextureCache,
         ctx: &egui::Context,
         state: ItemRenderState,
@@ -258,7 +258,7 @@ impl ClipboardApp {
                         state.is_dark,
                     ),
                     ItemKind::Image => {
-                        Self::render_image_content(ui, item, texture_cache, ctx, state.is_dark)
+                        Self::render_image_content(ui, item, db, texture_cache, ctx, state.is_dark)
                     }
                 };
 
@@ -517,10 +517,7 @@ impl ClipboardApp {
                 ItemAction::CopyText(item.content.clone())
             }
             ItemKind::Secret => ItemAction::CopySecret(item.content.clone()),
-            ItemKind::Image => item
-                .image_data
-                .as_ref()
-                .map_or(ItemAction::None, |png| ItemAction::CopyImage(png.clone())),
+            ItemKind::Image => ItemAction::CopyImage(item.id),
         }
     }
 
@@ -1064,15 +1061,12 @@ impl ClipboardApp {
     fn render_image_content(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
+        db: &Database,
         texture_cache: &mut ImageTextureCache,
         ctx: &egui::Context,
         is_dark: bool,
     ) -> ItemAction {
-        let Some(png_bytes) = &item.image_data else {
-            return ItemAction::None;
-        };
-
-        let texture = texture_cache.get_or_load(item.id, png_bytes, ctx);
+        let texture = texture_cache.get_or_load(item.id, db, ctx);
 
         if let Some(texture) = texture {
             let img_widget = egui::Image::new(texture)
@@ -1089,7 +1083,7 @@ impl ClipboardApp {
             }
 
             if response.clicked() {
-                return ItemAction::CopyImage(png_bytes.clone());
+                return ItemAction::CopyImage(item.id);
             }
             if response.hovered() {
                 ui.output_mut(|o| {

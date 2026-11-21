@@ -33,7 +33,6 @@ pub(crate) struct ClipboardItem {
     pub(crate) id: i64,
     pub(crate) kind: ItemKind,
     pub(crate) content: String,
-    pub(crate) image_data: Option<Vec<u8>>,
     pub(crate) width: Option<u32>,
     pub(crate) height: Option<u32>,
     pub(crate) created_at: String,
@@ -530,7 +529,6 @@ impl Database {
             id: i64,
             kind_str: String,
             content: String,
-            image_data: Option<Vec<u8>>,
             width: Option<u32>,
             height: Option<u32>,
             created_at: String,
@@ -555,16 +553,15 @@ impl Database {
                     id: row.get(0)?,
                     kind_str: row.get(1).unwrap_or_else(|_| "text".to_string()),
                     content: row.get(2)?,
-                    image_data: row.get(3)?,
-                    width: row.get(4)?,
-                    height: row.get(5)?,
-                    created_at: row.get(6)?,
+                    width: row.get(3)?,
+                    height: row.get(4)?,
+                    created_at: row.get(5)?,
                 })
             };
 
             if let Some(pattern) = search_pattern {
                 let mut stmt = conn.prepare(
-                    "SELECT id, kind, content, image_data, width, height, created_at
+                    "SELECT id, kind, content, width, height, created_at
                      FROM clipboard_history
                      WHERE kind != 'secret' AND content LIKE ?1 ESCAPE '\\'
                      ORDER BY id DESC LIMIT ?2",
@@ -575,7 +572,7 @@ impl Database {
                 }
             } else {
                 let mut stmt = conn.prepare(
-                    "SELECT id, kind, content, image_data, width, height, created_at
+                    "SELECT id, kind, content, width, height, created_at
                      FROM clipboard_history
                      ORDER BY id DESC LIMIT ?1",
                 )?;
@@ -613,7 +610,6 @@ impl Database {
                     id: r.id,
                     kind,
                     content: r.content,
-                    image_data: r.image_data,
                     width: r.width,
                     height: r.height,
                     created_at: r.created_at,
@@ -622,6 +618,20 @@ impl Database {
             .collect();
 
         Ok(items)
+    }
+
+    /// Loads the PNG bytes for a single image entry only when the UI needs them.
+    pub(crate) fn get_image_data(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        let conn = self.lock_conn();
+        match conn.query_row(
+            "SELECT image_data FROM clipboard_history WHERE id = ?1 AND kind = 'image'",
+            params![id],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        ) {
+            Ok(data) => Ok(data),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     /// Toggles whether a non-image history entry is classified as `secret`.
@@ -773,7 +783,10 @@ mod tests {
         assert_eq!(items[0].kind, ItemKind::Image);
         assert_eq!(items[0].width, Some(320));
         assert_eq!(items[0].height, Some(240));
-        assert_eq!(items[0].image_data.as_deref(), Some(dummy_png.as_slice()));
+
+        let loaded = db.get_image_data(items[0].id).unwrap();
+        assert_eq!(loaded.as_deref(), Some(dummy_png.as_slice()));
+        assert_eq!(db.get_image_data(999).unwrap(), None);
     }
 
     #[test]
