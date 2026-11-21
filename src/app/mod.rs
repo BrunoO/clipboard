@@ -592,19 +592,28 @@ impl ClipboardApp {
         } else {
             crate::platform::mark_clipboard_concealed();
             self.schedule_secret_clipboard_clear(&secret);
-            if !self.password_gen.skip_history {
-                if let Err(e) = self.db.insert_secret(&secret) {
-                    eprintln!("Failed to save generated password to database: {e}");
-                } else {
-                    self.refresh_items();
+            if self.password_gen.skip_history {
+                let msg = format!("{} Copied password (not saved to history)", icons::CHECK);
+                self.finish_copy(ctx, &msg, dismiss);
+            } else {
+                match self.db.insert_secret(&secret) {
+                    Ok(_) => {
+                        self.refresh_items();
+                        let msg = format!("{} Copied & saved password as Secret!", icons::LOCK);
+                        self.finish_copy(ctx, &msg, dismiss);
+                    }
+                    Err(err) => {
+                        crate::logging::log_message(
+                            "ERROR",
+                            &format!("Failed to save generated password to database: {err}"),
+                        );
+                        self.show_error_toast(&format!(
+                            "{} Copied password, but failed to save it to history.",
+                            icons::WARNING
+                        ));
+                    }
                 }
             }
-            let msg = if self.password_gen.skip_history {
-                format!("{} Copied password (not saved to history)", icons::CHECK)
-            } else {
-                format!("{} Copied & saved password as Secret!", icons::LOCK)
-            };
-            self.finish_copy(ctx, &msg, dismiss);
         }
     }
 
