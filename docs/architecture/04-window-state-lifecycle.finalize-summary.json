@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "lifecycle",
+  "quality": "showcase",
+  "specification": {
+    "path": "/tmp/arch-04-window-state.json",
+    "sha256": "a738c14e4da160f56ff0c8f1d435bc53b2ed92dc1201ffe34700250fd59db5ec",
+    "bytes": 2319
+  },
+  "artifact": {
+    "path": "/Users/brunoorsier/dev/clipboard/docs/architecture/04-window-state-lifecycle.html",
+    "sha256": "78b34d5deedf5237cae1ce9d8ab6aae56ace993a8c5d5d53aac07d635bfaa583",
+    "bytes": 839905
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/04-window-state-lifecycle.finalize.json",
+    "summaryReceipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/04-window-state-lifecycle.finalize-summary.json",
+    "browserCheckReceipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/04-window-state-lifecycle.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-21T08:28:52.129Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2815,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

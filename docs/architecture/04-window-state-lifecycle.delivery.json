@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "c7a6fa56-fefc-4a0c-bcc9-21a956016307",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "/tmp/arch-04-window-state.json",
+  "output": "/Users/brunoorsier/dev/clipboard/docs/architecture/04-window-state-lifecycle.html",
+  "specification": {
+    "sha256": "a738c14e4da160f56ff0c8f1d435bc53b2ed92dc1201ffe34700250fd59db5ec",
+    "bytes": 2319
+  },
+  "artifact": {
+    "sha256": "78b34d5deedf5237cae1ce9d8ab6aae56ace993a8c5d5d53aac07d635bfaa583",
+    "bytes": 839905
+  }
+}
