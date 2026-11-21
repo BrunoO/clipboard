@@ -434,43 +434,15 @@ impl ClipboardApp {
         self.show_clear_confirm_dialog = false;
         self.revealed_secrets.clear();
 
-        #[cfg(target_os = "windows")]
-        {
-            if self.tray_service.as_ref().is_some_and(TrayService::is_live) {
-                // With a confirmed shell tray icon, hide the window cleanly so
-                // it doesn't clutter the taskbar; clicking the tray restores it.
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            } else {
-                // No live tray icon (init failed, Explorer restarted, ...):
-                // minimize to the taskbar so the user is never locked out.
-                crate::logging::log_message(
-                    "WARN",
-                    "No live tray icon; minimizing to taskbar instead of hiding",
-                );
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-            }
-        }
+        let has_live_tray = self.tray_service.as_ref().is_some_and(TrayService::is_live);
+        platform::hide_window_viewport(ctx, has_live_tray);
 
-        #[cfg(not(target_os = "windows"))]
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            crate::platform::hide_application();
-        }
-
-        #[allow(unused_mut)]
         let mut auto_paste = auto_paste;
-        #[cfg(target_os = "windows")]
-        if auto_paste && crate::platform::windows::target_is_elevated() {
-            auto_paste = false;
-            crate::logging::log_message(
-                "WARN",
-                "Auto-paste blocked: target app runs as Administrator",
-            );
-            self.pending_toast = Some((
-                "Auto-paste blocked: target app runs as Administrator. Paste manually (Ctrl+V)."
-                    .to_string(),
-                ToastSeverity::Warning,
-            ));
+        if auto_paste {
+            if let Some(warning) = platform::auto_paste_blocked_warning() {
+                auto_paste = false;
+                self.pending_toast = Some((warning.to_string(), ToastSeverity::Warning));
+            }
         }
 
         if restore_focus || auto_paste {

@@ -110,6 +110,39 @@ pub(crate) fn quote_key_is_ugrave() -> bool {
     }
 }
 
+/// Returns `true` if the current platform supports dynamic keyboard-layout re-detection
+/// for global hotkeys (Windows AZERTY/QWERTY scan-code mapping).
+#[must_use]
+pub(crate) const fn supports_hotkey_layout_redetect() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// Returns `true` when the platform requires explicit OS Accessibility permission for
+/// simulated auto-paste keystrokes and that permission has not yet been granted (macOS).
+#[must_use]
+pub(crate) fn auto_paste_permission_missing() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        !macos::is_trusted()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Prompts the user for OS Accessibility permission required by auto-paste (macOS).
+pub(crate) fn prompt_auto_paste_permission() {
+    #[cfg(target_os = "macos")]
+    macos::prompt_permission();
+}
+
+/// Opens the OS system settings pane for Accessibility permissions (macOS).
+pub(crate) fn open_auto_paste_permission_settings() {
+    #[cfg(target_os = "macos")]
+    macos::open_accessibility_settings();
+}
+
 /// Applies the platform title-bar dark mode attribute where supported (Windows DWM).
 #[cfg_attr(
     not(target_os = "windows"),
@@ -351,6 +384,59 @@ pub(crate) fn mark_clipboard_concealed() {
 pub(crate) fn hide_application() {
     #[cfg(target_os = "macos")]
     macos::hide_app();
+}
+
+/// Applies the platform-specific window dismissal policy when hiding the UI:
+/// - On Windows, hides the viewport (`Visible(false)`) only when a live shell tray icon exists,
+///   falling back to minimizing (`Minimized(true)`) so the user is never locked out.
+/// - On macOS and Linux, hides the viewport and invokes OS-level application hiding.
+pub(crate) fn hide_window_viewport(ctx: &eframe::egui::Context, has_live_tray: bool) {
+    #[cfg(target_os = "windows")]
+    {
+        if has_live_tray {
+            // With a confirmed shell tray icon, hide the window cleanly so
+            // it doesn't clutter the taskbar; clicking the tray restores it.
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(false));
+        } else {
+            // No live tray icon (init failed, Explorer restarted, ...):
+            // minimize to the taskbar so the user is never locked out.
+            log_message(
+                "WARN",
+                "No live tray icon; minimizing to taskbar instead of hiding",
+            );
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = has_live_tray;
+        ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(false));
+        hide_application();
+    }
+}
+
+/// Checks whether the captured auto-paste target blocks simulated keystrokes (e.g. due to
+/// Windows UIPI when the target runs elevated as Administrator) and returns a user-facing
+/// warning toast message when blocked.
+#[must_use]
+pub(crate) fn auto_paste_blocked_warning() -> Option<&'static str> {
+    #[cfg(target_os = "windows")]
+    {
+        if windows::target_is_elevated() {
+            log_message(
+                "WARN",
+                "Auto-paste blocked: target app runs as Administrator",
+            );
+            return Some(
+                "Auto-paste blocked: target app runs as Administrator. Paste manually (Ctrl+V).",
+            );
+        }
+        None
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
 }
 
 /// Unhides and orders the main window front at the OS level.

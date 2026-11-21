@@ -113,8 +113,9 @@ impl ClipboardApp {
 
             self.render_hotkey_preset_selector(ui);
 
-            #[cfg(target_os = "windows")]
-            self.render_windows_keyboard_layout_button(ui);
+            if crate::platform::supports_hotkey_layout_redetect() {
+                self.render_keyboard_layout_redetect_button(ui);
+            }
 
             if self.settings.hotkey == HotkeyPreset::Custom {
                 self.render_custom_hotkey_editor(ui, is_dark);
@@ -155,8 +156,7 @@ impl ClipboardApp {
         }
     }
 
-    #[cfg(target_os = "windows")]
-    fn render_windows_keyboard_layout_button(&mut self, ui: &mut egui::Ui) {
+    fn render_keyboard_layout_redetect_button(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         if ui.button("Re-detect keyboard layout").clicked() {
             if self.update_hotkeys_from_settings() {
@@ -374,9 +374,8 @@ impl ClipboardApp {
                 self.persist_settings();
             }
 
-            #[cfg(target_os = "macos")]
             if auto_paste {
-                Self::render_macos_accessibility_notice(ui, is_dark);
+                Self::render_auto_paste_accessibility_notice(ui, is_dark);
             }
 
             ui.add_space(6.0);
@@ -384,12 +383,11 @@ impl ClipboardApp {
         });
     }
 
-    #[cfg(target_os = "macos")]
-    fn render_macos_accessibility_notice(ui: &mut egui::Ui, is_dark: bool) {
-        ui.add_space(2.0);
-        if crate::platform::macos::is_trusted() {
+    fn render_auto_paste_accessibility_notice(ui: &mut egui::Ui, is_dark: bool) {
+        if !crate::platform::auto_paste_permission_missing() {
             return;
         }
+        ui.add_space(2.0);
         ui.label(
             egui::RichText::new(format!(
                 "{} macOS note: Direct auto-paste requires Accessibility permissions in System Settings > Privacy & Security > Accessibility.\nNote: When running via terminal, grant permission to your terminal app as well.",
@@ -404,13 +402,13 @@ impl ClipboardApp {
                 .small_button(format!("{} Prompt Permission", icons::SHIELD_CHECK))
                 .clicked()
             {
-                crate::platform::macos::prompt_permission();
+                crate::platform::prompt_auto_paste_permission();
             }
             if ui
                 .small_button(format!("{} Open System Settings", icons::ARROW_SQUARE_OUT))
                 .clicked()
             {
-                crate::platform::macos::open_accessibility_settings();
+                crate::platform::open_auto_paste_permission_settings();
             }
         });
     }
