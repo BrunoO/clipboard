@@ -51,6 +51,7 @@ cipherclipboard/
 ├── deny.toml             # Supply-chain security & license policy
 ├── docs/                 # Bug analyses, platform notes and dated review reports
 │   ├── TESTING.md                # Test inventory and skipped-tooling notes
+│   ├── architecture/             # Architecture and module relationship documentation
 │   ├── windows/
 │   │   ├── WINDOWS_REVIEW.md     # Windows readiness review notes
 │   │   └── WINDOWS_TESTING.md    # Windows manual testing checklist
@@ -66,6 +67,8 @@ cipherclipboard/
 │   ├── db.rs             # rusqlite + SQLCipher encrypted database wrapper & migrations
 │   ├── crypto.rs         # OS Keyring integration & cryptographic key generation
 │   ├── hotkey.rs         # Global shortcut registration & listener thread
+│   ├── icons.rs          # Embedded application & system tray icons
+│   ├── logging.rs        # In-memory diagnostics ring-buffer & file logging
 │   ├── tray.rs           # Windows system tray icon & context menu lifecycle
 │   ├── secret.rs         # Heuristic detection & masking for credentials and API keys
 │   ├── code.rs           # Multi-language syntax detection & highlighting sections
@@ -73,6 +76,7 @@ cipherclipboard/
 │   ├── password.rs       # Cryptographically secure password and passphrase generator
 │   ├── platform/         # OS-level window focus capture, restoration & auto-paste
 │   │   ├── mod.rs
+│   │   ├── fs_security.rs# Filesystem ACL hardening, permissions & DPAPI fallback
 │   │   ├── macos.rs
 │   │   ├── windows.rs
 │   │   └── linux.rs
@@ -180,6 +184,7 @@ See [`docs/TESTING.md`](docs/TESTING.md) for the current test inventory and the 
 * **Monochrome Emoji & Symbol Rendering:** `egui` (`0.37`) rasterizes font glyphs via `ab_glyph` using monochrome vector outlines and does not support color emoji tables (`sbix`, `COLR`/`CPAL`, or `CBDT`). As a result, emojis and symbols in copied text render in the active theme's monochrome text color rather than full color. Invisible Unicode variation selectors (`U+FE0E`, `U+FE0F`) and zero-width joiners are stripped from UI previews to avoid missing-glyph (`□`) boxes, while the original text is preserved intact when copied back to the clipboard.
 * **Windows UIPI & Elevated Target Windows:** Windows User Interface Privilege Isolation (UIPI) blocks standard-privilege applications from injecting synthetic keystrokes (`Ctrl+V`) into elevated (Administrator) windows. CipherClipboard detects higher-integrity target windows, copies the item to the clipboard, and skips auto-paste—press `Ctrl+V` manually in the elevated window.
 * **Windows `Alt+Space` Hotkey Preset:** Selecting the optional `Alt+Space` global shortcut on Windows overrides the standard system-menu accelerator (`Alt+Space`) in other applications. Prefer the default `Ctrl+Shift+V` unless you explicitly want `Alt+Space`.
+* **Linux Outgoing Concealed Markers:** On Linux (X11/Wayland), incoming concealed markers (`x-kde-passwordManagerHint` in `TARGETS`) are detected from password managers, but outgoing concealed markers cannot be attached by the underlying clipboard provider (`ConcealedMarkerSupport::DetectOnly`). Copied secrets are masked and scheduled for auto-clear, but third-party clipboard monitors without heuristic detection may observe the copy.
 
 ---
 

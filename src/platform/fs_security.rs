@@ -37,6 +37,11 @@ pub(crate) fn missing_key_error_message(data_dir: &Path) -> String {
 ///
 /// On Windows, the file contents are decrypted via user-scoped DPAPI (`CryptUnprotectData`).
 /// On other platforms, the file is read as a UTF-8 string.
+///
+/// # Errors
+///
+/// Returns an [`std::io::Error`] if reading the file fails, or if DPAPI decryption fails
+/// or the decrypted payload is not valid UTF-8.
 pub(crate) fn read_protected_key_file(
     path: &Path,
 ) -> Result<Option<Zeroizing<String>>, std::io::Error> {
@@ -68,6 +73,11 @@ pub(crate) fn read_protected_key_file(
 
 /// Protects and writes the encryption key to a local fallback key file with hardened
 /// owner-only permissions. Returns `Ok(true)` if permission hardening was degraded.
+///
+/// # Errors
+///
+/// Returns an [`std::io::Error`] if creating parent directories fails, if DPAPI encryption
+/// fails, or if writing or setting restricted permissions fails.
 pub(crate) fn write_protected_key_file(path: &Path, key: &str) -> Result<bool, std::io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
