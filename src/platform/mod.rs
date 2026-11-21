@@ -141,6 +141,36 @@ pub(crate) fn is_clipboard_concealed() -> bool {
     }
 }
 
+/// Which half of the concealed-clipboard contract a platform can honor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConcealedMarkerSupport {
+    /// Incoming markers are detected and outgoing secrets are marked natively.
+    DetectAndEmit,
+    /// Incoming markers are detected, but outgoing secrets cannot be marked natively.
+    DetectOnly,
+}
+
+/// Returns the platform's concealed-marker capability.
+#[must_use]
+pub(crate) const fn concealed_marker_support() -> ConcealedMarkerSupport {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        ConcealedMarkerSupport::DetectAndEmit
+    } else {
+        ConcealedMarkerSupport::DetectOnly
+    }
+}
+
+/// Returns a user-facing explanation when native marker emission is unavailable.
+#[must_use]
+pub(crate) const fn concealed_marker_limitation() -> Option<&'static str> {
+    match concealed_marker_support() {
+        ConcealedMarkerSupport::DetectAndEmit => None,
+        ConcealedMarkerSupport::DetectOnly => Some(
+            "Concealed clipboard items from other apps are detected, but this platform cannot advertise the same marker for secrets CipherClipboard copies. Copied secrets are still masked and auto-cleared.",
+        ),
+    }
+}
+
 /// Attaches OS-native privacy/concealed markers to the current clipboard entry
 /// so OS clipboard history, cloud sync, Universal Clipboard, and other clipboard
 /// managers do not record or broadcast secrets copied by `CipherClipboard`.
@@ -150,6 +180,12 @@ pub(crate) fn mark_clipboard_concealed() {
 
     #[cfg(target_os = "windows")]
     windows::mark_clipboard_concealed();
+
+    #[cfg(target_os = "linux")]
+    linux::mark_clipboard_concealed();
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let _ = concealed_marker_support();
 }
 
 /// Hides the entire application at the OS level (macOS `[NSApp hide:]`).
@@ -412,14 +448,39 @@ mod tests {
         // Calling capture and restore should never panic on any platform
         capture_active_window();
         restore_focus_and_paste(false, false, 120);
-        #[cfg(target_os = "macos")]
-        assert!(macos::is_trusted() || !macos::is_trusted());
         let _ = is_app_active();
         let _ = is_clipboard_concealed();
         let _ = take_reopen_requested();
         hide_application();
         order_front_main_window();
         setup_reopen_observer();
+    }
+
+    #[test]
+    fn test_concealed_marker_support_matches_ui_limitation() {
+        let support = concealed_marker_support();
+        let limitation = concealed_marker_limitation();
+
+        assert_eq!(
+            support == ConcealedMarkerSupport::DetectOnly,
+            limitation.is_some()
+        );
+
+        if cfg!(target_os = "macos") || cfg!(target_os = "windows") {
+            assert_eq!(support, ConcealedMarkerSupport::DetectAndEmit);
+            assert!(limitation.is_none());
+        } else {
+            assert_eq!(support, ConcealedMarkerSupport::DetectOnly);
+            assert!(limitation.is_some_and(|text| text.contains("cannot advertise")));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_linux_mark_clipboard_concealed_runs_explicit_noop() {
+        super::linux::reset_mark_called();
+        mark_clipboard_concealed();
+        assert!(super::linux::mark_called());
     }
 
     #[test]

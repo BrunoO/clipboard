@@ -470,6 +470,15 @@ impl ClipboardApp {
                 self.persist_settings();
             }
 
+            if let Some(limitation) = crate::platform::concealed_marker_limitation() {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(limitation)
+                        .color(crate::theme::text_secondary(is_dark))
+                        .size(11.0),
+                );
+            }
+
             ui.add_space(4.0);
             if ui
                 .checkbox(

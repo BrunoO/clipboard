@@ -231,6 +231,30 @@ pub(super) fn simulate_paste() {
     });
 }
 
+/// Marker emission is intentionally unavailable on Linux/X11.
+///
+/// `arboard` owns the `CLIPBOARD` selection when a secret is copied, so adding
+/// `x-kde-passwordManagerHint` would require taking ownership and proxying every
+/// requested target. Detection remains available via [`is_clipboard_concealed`],
+/// and the UI discloses this limitation.
+pub(super) fn mark_clipboard_concealed() {
+    #[cfg(test)]
+    MARK_CALLED.store(true, Ordering::Release);
+}
+
+#[cfg(test)]
+static MARK_CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+pub(super) fn reset_mark_called() {
+    MARK_CALLED.store(false, Ordering::Release);
+}
+
+#[cfg(test)]
+pub(super) fn mark_called() -> bool {
+    MARK_CALLED.load(Ordering::Acquire)
+}
+
 /// Detects concealed clipboard entries on X11 (e.g. `KeePassXC`, Bitwarden, 1Password)
 /// by inspecting the `CLIPBOARD` selection's advertised `TARGETS` for
 /// `x-kde-passwordManagerHint`.
