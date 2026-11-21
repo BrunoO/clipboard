@@ -2,6 +2,7 @@
 name = "cipherclipboard"
 version = "0.1.7"
 edition = "2021"
+rust-version = "1.95"
 description = "A simple, encrypted cross-platform clipboard manager in Rust"
 authors = ["BrunoO"]
 license = "MIT"

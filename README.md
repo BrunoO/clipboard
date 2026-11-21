@@ -81,6 +81,10 @@ cipherclipboard/
 
 ## Prerequisites & Building
 
+### Rust toolchain
+
+The minimum supported Rust version (MSRV) is **1.95**, declared as `rust-version` in `Cargo.toml`. Build and test with a stable toolchain at or above that version; CI uses current stable and resolves dependencies from the committed `Cargo.lock` with `--locked`. Newer stable toolchains are supported, so there is no `rust-toolchain.toml` pin — use `rustup override set stable` locally if you want to match CI explicitly.
+
 ### 1. macOS (Primary Environment)
 Ensure you have Xcode Command Line Tools installed (needed to compile the bundled SQLCipher C code):
 ```bash
