@@ -26,6 +26,9 @@ impl ClipboardApp {
                 self.render_security_settings_group(ui, is_dark);
                 ui.add_space(10.0);
 
+                self.render_logging_settings_group(ui, is_dark);
+                ui.add_space(10.0);
+
                 Self::render_about_settings_group(ui, is_dark);
                 ui.add_space(12.0);
 
@@ -548,6 +551,78 @@ impl ClipboardApp {
                         }
                     }
                 });
+        });
+    }
+
+    fn render_logging_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{} Diagnostics & Logs", icons::FILE_TEXT))
+                    .color(crate::theme::text_primary(is_dark))
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "Application events, errors, and crash diagnostics are recorded to a local log file.",
+                )
+                .color(crate::theme::text_secondary(is_dark))
+                .size(11.0),
+            );
+            ui.add_space(6.0);
+
+            let log_path = crate::logging::log_file_path();
+            let path_str = log_path.map_or_else(
+                || "(unavailable)".to_string(),
+                |p| p.display().to_string(),
+            );
+
+            ui.label(
+                egui::RichText::new("Log file path:")
+                    .color(crate::theme::text_secondary(is_dark))
+                    .size(11.0),
+            );
+            ui.add_space(2.0);
+
+            egui::Frame::new()
+                .fill(crate::theme::search_bg(is_dark))
+                .stroke(crate::theme::card_stroke(is_dark, false))
+                .corner_radius(4)
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&path_str)
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(crate::theme::text_primary(is_dark)),
+                            )
+                            .selectable(true)
+                            .wrap(),
+                        );
+                    });
+                });
+
+            ui.add_space(6.0);
+
+            ui.horizontal(|ui| {
+                let copy_enabled = log_path.is_some();
+                if ui
+                    .add_enabled(
+                        copy_enabled,
+                        egui::Button::new(format!("{} Copy Path", icons::COPY)),
+                    )
+                    .on_hover_text("Copy the full path of the log file to clipboard")
+                    .clicked()
+                {
+                    self.copy_plain_text(
+                        &path_str,
+                        &format!("{} Copied log path to clipboard!", icons::CHECK),
+                        ui.ctx(),
+                    );
+                }
+            });
         });
     }
 

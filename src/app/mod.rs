@@ -533,6 +533,20 @@ impl ClipboardApp {
         }
     }
 
+    pub(super) fn copy_plain_text(&mut self, text: &str, toast: &str, ctx: &egui::Context) {
+        ctx.copy_text(text.to_string());
+        let Some(cb) = self.ensure_clipboard_writer() else {
+            self.show_warning_toast(&format!("{} Clipboard unavailable", icons::WARNING));
+            return;
+        };
+        if let Err(e) = cb.set_text(text.to_string()) {
+            eprintln!("Failed to write text to clipboard: {e}");
+            self.show_error_toast(&format!("{} Failed to copy to clipboard", icons::WARNING));
+        } else {
+            self.show_toast(toast);
+        }
+    }
+
     fn copy_secret_to_clipboard(&mut self, secret: &str, ctx: &egui::Context) {
         self.db.skip_next_capture(secret);
         let Some(cb) = self.ensure_clipboard_writer() else {
@@ -1947,5 +1961,63 @@ mod tests {
         assert!(degraded_heading.contains("permissions could not be restricted"));
         assert!(degraded_body.contains("icacls"));
         assert_ne!(fallback_title, degraded_title);
+    }
+
+    #[test]
+    fn test_copy_plain_text_sets_toast() {
+        let (shutdown_tx, _shutdown_rx) = std::sync::mpsc::channel();
+        let (_notify_tx, notify_rx) = std::sync::mpsc::channel();
+        let (_hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
+        let (_tray_tx, tray_rx) = std::sync::mpsc::channel();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("copy_test.db");
+        let key = format!("{:016x}", 1_u64).repeat(4);
+        let db = crate::db::Database::open(&db_path, &key).unwrap();
+        let mut app = ClipboardApp {
+            db,
+            key_storage_mode: crate::crypto::KeyStorageMode::OsKeyring,
+            search_query: String::new(),
+            content_filter: super::ContentFilter::All,
+            items: Vec::new(),
+            filter_counts: super::FilterCounts::default(),
+            clipboard_writer: None,
+            toast: None,
+            pending_toast: None,
+            last_query_cached: String::new(),
+            notify_rx,
+            hotkey_rx,
+            hotkey_service: None,
+            tray_rx,
+            tray_service: None,
+            texture_cache: super::ImageTextureCache::new(),
+            is_visible: true,
+            has_been_focused: false,
+            was_inactive_since_hidden: false,
+            selected_index: 0,
+            focus_search_input: true,
+            last_toggle_instant: None,
+            settings: crate::settings::AppSettings::default(),
+            active_view: super::ActiveView::Settings,
+            password_gen: crate::password::PasswordGeneratorState::default(),
+            revealed_secrets: std::collections::HashSet::new(),
+            pending_clipboard_clear: None,
+            show_clear_confirm_dialog: false,
+            scroll_to_selected: false,
+            current_is_dark: None,
+            title_bar_dark_mode: None,
+            recording_custom_hotkey: false,
+            pending_custom_hotkey: String::new(),
+            monitor_shutdown_tx: shutdown_tx,
+            monitor_handle: None,
+            is_quitting: false,
+            show_keyring_explanation: false,
+            last_drag_or_move_instant: None,
+            last_outer_rect: None,
+            last_hide_instant: None,
+        };
+
+        let ctx = egui::Context::default();
+        app.copy_plain_text("test_log_path", "Copied test toast", &ctx);
+        assert!(app.toast.is_some());
     }
 }

@@ -5,6 +5,8 @@
 //! focus, and restores focus and simulates `Cmd+V` (macOS) or `Ctrl+V` (Windows/Linux)
 //! when an item is chosen.
 
+#![allow(clippy::missing_const_for_fn)]
+
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
