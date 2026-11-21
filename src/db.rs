@@ -436,6 +436,26 @@ impl Database {
         Ok(())
     }
 
+    /// Captures the creation timestamp and prune settings shared by every insert path.
+    fn insert_context(&self) -> (String, usize, bool) {
+        (
+            Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            self.0.max_history.load(Ordering::Relaxed),
+            self.0.preserve_secrets_on_prune.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Reads the `(kind, content)` of the most recent history row, if any.
+    fn last_text_entry(tx: &rusqlite::Transaction<'_>) -> Result<Option<(String, String)>> {
+        let mut stmt =
+            tx.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
+        let mut rows = stmt.query([])?;
+        match rows.next()? {
+            Some(row) => Ok(Some((row.get(0)?, row.get(1)?))),
+            None => Ok(None),
+        }
+    }
+
     /// Inserts a new text clipboard entry, deduplicating against history.
     /// If an identical item was already the most recent, returns `Ok(None)`.
     /// If an identical item exists earlier in history, deletes the stale copy and promotes
@@ -448,30 +468,19 @@ impl Database {
         // Run CPU-bound classification (secret/URL/color/code heuristics) before
         // acquiring the database mutex so UI reads are not blocked.
         let kind_str = self.classify_text_kind(content);
-        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let max_limit = self.0.max_history.load(Ordering::Relaxed);
-        let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
+        let (now, max_limit, preserve) = self.insert_context();
 
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
 
         // 1. Check if the most recent entry has the exact same content
-        {
-            let mut stmt =
-                tx.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
-            let mut rows = stmt.query([])?;
-            if let Some(row) = rows.next()? {
-                let last_kind: String = row.get(0)?;
-                let last_content: String = row.get(1)?;
-                if (last_kind == "text"
-                    || last_kind == "url"
-                    || last_kind == "code"
-                    || last_kind == "color"
-                    || last_kind == "secret")
-                    && last_content == content
-                {
-                    return Ok(None); // Exact consecutive duplicate, ignore
-                }
+        if let Some((last_kind, last_content)) = Self::last_text_entry(&tx)? {
+            if matches!(
+                last_kind.as_str(),
+                "text" | "url" | "code" | "color" | "secret"
+            ) && last_content == content
+            {
+                return Ok(None); // Exact consecutive duplicate, ignore
             }
         }
 
@@ -502,23 +511,14 @@ impl Database {
     /// # Errors
     /// Returns the underlying SQLite error if any statement in the insert transaction fails.
     pub(crate) fn insert_secret(&self, content: &str) -> Result<Option<i64>, rusqlite::Error> {
-        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let max_limit = self.0.max_history.load(Ordering::Relaxed);
-        let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
+        let (now, max_limit, preserve) = self.insert_context();
 
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
 
-        {
-            let mut stmt =
-                tx.prepare("SELECT kind, content FROM clipboard_history ORDER BY id DESC LIMIT 1")?;
-            let mut rows = stmt.query([])?;
-            if let Some(row) = rows.next()? {
-                let last_kind: String = row.get(0)?;
-                let last_content: String = row.get(1)?;
-                if last_kind == "secret" && last_content == content {
-                    return Ok(None);
-                }
+        if let Some((last_kind, last_content)) = Self::last_text_entry(&tx)? {
+            if last_kind == "secret" && last_content == content {
+                return Ok(None);
             }
         }
 
@@ -554,10 +554,8 @@ impl Database {
         height: u32,
         png_bytes: &[u8],
     ) -> Result<Option<i64>, rusqlite::Error> {
-        let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let (now, max_limit, preserve) = self.insert_context();
         let content = format!("[Image {width}x{height}]");
-        let max_limit = self.0.max_history.load(Ordering::Relaxed);
-        let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
 
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;

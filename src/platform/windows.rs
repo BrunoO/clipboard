@@ -616,71 +616,82 @@ unsafe fn captured_target_pid() -> u32 {
     }
 }
 
+// TOKEN_MANDATORY_LABEL = SID_AND_ATTRIBUTES followed inline by the SID bytes.
+// Allocate a properly aligned 256-byte buffer so GetTokenInformation can store
+// both the header and the inline integrity SID without ERROR_INSUFFICIENT_BUFFER.
+#[repr(C, align(8))]
+struct TokenIntegrityBuf([u8; 256]);
+
+/// Extracts the integrity RID from a validated mandatory-label SID.
+///
+/// # Safety
+/// `label` must be an initialized `TOKEN_MANDATORY_LABEL` returned by
+/// `GetTokenInformation`; its SID is validated again here before dereference.
+unsafe fn integrity_rid(label: &TOKEN_MANDATORY_LABEL) -> Option<u32> {
+    if label.Label.Sid.is_null() || IsValidSid(label.Label.Sid) == 0 {
+        return None;
+    }
+    let count = GetSidSubAuthorityCount(label.Label.Sid);
+    if count.is_null() || *count == 0 {
+        return None;
+    }
+    let rid = GetSidSubAuthority(label.Label.Sid, u32::from(*count - 1));
+    if rid.is_null() {
+        return None;
+    }
+    Some(*rid)
+}
+
+/// Reads the mandatory integrity level of `pid`, or `None` if it cannot be queried.
+///
+/// # Safety
+/// All Win32 handle calls are null-checked and closed; `ret_len` is validated
+/// to be at least the `TOKEN_MANDATORY_LABEL` header and no larger than the
+/// 8-byte-aligned 256-byte buffer before the cast.
+unsafe fn integrity_level(pid: u32) -> Option<u32> {
+    if pid == 0 {
+        return None;
+    }
+    let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    if proc.is_null() {
+        return None;
+    }
+    let mut token: HANDLE = std::ptr::null_mut();
+    let opened = OpenProcessToken(proc, TOKEN_QUERY, &raw mut token) != 0 && !token.is_null();
+    let mut level = None;
+    if opened {
+        let mut buf = TokenIntegrityBuf([0u8; 256]);
+        let mut ret_len = 0u32;
+        let buffer_len = u32::try_from(buf.0.len()).unwrap_or(256);
+        let ok = GetTokenInformation(
+            token,
+            TokenIntegrityLevel,
+            buf.0.as_mut_ptr().cast::<std::ffi::c_void>(),
+            buffer_len,
+            &raw mut ret_len,
+        );
+        let min_len =
+            u32::try_from(std::mem::size_of::<TOKEN_MANDATORY_LABEL>()).unwrap_or(u32::MAX);
+        if ok != 0 && (ret_len < min_len || ret_len > buffer_len) {
+            crate::logging::log_message(
+                "WARN",
+                &format!("Unexpected TOKEN_MANDATORY_LABEL length {ret_len}; skipping UIPI elevation check"),
+            );
+        }
+        if ok != 0 && ret_len >= min_len && ret_len <= buffer_len {
+            let info = &*std::ptr::addr_of!(buf).cast::<TOKEN_MANDATORY_LABEL>();
+            level = integrity_rid(info);
+        }
+        let _ = CloseHandle(token);
+    }
+    let _ = CloseHandle(proc);
+    level
+}
+
 /// True when the captured target runs at a higher mandatory integrity level
 /// than us (normally: it runs as Administrator). UIPI silently discards the
 /// injected Ctrl+V across that boundary, so auto-paste must be skipped.
 pub(crate) fn target_is_elevated() -> bool {
-    // TOKEN_MANDATORY_LABEL = SID_AND_ATTRIBUTES followed inline by the SID bytes.
-    // Allocate a properly aligned 256-byte buffer so GetTokenInformation can store
-    // both the header and the inline integrity SID without ERROR_INSUFFICIENT_BUFFER.
-    #[repr(C, align(8))]
-    struct TokenIntegrityBuf([u8; 256]);
-
-    /// Reads the mandatory integrity level of `pid`, or `None` if it cannot be queried.
-    ///
-    /// # Safety
-    /// All Win32 handle calls are null-checked and closed; `ret_len` is validated
-    /// to be at least the `TOKEN_MANDATORY_LABEL` header and no larger than the
-    /// 8-byte-aligned 256-byte buffer before the cast, and SID pointers are
-    /// checked before dereference.
-    unsafe fn integrity_level(pid: u32) -> Option<u32> {
-        if pid == 0 {
-            return None;
-        }
-        let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if proc.is_null() {
-            return None;
-        }
-        let mut token: HANDLE = std::ptr::null_mut();
-        let opened = OpenProcessToken(proc, TOKEN_QUERY, &raw mut token) != 0 && !token.is_null();
-        let mut level = None;
-        if opened {
-            let mut buf = TokenIntegrityBuf([0u8; 256]);
-            let mut ret_len = 0u32;
-            let buffer_len = u32::try_from(buf.0.len()).unwrap_or(256);
-            let ok = GetTokenInformation(
-                token,
-                TokenIntegrityLevel,
-                buf.0.as_mut_ptr().cast::<std::ffi::c_void>(),
-                buffer_len,
-                &raw mut ret_len,
-            );
-            let min_len =
-                u32::try_from(std::mem::size_of::<TOKEN_MANDATORY_LABEL>()).unwrap_or(u32::MAX);
-            if ok != 0 && (ret_len < min_len || ret_len > buffer_len) {
-                crate::logging::log_message(
-                    "WARN",
-                    &format!("Unexpected TOKEN_MANDATORY_LABEL length {ret_len}; skipping UIPI elevation check"),
-                );
-            }
-            if ok != 0 && ret_len >= min_len && ret_len <= buffer_len {
-                let info = &*std::ptr::addr_of!(buf).cast::<TOKEN_MANDATORY_LABEL>();
-                if !info.Label.Sid.is_null() && IsValidSid(info.Label.Sid) != 0 {
-                    let count = GetSidSubAuthorityCount(info.Label.Sid);
-                    if !count.is_null() && *count > 0 {
-                        let rid = GetSidSubAuthority(info.Label.Sid, u32::from(*count - 1));
-                        if !rid.is_null() {
-                            level = Some(*rid);
-                        }
-                    }
-                }
-            }
-            let _ = CloseHandle(token);
-        }
-        let _ = CloseHandle(proc);
-        level
-    }
-
     // SAFETY: Both helper calls honor their safety contracts and query handles internally; a failed integrity query fails closed.
     unsafe {
         let target_pid = captured_target_pid();
