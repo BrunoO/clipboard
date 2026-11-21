@@ -70,6 +70,8 @@ For each option, list:
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/FEATURE_EXPLORATION_REVIEW_{DATE}.md`.
+
 - Problem statement and target user.
 - Evidence from repository.
 - Options comparison table.

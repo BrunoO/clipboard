@@ -96,6 +96,8 @@ grep -RIn 'uses:' .github/workflows
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/CARGO_SUPPLY_CHAIN_REVIEW_{DATE}.md`.
+
 - Executive Summary.
 - Dependency posture summary (measured counts only).
 - Findings by severity.

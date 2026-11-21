@@ -13,7 +13,7 @@ You are a Rust documentation reviewer. Audit documentation for correctness, comp
 
 - Public/private API docs use rustdoc conventions (`# Errors`, `# Panics`, `# Safety`).
 - `README.md`, `AGENTS.md`, `docs/SECURITY_LESSONS.md`, `docs/MULTIPLATFORM_LESSONS.md`, and `docs/CONCURRENCY_AND_PERF_LESSONS.md` are normative user/contributor docs.
-- Review prompts live in `docs/prompts-review/`; generated reports live in `docs/`.
+- Review prompts live in `docs/prompts-review/`; generated reports live in `docs/reviews/{DATE}/`.
 - Do not assume `internal-docs/prompts/` or Doxygen exists.
 
 ## Grounding Rules
@@ -47,7 +47,7 @@ You are a Rust documentation reviewer. Audit documentation for correctness, comp
 
 ### 4. Prompt and Report Docs
 - `docs/prompts-review/master-orchestrator.md` references prompt files that exist.
-- Report output filenames in the orchestrator match actual generated reports.
+- Report output filenames in the orchestrator match actual generated reports in `docs/reviews/{DATE}/`.
 - No *active* orchestrator reference points to removed prompts or nonexistent paths. Historical/negative mentions in the adaptation map or "do not assume" instructions are intentional and are not defects.
 - `docs/DOCUMENTATION_INDEX.md`, if present, lists new review reports.
 
@@ -76,6 +76,8 @@ grep -RInE 'TODO|FIXME|TBD' README.md AGENTS.md docs
 6. **Recommendation** — exact wording/config change.
 
 ## Output Sections
+
+- **Destination:** `docs/reviews/{DATE}/DOCUMENTATION_REVIEW_{DATE}.md`.
 
 - Executive Summary.
 - Findings by severity.

@@ -95,6 +95,8 @@ grep -RInE '#\[test\]|#\[ignore\]|#\[cfg\(test\)\]|proptest!|fuzz_target!|tempfi
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/TEST_STRATEGY_REVIEW_{DATE}.md`.
+
 - Test inventory summary (measured only).
 - Command results table.
 - Findings by severity.

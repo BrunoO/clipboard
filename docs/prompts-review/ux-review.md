@@ -87,6 +87,8 @@ ls docs/screenshots 2>/dev/null || true
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/UX_REVIEW_{DATE}.md`.
+
 - Executive Summary.
 - Findings by severity.
 - Quick Wins.

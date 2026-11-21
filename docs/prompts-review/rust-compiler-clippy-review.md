@@ -103,6 +103,8 @@ grep -RInE '#!?\[allow\(|\bunsafe\b' src Cargo.toml
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/RUST_STATIC_ANALYSIS_REVIEW_{DATE}.md`.
+
 - Gate results table (command, status, output reference).
 - Lint configuration findings.
 - Edition/MSRV findings.

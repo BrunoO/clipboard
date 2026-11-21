@@ -95,6 +95,8 @@ cargo tree -d
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/PLATFORM_COMPAT_REVIEW_{DATE}.md`.
+
 - Target matrix (observed support only).
 - Findings by severity.
 - Quick Wins.

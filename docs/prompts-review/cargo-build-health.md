@@ -93,6 +93,8 @@ grep -RIn 'cargo build\|cargo clippy\|cargo test\|cargo deny' .github/workflows
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/CARGO_BUILD_HEALTH_REVIEW_{DATE}.md`.
+
 - Build configuration summary.
 - Command results table.
 - Findings by severity.

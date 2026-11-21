@@ -84,6 +84,8 @@ grep -RInE 'transaction\(|wal_checkpoint|secure_delete' src
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/ERROR_HANDLING_REVIEW_{DATE}.md`.
+
 - Executive Summary.
 - Findings by severity.
 - Quick Wins.

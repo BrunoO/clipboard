@@ -94,6 +94,8 @@ grep -RIn 'cache\|sccache\|--locked\|all-features' .github/workflows
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/COMPILATION_SPEED_REVIEW_{DATE}.md`.
+
 - Timing summary table.
 - Findings by severity.
 - Quick Wins.

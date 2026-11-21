@@ -1,10 +1,10 @@
 # Master Review Orchestrator (Rust Edition)
 
-**Purpose:** Execute all specialized Rust review prompts in order and generate time-stamped reports in `docs/`.
+**Purpose:** Execute all specialized Rust review prompts in order and generate time-stamped reports in `docs/reviews/{DATE}/`.
 
 **Prompt set:** `docs/prompts-review/`
 **Supporting docs:** [`RUST_REVIEW_CONSIDERATIONS.md`](./RUST_REVIEW_CONSIDERATIONS.md), [`RUST_PROMPT_ADAPTATION_MAP.md`](./RUST_PROMPT_ADAPTATION_MAP.md)
-**Report directory:** `docs/`
+**Review directory:** `docs/reviews/{DATE}/`
 **Date token:** `{DATE}` = `YYYY-MM-DD`
 
 ---
@@ -12,7 +12,7 @@
 ## Orchestration Prompt
 
 ````markdown
-You are a Code Quality Orchestrator for a professional Rust desktop application. Execute a comprehensive, evidence-based codebase review using the specialized prompts in `docs/prompts-review/`. For each review, generate a time-stamped report file.
+You are a Code Quality Orchestrator for a professional Rust desktop application. Execute a comprehensive, evidence-based codebase review using the specialized prompts in `docs/prompts-review/`. Resolve `{DATE}` once, create `docs/reviews/{DATE}/`, and write every time-stamped report file there.
 
 ## Project Context
 
@@ -39,11 +39,11 @@ These rules apply to every review. They override any conflicting instruction in 
 
 ## Instructions
 
-Execute the following reviews IN ORDER. For each:
+Before starting, resolve `{DATE}` once and create `docs/reviews/{DATE}/`. Then execute the following reviews IN ORDER. For each:
 
 1. Read the prompt file from `docs/prompts-review/`.
 2. Execute the review following the prompt AND the Global Evidence Rules above.
-3. Save the output to `docs/` using the exact output filename in the phase table.
+3. Save the output to `docs/reviews/{DATE}/` using the exact output filename in the phase table.
 4. Include a summary section at the end linking to all generated reports.
 
 ---
@@ -53,56 +53,56 @@ Execute the following reviews IN ORDER. For each:
 ### Phase 1: Code Quality
 | Order | Prompt File | Output File |
 |---|---|---|
-| 1 | `docs/prompts-review/tech-debt.md` | `docs/TECH_DEBT_REVIEW_{DATE}.md` |
-| 2 | `docs/prompts-review/architecture-review.md` | `docs/ARCHITECTURE_REVIEW_{DATE}.md` |
+| 1 | `docs/prompts-review/tech-debt.md` | `docs/reviews/{DATE}/TECH_DEBT_REVIEW_{DATE}.md` |
+| 2 | `docs/prompts-review/architecture-review.md` | `docs/reviews/{DATE}/ARCHITECTURE_REVIEW_{DATE}.md` |
 
 ### Phase 2: Rust Language Safety
 | Order | Prompt File | Output File |
 |---|---|---|
-| 3 | `docs/prompts-review/unsafe-ffi-review.md` | `docs/UNSAFE_FFI_REVIEW_{DATE}.md` |
-| 4 | `docs/prompts-review/error-handling-review.md` | `docs/ERROR_HANDLING_REVIEW_{DATE}.md` |
+| 3 | `docs/prompts-review/unsafe-ffi-review.md` | `docs/reviews/{DATE}/UNSAFE_FFI_REVIEW_{DATE}.md` |
+| 4 | `docs/prompts-review/error-handling-review.md` | `docs/reviews/{DATE}/ERROR_HANDLING_REVIEW_{DATE}.md` |
 
 ### Phase 3: Security & Supply Chain
 | Order | Prompt File | Output File |
 |---|---|---|
-| 5 | `docs/prompts-review/security-review.md` | `docs/SECURITY_REVIEW_{DATE}.md` |
-| 6 | `docs/prompts-review/cargo-dependency-supply-chain-review.md` | `docs/CARGO_SUPPLY_CHAIN_REVIEW_{DATE}.md` |
+| 5 | `docs/prompts-review/security-review.md` | `docs/reviews/{DATE}/SECURITY_REVIEW_{DATE}.md` |
+| 6 | `docs/prompts-review/cargo-dependency-supply-chain-review.md` | `docs/reviews/{DATE}/CARGO_SUPPLY_CHAIN_REVIEW_{DATE}.md` |
 
 ### Phase 4: Performance & Testing
 | Order | Prompt File | Output File |
 |---|---|---|
-| 7 | `docs/prompts-review/performance-review.md` | `docs/PERFORMANCE_REVIEW_{DATE}.md` |
-| 8 | `docs/prompts-review/test-strategy-audit.md` | `docs/TEST_STRATEGY_REVIEW_{DATE}.md` |
+| 7 | `docs/prompts-review/performance-review.md` | `docs/reviews/{DATE}/PERFORMANCE_REVIEW_{DATE}.md` |
+| 8 | `docs/prompts-review/test-strategy-audit.md` | `docs/reviews/{DATE}/TEST_STRATEGY_REVIEW_{DATE}.md` |
 
 ### Phase 5: Documentation & UX
 | Order | Prompt File | Output File |
 |---|---|---|
-| 9 | `docs/prompts-review/documentation-maintenance.md` | `docs/DOCUMENTATION_REVIEW_{DATE}.md` |
-| 10 | `docs/prompts-review/ux-review.md` | `docs/UX_REVIEW_{DATE}.md` |
+| 9 | `docs/prompts-review/documentation-maintenance.md` | `docs/reviews/{DATE}/DOCUMENTATION_REVIEW_{DATE}.md` |
+| 10 | `docs/prompts-review/ux-review.md` | `docs/reviews/{DATE}/UX_REVIEW_{DATE}.md` |
 
 ### Phase 6: Product Strategy
 | Order | Prompt File | Output File |
 |---|---|---|
-| 11 | `docs/prompts-review/feature-exploration-product-owner.md` | `docs/FEATURE_EXPLORATION_REVIEW_{DATE}.md` |
+| 11 | `docs/prompts-review/feature-exploration-product-owner.md` | `docs/reviews/{DATE}/FEATURE_EXPLORATION_REVIEW_{DATE}.md` |
 
 ### Phase 7: Static Analysis
 | Order | Prompt File | Output File |
 |---|---|---|
-| 12 | `docs/prompts-review/rust-compiler-clippy-review.md` | `docs/RUST_STATIC_ANALYSIS_REVIEW_{DATE}.md` |
-| 13 | `docs/prompts-review/sonar-check.md` | `docs/SONAR_REVIEW_{DATE}.md` |
+| 12 | `docs/prompts-review/rust-compiler-clippy-review.md` | `docs/reviews/{DATE}/RUST_STATIC_ANALYSIS_REVIEW_{DATE}.md` |
+| 13 | `docs/prompts-review/sonar-check.md` | `docs/reviews/{DATE}/SONAR_REVIEW_{DATE}.md` |
 
 > **Prerequisite:** Phase 7 SonarQube review requires `SONARQUBE_TOKEN`. If absent, the prompt self-reports as skipped — that is the correct behavior. Do not invent Sonar findings.
 
 ### Phase 8: Platform Compatibility
 | Order | Prompt File | Output File |
 |---|---|---|
-| 14 | `docs/prompts-review/platform-compat-review.md` | `docs/PLATFORM_COMPAT_REVIEW_{DATE}.md` |
+| 14 | `docs/prompts-review/platform-compat-review.md` | `docs/reviews/{DATE}/PLATFORM_COMPAT_REVIEW_{DATE}.md` |
 
 ### Phase 9: Build & Toolchain
 | Order | Prompt File | Output File |
 |---|---|---|
-| 15 | `docs/prompts-review/cargo-build-health.md` | `docs/CARGO_BUILD_HEALTH_REVIEW_{DATE}.md` |
-| 16 | `docs/prompts-review/compilation-speed-review.md` | `docs/COMPILATION_SPEED_REVIEW_{DATE}.md` |
+| 15 | `docs/prompts-review/cargo-build-health.md` | `docs/reviews/{DATE}/CARGO_BUILD_HEALTH_REVIEW_{DATE}.md` |
+| 16 | `docs/prompts-review/compilation-speed-review.md` | `docs/reviews/{DATE}/COMPILATION_SPEED_REVIEW_{DATE}.md` |
 
 ---
 
@@ -151,7 +151,7 @@ Each generated report MUST follow this structure:
 
 After completing all reviews, generate a master summary:
 
-**File**: `docs/COMPREHENSIVE_REVIEW_SUMMARY_{DATE}.md`
+**File**: `docs/reviews/{DATE}/COMPREHENSIVE_REVIEW_SUMMARY_{DATE}.md`
 
 ```markdown
 # Comprehensive Rust Code Review Summary - {YYYY-MM-DD}
@@ -266,10 +266,10 @@ After generating reports:
 2. Create GitHub issues for critical/high findings (optional).
 3. Move previous reviews to `docs/Historical/` if superseded.
 4. Schedule the next review date.
-5. **Phase 7:** Ensure `docs/RUST_STATIC_ANALYSIS_REVIEW_{DATE}.md` contains the exact `cargo fmt -- --check`, `cargo check`, and `cargo clippy` commands that were run.
-6. **Phase 7:** If `SONARQUBE_TOKEN` was absent, ensure `docs/SONAR_REVIEW_{DATE}.md` explicitly says the review was skipped.
-7. **Phase 8:** Ensure `docs/PLATFORM_COMPAT_REVIEW_{DATE}.md` covers macOS, Windows, and Linux with `#[cfg]`/target-triple evidence.
-8. **Phase 9:** Ensure `docs/CARGO_BUILD_HEALTH_REVIEW_{DATE}.md` includes lockfile and target-specific dependency evidence.
+5. **Phase 7:** Ensure `docs/reviews/{DATE}/RUST_STATIC_ANALYSIS_REVIEW_{DATE}.md` contains the exact `cargo fmt -- --check`, `cargo check`, and `cargo clippy` commands that were run.
+6. **Phase 7:** If `SONARQUBE_TOKEN` was absent, ensure `docs/reviews/{DATE}/SONAR_REVIEW_{DATE}.md` explicitly says the review was skipped.
+7. **Phase 8:** Ensure `docs/reviews/{DATE}/PLATFORM_COMPAT_REVIEW_{DATE}.md` covers macOS, Windows, and Linux with `#[cfg]`/target-triple evidence.
+8. **Phase 9:** Ensure `docs/reviews/{DATE}/CARGO_BUILD_HEALTH_REVIEW_{DATE}.md` includes lockfile and target-specific dependency evidence.
 ````
 
 ---

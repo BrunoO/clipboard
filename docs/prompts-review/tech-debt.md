@@ -91,6 +91,8 @@ For each finding:
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/TECH_DEBT_REVIEW_{DATE}.md`.
+
 - Executive Summary with health score and counts.
 - Findings by severity.
 - Quick Wins (3–5).

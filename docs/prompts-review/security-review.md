@@ -111,6 +111,8 @@ grep -RInE 'println!|dbg!|info!|warn!|error!|debug!|trace!' src
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/SECURITY_REVIEW_{DATE}.md`.
+
 - Executive Summary.
 - Findings by severity.
 - Quick Wins.

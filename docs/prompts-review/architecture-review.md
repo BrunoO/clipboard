@@ -88,6 +88,8 @@ grep -RInE '^pub |^pub\(crate\) |thread::Builder|Arc<|Mutex<|RwLock<|thread_loca
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/ARCHITECTURE_REVIEW_{DATE}.md`.
+
 - Architecture summary (observed modules/edges only).
 - Findings by severity.
 - Quick Wins.

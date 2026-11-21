@@ -95,6 +95,8 @@ grep -RInE 'clone\(\)|format!\(|to_string\(\)|recv_timeout|try_recv|request_repa
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/PERFORMANCE_REVIEW_{DATE}.md`.
+
 - Measurement summary (or explicit absence).
 - Findings by severity.
 - Quick Wins.

@@ -98,6 +98,8 @@ cargo +nightly miri test   # optional; report if unavailable
 
 ## Output Sections
 
+- **Destination:** `docs/reviews/{DATE}/UNSAFE_FFI_REVIEW_{DATE}.md`.
+
 - Unsafe inventory table (file, construct, purpose, safe wrapper benefit).
 - Findings by severity.
 - Quick Wins.

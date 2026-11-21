@@ -149,6 +149,8 @@ For each quick win:
 
 ## Summary Requirements
 
+- **Destination:** `docs/reviews/{DATE}/SONAR_REVIEW_{DATE}.md`.
+
 End with:
 
 ### Executive Summary
