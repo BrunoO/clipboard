@@ -524,12 +524,28 @@ impl AppSettings {
     /// Loads settings from the database, falling back to default if unset or corrupted.
     #[must_use]
     pub(crate) fn load(db: &Database) -> Self {
-        if let Ok(Some(json)) = db.get_setting(Self::SETTINGS_KEY) {
-            if let Ok(settings) = serde_json::from_str(&json) {
-                return settings;
+        match db.get_setting(Self::SETTINGS_KEY) {
+            Ok(Some(json)) => match serde_json::from_str(&json) {
+                Ok(settings) => settings,
+                Err(e) => {
+                    crate::logging::log_message(
+                        "WARN",
+                        &format!("Failed to parse persistent app_config settings JSON: {e}; falling back to defaults"),
+                    );
+                    Self::default()
+                }
+            },
+            Ok(None) => Self::default(),
+            Err(e) => {
+                crate::logging::log_message(
+                    "WARN",
+                    &format!(
+                        "Failed to read app_config from database: {e}; falling back to defaults"
+                    ),
+                );
+                Self::default()
             }
         }
-        Self::default()
     }
 
     /// Saves the settings to the database.
@@ -701,5 +717,19 @@ mod tests {
         let parsed_light: AppSettings =
             serde_json::from_str(light_json).expect("Light theme JSON should parse");
         assert_eq!(parsed_light.theme, AppThemeMode::Light);
+    }
+
+    #[test]
+    fn test_load_corrupted_json_falls_back_to_default() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("corrupted_settings.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        // Write invalid JSON into app_config setting
+        db.set_setting(AppSettings::SETTINGS_KEY, "{not valid json")
+            .unwrap();
+
+        let loaded = AppSettings::load(&db);
+        assert_eq!(loaded, AppSettings::default());
     }
 }
