@@ -7,7 +7,11 @@ pub(super) enum ItemAction {
     None,
     CopyText(String),
     CopySecret(String),
-    CopyFormattedJson(String),
+    CopyTransformed {
+        content: String,
+        toast: String,
+        is_secret: bool,
+    },
     CopyColor(String, String),
     CopyImage(i64),
     OpenBrowser(String),
@@ -140,12 +144,12 @@ impl ClipboardApp {
         match action {
             ItemAction::CopyText(content) => self.copy_text_to_clipboard(&content, ctx),
             ItemAction::CopySecret(secret) => self.copy_secret_to_clipboard(&secret, ctx),
-            ItemAction::CopyFormattedJson(formatted) => {
-                self.copy_text_to_clipboard(&formatted, ctx);
-                self.show_toast(&format!(
-                    "{} Copied formatted JSON to clipboard!",
-                    icons::CHECK
-                ));
+            ItemAction::CopyTransformed {
+                content,
+                toast,
+                is_secret,
+            } => {
+                self.copy_transformed_to_clipboard(&content, &toast, is_secret, ctx);
             }
             ItemAction::CopyColor(val, name) => {
                 self.copy_text_to_clipboard(&val, ctx);
@@ -529,14 +533,16 @@ impl ClipboardApp {
     }
 
     fn render_kind_extra_buttons(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
-        if item.kind == ItemKind::Url
+        let mut action = if item.kind == ItemKind::Url
             && ui
                 .small_button(format!("{} Open", icons::ARROW_SQUARE_OUT))
                 .on_hover_text("Open link in default browser")
                 .clicked()
         {
-            return ItemAction::OpenBrowser(item.content.trim().to_string());
-        }
+            ItemAction::OpenBrowser(item.content.trim().to_string())
+        } else {
+            ItemAction::None
+        };
 
         if item.code_language() == Some(crate::code::CodeLanguage::Json) {
             if let Some(pretty) = crate::code::format_json(&item.content) {
@@ -545,12 +551,32 @@ impl ClipboardApp {
                     .on_hover_text("Copy formatted JSON with indentation")
                     .clicked()
                 {
-                    return ItemAction::CopyFormattedJson(pretty);
+                    action = ItemAction::CopyTransformed {
+                        content: pretty,
+                        toast: format!("{} Copied formatted JSON to clipboard!", icons::CHECK),
+                        is_secret: item.kind == ItemKind::Secret,
+                    };
                 }
             }
         }
 
-        ItemAction::None
+        if crate::transform::has_strippable_formatting(item)
+            && ui
+                .small_button(format!("{} Raw", icons::FILE_TEXT))
+                .on_hover_text(
+                    "Copy stripped plain text (no HTML, Markdown, or ANSI formatting, Shift+Enter)",
+                )
+                .clicked()
+        {
+            let raw = crate::transform::strip_source_formatting(&item.content);
+            action = ItemAction::CopyTransformed {
+                content: raw,
+                toast: format!("{} Copied raw plain text to clipboard!", icons::CHECK),
+                is_secret: item.kind == ItemKind::Secret,
+            };
+        }
+
+        action
     }
 
     fn render_secret_content(

@@ -16,6 +16,7 @@ mod platform;
 mod secret;
 mod settings;
 mod theme;
+mod transform;
 mod tray;
 
 use app::{AppServices, ClipboardApp};

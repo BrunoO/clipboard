@@ -1,6 +1,6 @@
 # Feature Research: Stripping Source Formatting & Generalized Entry Transformations
 
-> **Status:** Research / Design Study  
+> **Status:** Phase 1 Implemented (Core Module, Strip Source Formatting, Raw Button, Shift+Enter Shortcut)  
 > **Date:** 2026-11-21  
 > **Scope:** Plain-text extraction ("strip source formatting") and a generalized entry transformation framework for `CipherClipboard`.
 
@@ -181,10 +181,10 @@ Any implementation must preserve the project's documented invariants:
 
 ## 8. Recommended Phased Rollout
 
-1. **Phase 1 — Core Module & "Strip Source Formatting" MVP:**
-   - Add `src/transform.rs` with `strip_source_formatting`, `has_strippable_formatting`, and comprehensive unit tests (ANSI, HTML entities/tags, Markdown, zero-width chars, CRLF/NBSP).
-   - Generalize `ItemAction::CopyFormattedJson` → `ItemAction::CopyTransformed`.
-   - Add contextual `Raw` button in `render_kind_extra_buttons` + `Shift+Enter` shortcut for selected item.
+1. **Phase 1 — Core Module & "Strip Source Formatting" MVP (Implemented):**
+   - Added `src/transform.rs` with `strip_source_formatting`, `has_strippable_formatting`, `TextTransform`, and comprehensive unit tests (ANSI CSI/OSC, HTML entities/tags, Markdown, zero-width chars, CRLF/NBSP).
+   - Generalized `ItemAction::CopyFormattedJson` → `ItemAction::CopyTransformed`.
+   - Added contextual `Raw` button in `render_kind_extra_buttons` + `Shift+Enter` shortcut for selected item.
 2. **Phase 2 — High-Value Generalized Transforms + Context Menu:**
    - Add Whitespace/PDF unwrap, Case/Identifier conversions, Line operations, JSON Minify, and URL tracking-param stripping (all zero new crates).
    - Add `Transform ▾` / right-click context menu on cards grouped by category.

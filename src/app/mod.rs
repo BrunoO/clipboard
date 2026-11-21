@@ -599,6 +599,21 @@ impl ClipboardApp {
         }
     }
 
+    fn copy_transformed_to_clipboard(
+        &mut self,
+        content: &str,
+        toast: &str,
+        is_secret: bool,
+        ctx: &egui::Context,
+    ) {
+        if is_secret {
+            self.copy_secret_to_clipboard(content, ctx);
+        } else {
+            self.copy_text_to_clipboard(content, ctx);
+        }
+        self.show_toast(toast);
+    }
+
     fn copy_generated_password(&mut self, ctx: &egui::Context, dismiss: bool) {
         let secret = self.password_gen.current_value.clone();
         if secret.is_empty() {
@@ -804,7 +819,9 @@ impl ClipboardApp {
 
         self.apply_history_nav_step(nav, filtered_indices.len(), ctx);
 
-        if nav.copy_selected {
+        if nav.copy_raw_selected {
+            self.copy_raw_filtered_item(&filtered_indices, self.selected_index, ctx);
+        } else if nav.copy_selected {
             self.copy_filtered_item(&filtered_indices, self.selected_index, ctx);
         }
 
@@ -876,6 +893,26 @@ impl ClipboardApp {
                 Some(ItemAction::CopySecret(secret)) => self.copy_secret_to_clipboard(&secret, ctx),
                 Some(ItemAction::CopyText(text)) => self.copy_text_to_clipboard(&text, ctx),
                 _ => {}
+            }
+        }
+    }
+
+    fn copy_raw_filtered_item(
+        &mut self,
+        filtered_indices: &[usize],
+        slot: usize,
+        ctx: &egui::Context,
+    ) {
+        if let Some(&item_idx) = filtered_indices.get(slot) {
+            if let Some(item) = self.items.get(item_idx) {
+                if item.kind == ItemKind::Image {
+                    self.copy_image_by_id(item.id, ctx);
+                } else {
+                    let raw = crate::transform::strip_source_formatting(&item.content);
+                    let is_secret = item.kind == ItemKind::Secret;
+                    let toast = format!("{} Copied raw plain text to clipboard!", icons::CHECK);
+                    self.copy_transformed_to_clipboard(&raw, &toast, is_secret, ctx);
+                }
             }
         }
     }
@@ -1686,10 +1723,12 @@ enum NavStep {
 }
 
 #[derive(Default, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
 struct HistoryNavInput {
     down: Option<NavStep>,
     up: Option<NavStep>,
     copy_selected: bool,
+    copy_raw_selected: bool,
     delete_selected: bool,
     toggle_secret_selected: bool,
     copy_shortcut_slot: Option<usize>,
@@ -1739,7 +1778,9 @@ fn read_history_nav_input(ctx: &egui::Context) -> HistoryNavInput {
             nav.up = Some(NavStep::Wrap);
         }
 
-        if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+        if i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter) {
+            nav.copy_raw_selected = true;
+        } else if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
             nav.copy_selected = true;
         }
 
@@ -2206,5 +2247,22 @@ mod tests {
         });
         let nav = super::read_history_nav_input(&ctx);
         assert!(nav.toggle_secret_selected);
+    }
+
+    #[test]
+    fn test_read_history_nav_input_consumes_shift_enter_for_copy_raw() {
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::SHIFT,
+            });
+        });
+        let nav = super::read_history_nav_input(&ctx);
+        assert!(nav.copy_raw_selected);
+        assert!(!nav.copy_selected);
     }
 }
