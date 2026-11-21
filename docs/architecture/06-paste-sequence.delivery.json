@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "b4ed2272-149d-4afb-8f74-7a0f505d0a69",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "/tmp/arch-06-paste-sequence.json",
+  "output": "/Users/brunoorsier/dev/clipboard/docs/architecture/06-paste-sequence.html",
+  "specification": {
+    "sha256": "154b975dc5b4573fa65a675b410d1825fc0a23465826f864b2ad29a9cb673205",
+    "bytes": 3332
+  },
+  "artifact": {
+    "sha256": "89e93df15976ed1d89da84f088f82f9953cdb73e8f64df3aba9c6b402febb770",
+    "bytes": 834169
+  }
+}
