@@ -16,6 +16,25 @@ pub(crate) enum KeyStorageMode {
     OsKeyring,
     /// Key is stored in a restricted local `.encryption_key` file (debug cache or keyring unavailable).
     LocalFileFallback,
+    /// Key is stored locally, but OS permission/ACL hardening for the file failed.
+    LocalFileFallbackDegraded,
+}
+
+const fn local_fallback_mode(permissions_degraded: bool) -> KeyStorageMode {
+    if permissions_degraded {
+        KeyStorageMode::LocalFileFallbackDegraded
+    } else {
+        KeyStorageMode::LocalFileFallback
+    }
+}
+
+fn warn_if_local_cache_hardening_failed(permissions_degraded: bool) {
+    if permissions_degraded {
+        crate::logging::log_message(
+            "WARN",
+            "Debug local key-file cache was created but its permissions could not be restricted; the active key remains in the OS keyring.",
+        );
+    }
 }
 
 /// Retrieves or securely generates a 256-bit encryption key wrapped in [`Zeroizing`],
@@ -47,13 +66,13 @@ fn get_or_create_encryption_key_with_mode(
     if allow_key_file_cache {
         // Debug mode: prefer local key file to avoid Keychain prompts on every recompile.
         if let Some(key) = read_key_file(&key_file)? {
-            set_restricted_permissions(&key_file);
+            let permissions_degraded = set_restricted_permissions(&key_file);
             #[cfg(debug_assertions)]
             println!(
                 "🔐 Loaded encryption key from local key store: {}",
                 key_file.display()
             );
-            return Ok((key, KeyStorageMode::LocalFileFallback));
+            return Ok((key, local_fallback_mode(permissions_degraded)));
         }
 
         if let Some((key, service)) = read_from_keyring() {
@@ -61,7 +80,8 @@ fn get_or_create_encryption_key_with_mode(
             println!("🔐 Loaded encryption key from OS Keyring ({service}).");
             #[cfg(not(debug_assertions))]
             let _ = service;
-            save_key_file(&key_file, &key)?;
+            let permissions_degraded = save_key_file(&key_file, &key)?;
+            warn_if_local_cache_hardening_failed(permissions_degraded);
             return Ok((key, KeyStorageMode::OsKeyring));
         }
     } else {
@@ -88,13 +108,13 @@ fn get_or_create_encryption_key_with_mode(
                 println!("🔐 Migrated encryption key into OS Keyring and removed local key file.");
                 return Ok((key, KeyStorageMode::OsKeyring));
             }
-            set_restricted_permissions(&key_file);
+            let permissions_degraded = set_restricted_permissions(&key_file);
             #[cfg(debug_assertions)]
             eprintln!(
                 "ℹ️ OS Keyring unavailable; continuing with restricted local key file: {}",
                 key_file.display()
             );
-            return Ok((key, KeyStorageMode::LocalFileFallback));
+            return Ok((key, local_fallback_mode(permissions_degraded)));
         }
     }
 
@@ -109,7 +129,7 @@ fn get_or_create_encryption_key_with_mode(
     println!("🔑 Generating new 256-bit encryption key for first-time setup...");
 
     let storage_mode = if allow_key_file_cache {
-        save_key_file(&key_file, &new_key)?;
+        let permissions_degraded = save_key_file(&key_file, &new_key)?;
         if let Err(e) = write_to_keyring(&new_key) {
             #[cfg(debug_assertions)]
             eprintln!(
@@ -117,8 +137,9 @@ fn get_or_create_encryption_key_with_mode(
             );
             #[cfg(not(debug_assertions))]
             let _ = e;
-            KeyStorageMode::LocalFileFallback
+            local_fallback_mode(permissions_degraded)
         } else {
+            warn_if_local_cache_hardening_failed(permissions_degraded);
             #[cfg(debug_assertions)]
             println!("🔑 Backed up encryption key to OS Keyring.");
             KeyStorageMode::OsKeyring
@@ -130,8 +151,8 @@ fn get_or_create_encryption_key_with_mode(
         );
         #[cfg(not(debug_assertions))]
         let _ = e;
-        save_key_file(&key_file, &new_key)?;
-        KeyStorageMode::LocalFileFallback
+        let permissions_degraded = save_key_file(&key_file, &new_key)?;
+        local_fallback_mode(permissions_degraded)
     } else {
         #[cfg(debug_assertions)]
         println!("🔑 Stored encryption key in OS Keyring (Keyring-only release mode).");
@@ -309,12 +330,13 @@ fn remove_key_file(path: &Path) {
     let _ = fs::remove_file(path);
 }
 
-fn save_key_file(path: &Path, key: &str) -> Result<(), std::io::Error> {
+/// Writes a local key file and reports whether OS permission hardening failed.
+fn save_key_file(path: &Path, key: &str) -> Result<bool, std::io::Error> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     #[cfg(unix)]
-    {
+    let permissions_degraded = {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
 
@@ -327,21 +349,21 @@ fn save_key_file(path: &Path, key: &str) -> Result<(), std::io::Error> {
         file.write_all(key.as_bytes())?;
         file.sync_all()?;
         // Also tighten permissions if the file already existed with broader mode.
-        set_restricted_permissions(path);
-    }
+        set_restricted_permissions(path)
+    };
     #[cfg(target_os = "windows")]
-    {
+    let permissions_degraded = {
         let protected = crate::platform::windows::dpapi_protect(key.as_bytes())
             .map_err(std::io::Error::other)?;
         fs::write(path, &protected)?;
-        set_restricted_permissions(path);
-    }
+        set_restricted_permissions(path)
+    };
     #[cfg(not(any(unix, target_os = "windows")))]
-    {
+    let permissions_degraded = {
         fs::write(path, key)?;
-        set_restricted_permissions(path);
-    }
-    Ok(())
+        set_restricted_permissions(path)
+    };
+    Ok(permissions_degraded)
 }
 
 fn generate_random_hex_key() -> Zeroizing<String> {
@@ -361,10 +383,20 @@ pub(crate) fn set_restricted_dir_permissions(path: &Path) {
 #[cfg(not(unix))]
 pub(crate) const fn set_restricted_dir_permissions(_path: &Path) {}
 
+/// Restricts a fallback key file and returns `true` when hardening could not be applied.
 #[cfg(unix)]
-fn set_restricted_permissions(path: &Path) {
+fn set_restricted_permissions(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+
+    if fs::set_permissions(path, fs::Permissions::from_mode(0o600)).is_ok() {
+        false
+    } else {
+        crate::logging::log_message(
+            "WARN",
+            "Could not set 0600 permissions on the local key file. Unlock the OS keyring and restart to migrate the key.",
+        );
+        true
+    }
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -379,15 +411,33 @@ fn resolve_windows_icacls_path(system_root: Option<&str>) -> std::path::PathBuf 
     path
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_icacls_grant(username: &str, domain: Option<&str>) -> Option<String> {
+    let username = username.trim();
+    if username.is_empty() {
+        return None;
+    }
+    let user = match domain.map(str::trim).filter(|d| !d.is_empty()) {
+        Some(domain) if !username.contains('\\') => format!("{domain}\\{username}"),
+        _ => username.to_owned(),
+    };
+    Some(format!("{user}:(F)"))
+}
+
+/// Restricts a fallback key file with `icacls` and returns `true` when hardening failed.
 #[cfg(target_os = "windows")]
-fn set_restricted_permissions(path: &Path) {
+fn set_restricted_permissions(path: &Path) -> bool {
     use std::os::windows::process::CommandExt;
     use std::process::Command;
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     let Some(path_str) = path.to_str() else {
-        return;
+        crate::logging::log_message(
+            "WARN",
+            "Skipping key file ACL hardening: key file path is not valid Unicode. Unlock the OS keyring and restart to migrate the key.",
+        );
+        return true;
     };
 
     // Best-effort hardening: remove inherited ACLs and grant only the current user full control.
@@ -401,17 +451,18 @@ fn set_restricted_permissions(path: &Path) {
     if username.trim().is_empty() {
         crate::logging::log_message(
             "WARN",
-            "Skipping key file ACL hardening: USERNAME environment variable is empty",
+            "Skipping key file ACL hardening: USERNAME is empty. Set USERNAME/USERDOMAIN or unlock the OS keyring and restart to migrate the key.",
         );
-        return;
+        return true;
     }
-    let user = match std::env::var("USERDOMAIN") {
-        Ok(domain) if !domain.trim().is_empty() && !username.contains('\\') => {
-            format!("{domain}\\{username}")
-        }
-        _ => username,
+    let domain = std::env::var("USERDOMAIN").ok();
+    let Some(grant) = windows_icacls_grant(&username, domain.as_deref()) else {
+        crate::logging::log_message(
+            "WARN",
+            "Skipping key file ACL hardening: USERNAME is empty. Set USERNAME/USERDOMAIN or unlock the OS keyring and restart to migrate the key.",
+        );
+        return true;
     };
-    let grant = format!("{user}:(F)");
     let system_root = std::env::var("SystemRoot").ok();
     let icacls_path = resolve_windows_icacls_path(system_root.as_deref());
 
@@ -420,30 +471,33 @@ fn set_restricted_permissions(path: &Path) {
         .creation_flags(CREATE_NO_WINDOW)
         .output()
     {
-        Ok(output) if output.status.success() => {}
+        Ok(output) if output.status.success() => false,
         Ok(output) => {
             let msg = format!(
-                "Failed to restrict key file ACLs via {} (exit {:?})",
+                "Failed to restrict key file ACLs via {} (exit {:?}). Check USERDOMAIN\\USERNAME resolution and icacls permissions, or unlock the OS keyring and restart to migrate the key.",
                 icacls_path.display(),
                 output.status.code()
             );
             eprintln!("⚠️ {msg}");
             crate::logging::log_message("WARN", &msg);
+            true
         }
         Err(e) => {
             let msg = format!(
-                "Failed to execute {} for key file ACL hardening: {e}",
+                "Failed to execute {} for key file ACL hardening: {e}. Check icacls availability, or unlock the OS keyring and restart to migrate the key.",
                 icacls_path.display()
             );
             eprintln!("⚠️ {msg}");
             crate::logging::log_message("WARN", &msg);
+            true
         }
     }
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
-fn set_restricted_permissions(_path: &Path) {
+fn set_restricted_permissions(_path: &Path) -> bool {
     // No platform-specific hardening implemented.
+    false
 }
 
 #[cfg(test)]
@@ -460,6 +514,18 @@ mod tests {
         let key = generate_random_hex_key();
         assert_eq!(key.len(), 64);
         assert!(hex::decode(&key).is_ok());
+    }
+
+    #[test]
+    fn test_local_fallback_mode_reports_permission_degradation() {
+        assert_eq!(
+            local_fallback_mode(false),
+            KeyStorageMode::LocalFileFallback
+        );
+        assert_eq!(
+            local_fallback_mode(true),
+            KeyStorageMode::LocalFileFallbackDegraded
+        );
     }
 
     #[test]
@@ -493,7 +559,10 @@ mod tests {
 
         let (loaded, mode) = get_or_create_encryption_key(dir.path(), false).unwrap();
         assert_eq!(loaded.as_str(), test_key.as_str());
-        assert_eq!(mode, KeyStorageMode::LocalFileFallback);
+        assert!(matches!(
+            mode,
+            KeyStorageMode::LocalFileFallback | KeyStorageMode::LocalFileFallbackDegraded
+        ));
     }
 
     #[test]
@@ -530,7 +599,10 @@ mod tests {
         let (loaded, mode) =
             get_or_create_encryption_key_with_mode(dir.path(), true, false).unwrap();
         assert_eq!(loaded.as_str(), test_key.as_str());
-        assert_eq!(mode, KeyStorageMode::LocalFileFallback);
+        assert!(matches!(
+            mode,
+            KeyStorageMode::LocalFileFallback | KeyStorageMode::LocalFileFallbackDegraded
+        ));
         // Since write_to_keyring failed, the key_file should remain on disk
         assert!(key_file.exists());
     }
@@ -613,5 +685,27 @@ mod tests {
 
         let blank = resolve_windows_icacls_path(Some("   "));
         assert!(blank.to_string_lossy().starts_with(r"C:\Windows"));
+    }
+
+    #[test]
+    fn test_windows_icacls_grant_requires_username() {
+        assert_eq!(windows_icacls_grant("", None), None);
+        assert_eq!(windows_icacls_grant("   ", Some("CORP")), None);
+    }
+
+    #[test]
+    fn test_windows_icacls_grant_qualifies_domain_accounts() {
+        assert_eq!(
+            windows_icacls_grant("alice", Some("CORP")),
+            Some("CORP\\alice:(F)".to_owned())
+        );
+        assert_eq!(
+            windows_icacls_grant("alice", Some("   ")),
+            Some("alice:(F)".to_owned())
+        );
+        assert_eq!(
+            windows_icacls_grant("CORP\\alice", Some("OTHER")),
+            Some("CORP\\alice:(F)".to_owned())
+        );
     }
 }

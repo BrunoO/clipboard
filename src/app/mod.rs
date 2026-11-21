@@ -373,6 +373,17 @@ impl ClipboardApp {
                  migrated. This prompt will not appear again unless you reinstall or reset the \
                  app.",
             ),
+            crate::crypto::KeyStorageMode::LocalFileFallbackDegraded => (
+                icons::WARNING,
+                "Local Key File Permissions Warning",
+                "Fallback key file permissions could not be restricted",
+                "The OS keyring was unavailable, and CipherClipboard could not restrict the \
+                 fallback .encryption_key file (Windows ACL hardening was skipped or icacls \
+                 failed). Your history stays encrypted, but the key file may be readable more \
+                 broadly than intended. Fix the account/ACL error, or unlock the keyring and \
+                 restart to migrate the key. This prompt will not appear again unless you \
+                 reinstall or reset the app.",
+            ),
         }
     }
 
@@ -1200,6 +1211,13 @@ impl ClipboardApp {
                                     self.items.len()
                                 )
                             }
+                            crate::crypto::KeyStorageMode::LocalFileFallbackDegraded => {
+                                format!(
+                                    "{} {} entries • Local key file (permissions degraded)",
+                                    icons::WARNING,
+                                    self.items.len()
+                                )
+                            }
                         };
                         let status_color = match self.key_storage_mode {
                             crate::crypto::KeyStorageMode::OsKeyring => {
@@ -1207,6 +1225,9 @@ impl ClipboardApp {
                             }
                             crate::crypto::KeyStorageMode::LocalFileFallback => {
                                 crate::theme::warning_color(is_dark)
+                            }
+                            crate::crypto::KeyStorageMode::LocalFileFallbackDegraded => {
+                                crate::theme::error_color(is_dark)
                             }
                         };
                         ui.label(
@@ -1407,7 +1428,11 @@ impl ClipboardApp {
 
         let (title_icon, title, heading, body) =
             Self::keyring_explanation_copy(self.key_storage_mode);
-        let is_fallback = self.key_storage_mode == crate::crypto::KeyStorageMode::LocalFileFallback;
+        let is_fallback = matches!(
+            self.key_storage_mode,
+            crate::crypto::KeyStorageMode::LocalFileFallback
+                | crate::crypto::KeyStorageMode::LocalFileFallbackDegraded
+        );
         let heading_color = if is_fallback {
             crate::theme::warning_color(is_dark)
         } else {
@@ -1911,5 +1936,14 @@ mod tests {
         assert!(fallback_heading.contains("local key file"));
         assert!(fallback_body.contains(".encryption_key"));
         assert_ne!(os_icon, fallback_icon);
+
+        let (_degraded_icon, degraded_title, degraded_heading, degraded_body) =
+            ClipboardApp::keyring_explanation_copy(
+                crate::crypto::KeyStorageMode::LocalFileFallbackDegraded,
+            );
+        assert_eq!(degraded_title, "Local Key File Permissions Warning");
+        assert!(degraded_heading.contains("permissions could not be restricted"));
+        assert!(degraded_body.contains("icacls"));
+        assert_ne!(fallback_title, degraded_title);
     }
 }

@@ -302,7 +302,7 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
         found: HWND,
     }
 
-    // SAFETY: `EnumWindows` invokes this synchronously; `lparam` points to the caller's live `SearchCtx` and the title buffer is indexed only by the returned length.
+    // SAFETY: `EnumWindows` invokes this callback synchronously on the calling thread, so `lparam` is non-null, correctly aligned, and uniquely borrows the caller's live stack-local `SearchCtx` for the duration of the call; no callback state is retained or shared across threads. The title buffer is indexed only by the length `GetWindowTextW` reports.
     unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let ctx = &mut *(lparam as *mut SearchCtx);
         let mut pid: u32 = 0;
@@ -334,7 +334,7 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
         expected_pid,
         found: std::ptr::null_mut(),
     };
-    // SAFETY: `enum_proc` is a valid callback and `ctx` remains alive for the synchronous call; stale HWNDs are passed only to APIs that fail safely.
+    // SAFETY: `enum_proc` is a valid callback whose `lparam` uniquely borrows this stack-local `ctx` for the synchronous `EnumWindows` call; `addr_of_mut!` is used to form the raw pointer without creating an aliasing reference. Stale HWNDs are passed only to APIs that fail safely.
     unsafe {
         EnumWindows(Some(enum_proc), std::ptr::addr_of_mut!(ctx) as LPARAM);
         if ctx.found.is_null() {
@@ -607,7 +607,7 @@ pub(crate) fn target_is_elevated() -> bool {
     #[repr(C, align(8))]
     struct TokenIntegrityBuf([u8; 256]);
 
-    // SAFETY: All Win32 handle calls are null-checked and closed; the 8-byte-aligned 256-byte buffer matches `TOKEN_MANDATORY_LABEL` plus inline SID, and SID pointers are checked before dereference.
+    // SAFETY: All Win32 handle calls are null-checked and closed; `ret_len` is validated to be at least the `TOKEN_MANDATORY_LABEL` header and no larger than the 8-byte-aligned 256-byte buffer before the cast, and SID pointers are checked before dereference.
     unsafe fn integrity_level(pid: u32) -> Option<u32> {
         if pid == 0 {
             return None;
@@ -622,14 +622,23 @@ pub(crate) fn target_is_elevated() -> bool {
         if opened {
             let mut buf = TokenIntegrityBuf([0u8; 256]);
             let mut ret_len = 0u32;
+            let buffer_len = u32::try_from(buf.0.len()).unwrap_or(256);
             let ok = GetTokenInformation(
                 token,
                 TokenIntegrityLevel,
                 buf.0.as_mut_ptr().cast::<std::ffi::c_void>(),
-                u32::try_from(buf.0.len()).unwrap_or(256),
+                buffer_len,
                 &raw mut ret_len,
             );
-            if ok != 0 {
+            let min_len =
+                u32::try_from(std::mem::size_of::<TOKEN_MANDATORY_LABEL>()).unwrap_or(u32::MAX);
+            if ok != 0 && (ret_len < min_len || ret_len > buffer_len) {
+                crate::logging::log_message(
+                    "WARN",
+                    &format!("Unexpected TOKEN_MANDATORY_LABEL length {ret_len}; skipping UIPI elevation check"),
+                );
+            }
+            if ok != 0 && ret_len >= min_len && ret_len <= buffer_len {
                 let info = &*std::ptr::addr_of!(buf).cast::<TOKEN_MANDATORY_LABEL>();
                 if !info.Label.Sid.is_null() {
                     let count = GetSidSubAuthorityCount(info.Label.Sid);
@@ -711,7 +720,7 @@ pub(crate) fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
         pbData: std::ptr::null_mut(),
     };
 
-    // SAFETY: Input blob pointers reference live, length-checked slices, output is initialized null, and the out-blob buffer is owned by us until `LocalFree`.
+    // SAFETY: `pDataIn` and `pEntropy` are input-only per the DPAPI contract; the `.cast_mut()` calls only satisfy `CRYPT_INTEGER_BLOB`'s `*mut u8` field type and are never written through. Both input slices live for the whole call with checked lengths, output is initialized null, and the out-blob buffer is owned by us until `LocalFree`.
     let ok = unsafe {
         CryptProtectData(
             &raw const in_blob,
@@ -759,7 +768,7 @@ pub(crate) fn dpapi_unprotect(ciphertext: &[u8]) -> Result<zeroize::Zeroizing<Ve
         pbData: std::ptr::null_mut(),
     };
 
-    // SAFETY: Input blob pointers reference live, length-checked slices, output is initialized null, and the plaintext buffer is owned by us until `LocalFree`.
+    // SAFETY: `pDataIn` and `pEntropy` are input-only per the DPAPI contract; the `.cast_mut()` calls only satisfy `CRYPT_INTEGER_BLOB`'s `*mut u8` field type and are never written through. Both input slices live for the whole call with checked lengths, output is initialized null, and the plaintext buffer is owned by us until `LocalFree`.
     let ok = unsafe {
         CryptUnprotectData(
             &raw const in_blob,

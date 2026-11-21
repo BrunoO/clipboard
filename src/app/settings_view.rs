@@ -450,15 +450,28 @@ impl ClipboardApp {
                 .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );
-            if self.key_storage_mode == crate::crypto::KeyStorageMode::LocalFileFallback {
+            if matches!(
+                self.key_storage_mode,
+                crate::crypto::KeyStorageMode::LocalFileFallback
+                    | crate::crypto::KeyStorageMode::LocalFileFallbackDegraded
+            ) {
+                let permissions_degraded = self.key_storage_mode
+                    == crate::crypto::KeyStorageMode::LocalFileFallbackDegraded;
+                let warning = if permissions_degraded {
+                    "Keyring fallback active, but key file permissions could not be restricted (Windows ACL hardening failed or USERNAME/USERDOMAIN was unavailable). Unlock the keyring and restart to migrate the key."
+                } else {
+                    "Keyring fallback active: the encryption key is stored in a restricted local file (.encryption_key) because the OS Keyring was unavailable."
+                };
+                let color = if permissions_degraded {
+                    crate::theme::error_color(is_dark)
+                } else {
+                    crate::theme::warning_color(is_dark)
+                };
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{} Keyring fallback active: the encryption key is stored in a restricted local file (.encryption_key) because the OS Keyring was unavailable.",
-                        icons::WARNING
-                    ))
-                    .color(crate::theme::warning_color(is_dark))
-                    .size(11.0),
+                    egui::RichText::new(format!("{} {warning}", icons::WARNING))
+                        .color(color)
+                        .size(11.0),
                 );
             }
 
