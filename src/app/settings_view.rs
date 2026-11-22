@@ -4,15 +4,46 @@ use crate::settings::HotkeyPreset;
 use eframe::egui;
 
 impl ClipboardApp {
+    fn settings_card<R>(
+        ui: &mut egui::Ui,
+        is_dark: bool,
+        add_contents: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> R {
+        let fill = crate::theme::card_fill(is_dark, false);
+        let stroke = crate::theme::card_stroke(is_dark, false);
+        let shadow = crate::theme::card_shadow(is_dark, false);
+
+        egui::Frame::new()
+            .corner_radius(crate::theme::card_rounding())
+            .fill(fill)
+            .stroke(stroke)
+            .shadow(shadow)
+            .inner_margin(12)
+            .show(ui, add_contents)
+            .inner
+    }
+
     pub(super) fn render_settings_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading(
-                    egui::RichText::new(format!("{} Preferences", icons::GEAR))
-                        .color(crate::theme::text_primary(is_dark))
-                        .strong(),
-                );
-                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{} Preferences", icons::GEAR))
+                            .size(16.0)
+                            .color(crate::theme::text_primary(is_dark))
+                            .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(format!("{} Back (ESC)", icons::ARROW_LEFT))
+                            .on_hover_text("Return to clipboard history")
+                            .clicked()
+                        {
+                            self.active_view = ActiveView::History;
+                        }
+                    });
+                });
+                ui.add_space(10.0);
 
                 self.render_appearance_settings_group(ui, is_dark);
                 ui.add_space(10.0);
@@ -30,20 +61,13 @@ impl ClipboardApp {
                 ui.add_space(10.0);
 
                 Self::render_about_settings_group(ui, is_dark);
-                ui.add_space(12.0);
-
-                if ui
-                    .button(format!("{} Back to History", icons::ARROW_LEFT))
-                    .clicked()
-                {
-                    self.active_view = ActiveView::History;
-                }
+                ui.add_space(8.0);
             });
         });
     }
 
     fn render_appearance_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        ui.group(|ui| {
+        Self::settings_card(ui, is_dark, |ui| {
             ui.label(
                 egui::RichText::new(format!("{} Appearance & Theme", icons::PALETTE))
                     .color(crate::theme::text_primary(is_dark))
@@ -96,7 +120,7 @@ impl ClipboardApp {
     }
 
     fn render_hotkey_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        ui.group(|ui| {
+        Self::settings_card(ui, is_dark, |ui| {
             ui.label(
                 egui::RichText::new(format!("{} Global Shortcut", icons::KEYBOARD))
                     .color(crate::theme::text_primary(is_dark))
@@ -324,7 +348,7 @@ impl ClipboardApp {
     }
 
     fn render_behavior_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        ui.group(|ui| {
+        Self::settings_card(ui, is_dark, |ui| {
             ui.label(
                 egui::RichText::new(format!("{} General Behavior", icons::SLIDERS))
                     .color(crate::theme::text_primary(is_dark))
@@ -439,7 +463,7 @@ impl ClipboardApp {
     }
 
     fn render_security_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        ui.group(|ui| {
+        Self::settings_card(ui, is_dark, |ui| {
             ui.label(
                 egui::RichText::new(format!("{} Security & Privacy", icons::SHIELD_CHECK))
                     .color(crate::theme::text_primary(is_dark))
@@ -589,7 +613,7 @@ impl ClipboardApp {
     }
 
     fn render_logging_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        ui.group(|ui| {
+        Self::settings_card(ui, is_dark, |ui| {
             ui.label(
                 egui::RichText::new(format!("{} Diagnostics & Logs", icons::FILE_TEXT))
                     .color(crate::theme::text_primary(is_dark))
@@ -606,10 +630,8 @@ impl ClipboardApp {
             ui.add_space(6.0);
 
             let log_path = crate::logging::log_file_path();
-            let path_str = log_path.map_or_else(
-                || "(unavailable)".to_string(),
-                |p| p.display().to_string(),
-            );
+            let path_str =
+                log_path.map_or_else(|| "(unavailable)".to_string(), |p| p.display().to_string());
 
             ui.label(
                 egui::RichText::new("Log file path:")
@@ -661,7 +683,7 @@ impl ClipboardApp {
     }
 
     fn render_about_settings_group(ui: &mut egui::Ui, is_dark: bool) {
-        ui.group(|ui| {
+        Self::settings_card(ui, is_dark, |ui| {
             ui.label(
                 egui::RichText::new(format!("{} About CipherClipboard", icons::INFO))
                     .color(crate::theme::text_primary(is_dark))

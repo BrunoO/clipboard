@@ -3,6 +3,25 @@ use crate::icons;
 use eframe::egui;
 
 impl ClipboardApp {
+    fn generator_card<R>(
+        ui: &mut egui::Ui,
+        is_dark: bool,
+        add_contents: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> R {
+        let fill = crate::theme::card_fill(is_dark, false);
+        let stroke = crate::theme::card_stroke(is_dark, false);
+        let shadow = crate::theme::card_shadow(is_dark, false);
+
+        egui::Frame::group(ui.style())
+            .corner_radius(crate::theme::card_rounding())
+            .fill(fill)
+            .stroke(stroke)
+            .shadow(shadow)
+            .inner_margin(12)
+            .show(ui, add_contents)
+            .inner
+    }
+
     fn save_generator_preferences(&mut self) {
         self.settings.password_config = self.password_gen.config.clone();
         self.settings.generator_skip_history = self.password_gen.skip_history;
@@ -14,12 +33,24 @@ impl ClipboardApp {
         let ctx = ui.ctx().clone();
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading(
-                    egui::RichText::new(format!("{} Password Generator", icons::KEY))
-                        .color(crate::theme::text_primary(is_dark))
-                        .strong(),
-                );
-                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{} Password Forge", icons::KEY))
+                            .size(16.0)
+                            .color(crate::theme::text_primary(is_dark))
+                            .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(format!("{} Back (ESC)", icons::ARROW_LEFT))
+                            .on_hover_text("Return to clipboard history")
+                            .clicked()
+                        {
+                            self.active_view = ActiveView::History;
+                        }
+                    });
+                });
+                ui.add_space(10.0);
 
                 self.render_generator_output_card(ui, &ctx, is_dark);
                 ui.add_space(10.0);
@@ -27,7 +58,7 @@ impl ClipboardApp {
                 self.render_generator_mode_and_options(ui, is_dark);
                 ui.add_space(10.0);
 
-                ui.group(|ui| {
+                Self::generator_card(ui, is_dark, |ui| {
                     if ui
                         .checkbox(
                             &mut self.password_gen.skip_history,
@@ -37,6 +68,7 @@ impl ClipboardApp {
                     {
                         self.save_generator_preferences();
                     }
+                    ui.add_space(2.0);
                     ui.label(
                         egui::RichText::new(
                             "Press Enter to copy & dismiss immediately, or Esc to return to history.",
@@ -45,14 +77,6 @@ impl ClipboardApp {
                         .size(11.0_f32),
                     );
                 });
-
-                ui.add_space(12.0);
-                if ui
-                    .button(format!("{} Back to History", icons::ARROW_LEFT))
-                    .clicked()
-                {
-                    self.active_view = ActiveView::History;
-                }
             });
         });
     }
@@ -63,7 +87,7 @@ impl ClipboardApp {
         ctx: &egui::Context,
         is_dark: bool,
     ) {
-        ui.group(|ui| {
+        Self::generator_card(ui, is_dark, |ui| {
             let display_text = if self.password_gen.reveal_value {
                 self.password_gen.current_value.as_str().to_owned()
             } else {
@@ -71,15 +95,19 @@ impl ClipboardApp {
             };
 
             egui::Frame::new()
-                .fill(crate::theme::search_bg(is_dark))
+                .fill(if is_dark {
+                    egui::Color32::from_rgb(20, 21, 26)
+                } else {
+                    egui::Color32::from_rgb(243, 244, 248)
+                })
                 .stroke(crate::theme::card_stroke(is_dark, true))
                 .corner_radius(6)
-                .inner_margin(egui::Margin::symmetric(10, 10))
+                .inner_margin(egui::Margin::symmetric(12, 10))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(display_text)
+                                egui::RichText::new(&display_text)
                                     .monospace()
                                     .size(15.0_f32)
                                     .color(crate::theme::text_primary(is_dark))
@@ -90,15 +118,15 @@ impl ClipboardApp {
                     });
                 });
 
-            ui.add_space(6.0);
-            Self::render_generator_entropy_bar(ui, &self.password_gen.config, is_dark);
             ui.add_space(8.0);
+            Self::render_generator_entropy_bar(ui, &self.password_gen.config, is_dark);
+            ui.add_space(10.0);
 
             ui.horizontal(|ui| {
                 let copy_label = if self.settings.auto_paste {
-                    format!("{} Copy & Paste", icons::COPY)
+                    format!("{} Copy & Paste (↵)", icons::COPY)
                 } else {
-                    format!("{} Copy & Dismiss", icons::COPY)
+                    format!("{} Copy & Dismiss (↵)", icons::COPY)
                 };
                 if ui.button(copy_label).clicked() {
                     self.copy_generated_password(ctx, true);
@@ -176,26 +204,44 @@ impl ClipboardApp {
     fn render_generator_mode_and_options(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         use crate::password::GeneratorMode;
 
-        ui.group(|ui| {
+        Self::generator_card(ui, is_dark, |ui| {
             ui.horizontal(|ui| {
                 let old_mode = self.password_gen.config.mode;
-                ui.selectable_value(
-                    &mut self.password_gen.config.mode,
-                    GeneratorMode::Password,
+                let is_pwd = self.password_gen.config.mode == GeneratorMode::Password;
+                let is_pass = self.password_gen.config.mode == GeneratorMode::Passphrase;
+
+                if crate::theme::render_segmented_tab(
+                    ui,
+                    is_dark,
+                    is_pwd,
+                    icons::KEY,
                     "Random Password",
-                );
-                ui.selectable_value(
-                    &mut self.password_gen.config.mode,
-                    GeneratorMode::Passphrase,
-                    "Memorable Passphrase",
-                );
+                    0,
+                )
+                .clicked()
+                {
+                    self.password_gen.config.mode = GeneratorMode::Password;
+                }
+                if crate::theme::render_segmented_tab(
+                    ui,
+                    is_dark,
+                    is_pass,
+                    icons::FILE_TEXT,
+                    "Passphrase",
+                    0,
+                )
+                .clicked()
+                {
+                    self.password_gen.config.mode = GeneratorMode::Passphrase;
+                }
+
                 if self.password_gen.config.mode != old_mode {
                     self.password_gen.regenerate();
                     self.save_generator_preferences();
                 }
             });
 
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             let changed = match self.password_gen.config.mode {
                 GeneratorMode::Password => self.render_generator_password_options(ui, is_dark),
                 GeneratorMode::Passphrase => self.render_generator_passphrase_options(ui, is_dark),

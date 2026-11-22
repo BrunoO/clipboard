@@ -1574,7 +1574,8 @@ impl ClipboardApp {
                 egui::Frame::window(&ctx.global_style())
                     .inner_margin(egui::Margin::symmetric(16, 14))
                     .corner_radius(crate::theme::card_rounding())
-                    .stroke(crate::theme::card_stroke(is_dark, false)),
+                    .stroke(crate::theme::card_stroke(is_dark, false))
+                    .shadow(crate::theme::card_shadow(is_dark, true)),
             )
     }
 
