@@ -50,11 +50,8 @@ if ([string]::IsNullOrWhiteSpace($PublisherDisplayName)) {
     if (-not [string]::IsNullOrWhiteSpace($env:MSSTORE_PUBLISHER_DISPLAY_NAME)) {
         $PublisherDisplayName = $env:MSSTORE_PUBLISHER_DISPLAY_NAME
     } else {
-        $PublisherDisplayName = "Bruno O."
+        $PublisherDisplayName = "Bruno O"
     }
-}
-if ($PublisherDisplayName -eq "Bruno O") {
-    $PublisherDisplayName = "Bruno O."
 }
 
 if ([string]::IsNullOrWhiteSpace($OpenSslDllName)) {
