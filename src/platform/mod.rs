@@ -210,7 +210,9 @@ impl Drop for SystemTrayBackend {
 pub(crate) fn set_repaint_context(ctx: &eframe::egui::Context) {
     #[cfg(target_os = "macos")]
     macos::set_repaint_context(ctx);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    windows::set_repaint_context(ctx);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = ctx;
 }
 
@@ -446,6 +448,28 @@ pub(crate) const fn default_hide_on_blur() -> bool {
     !cfg!(target_os = "windows")
 }
 
+/// Returns the platform default for `minimize_to_taskbar` (`false` by default).
+#[must_use]
+pub(crate) const fn default_minimize_to_taskbar() -> bool {
+    false
+}
+
+/// Returns true if the current platform supports minimizing to the taskbar/Alt+Tab on dismiss.
+#[must_use]
+pub(crate) const fn supports_minimize_to_taskbar() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// Pure decision helper for whether window dismissal should minimize rather than hide.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[must_use]
+pub(crate) const fn should_minimize_on_hide(
+    has_live_tray: bool,
+    minimize_to_taskbar: bool,
+) -> bool {
+    minimize_to_taskbar || !has_live_tray
+}
+
 /// Returns the user-facing navigation hint displayed in the bottom bar.
 #[must_use]
 pub(crate) const fn navigation_hint_label() -> &'static str {
@@ -658,29 +682,31 @@ pub(crate) fn hide_application() {
 }
 
 /// Applies the platform-specific window dismissal policy when hiding the UI:
-/// - On Windows, hides the viewport (`Visible(false)`) only when a live shell tray icon exists,
-///   falling back to minimizing (`Minimized(true)`) so the user is never locked out.
+/// - On Windows, minimizes to taskbar if `minimize_to_taskbar` is enabled or if no live tray icon exists;
+///   otherwise hides the viewport (`Visible(false)`) cleanly to the system tray.
 /// - On macOS and Linux, hides the viewport and invokes OS-level application hiding.
-pub(crate) fn hide_window_viewport(ctx: &eframe::egui::Context, has_live_tray: bool) {
+pub(crate) fn hide_window_viewport(
+    ctx: &eframe::egui::Context,
+    has_live_tray: bool,
+    minimize_to_taskbar: bool,
+) {
     #[cfg(target_os = "windows")]
     {
-        if has_live_tray {
-            // With a confirmed shell tray icon, hide the window cleanly so
-            // it doesn't clutter the taskbar; clicking the tray restores it.
-            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(false));
-        } else {
-            // No live tray icon (init failed, Explorer restarted, ...):
-            // minimize to the taskbar so the user is never locked out.
-            log_message(
-                "WARN",
-                "No live tray icon; minimizing to taskbar instead of hiding",
-            );
+        if should_minimize_on_hide(has_live_tray, minimize_to_taskbar) {
+            if !has_live_tray && !minimize_to_taskbar {
+                log_message(
+                    "WARN",
+                    "No live tray icon; minimizing to taskbar instead of hiding",
+                );
+            }
             ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
+        } else {
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(false));
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = has_live_tray;
+        let _ = (has_live_tray, minimize_to_taskbar);
         ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(false));
         hide_application();
     }
@@ -716,29 +742,37 @@ pub(crate) fn order_front_main_window() {
     backend::order_front_main_window();
 }
 
-/// Checks and clears any pending reopen requests triggered by OS events (e.g. Dock icon click).
+/// Checks and clears any pending reopen requests triggered by OS events (e.g. Dock icon click, Windows second instance).
 #[must_use]
 pub(crate) fn take_reopen_requested() -> bool {
     #[cfg(target_os = "macos")]
     {
         macos::take_reopen_requested()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::take_reopen_requested()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         false
     }
 }
 
-/// Registers OS-level activation and reopen observers (e.g. macOS Dock click / Cmd+Tab notifications).
+/// Registers OS-level activation and reopen observers (e.g. macOS Dock click, Windows second-instance listener).
 pub(crate) fn setup_reopen_observer() {
     #[cfg(target_os = "macos")]
     macos::setup_reopen_observer();
+    #[cfg(target_os = "windows")]
+    windows::setup_reopen_observer();
 }
 
-/// Removes the macOS reopen observer to prevent crashes on app termination.
+/// Removes the OS reopen observer to prevent leaks or deadlocks on app termination.
 pub(crate) fn teardown_reopen_observer() {
     #[cfg(target_os = "macos")]
     macos::teardown_reopen_observer();
+    #[cfg(target_os = "windows")]
+    windows::teardown_reopen_observer();
 }
 
 /// Captures the current frontmost application/window before `CipherClipboard` gains focus.
@@ -1037,5 +1071,22 @@ mod tests {
         let _ = supports_image_ocr();
         let res = extract_text_from_png(&[]);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_should_minimize_on_hide_decision() {
+        use super::should_minimize_on_hide;
+
+        // Tray icon live, minimize setting false -> hide to tray (false)
+        assert!(!should_minimize_on_hide(true, false));
+
+        // Tray icon live, minimize setting true -> minimize to taskbar (true)
+        assert!(should_minimize_on_hide(true, true));
+
+        // No live tray, minimize setting false -> fallback minimize to taskbar (true)
+        assert!(should_minimize_on_hide(false, false));
+
+        // No live tray, minimize setting true -> minimize to taskbar (true)
+        assert!(should_minimize_on_hide(false, true));
     }
 }

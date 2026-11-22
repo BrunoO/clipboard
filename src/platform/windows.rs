@@ -2,14 +2,16 @@
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
 use windows::Media::Ocr::OcrEngine;
 use windows::Storage::Streams::DataWriter;
 use windows_sys::core::BOOL;
-use windows_sys::Win32::Foundation::{CloseHandle, GlobalFree, LocalFree, HANDLE, HWND, LPARAM};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GlobalFree, LocalFree, HANDLE, HWND, LPARAM, WAIT_OBJECT_0,
+};
 use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows_sys::Win32::Security::Cryptography::{
     CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
@@ -27,7 +29,8 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::SystemServices::SECURITY_MANDATORY_MEDIUM_RID;
 use windows_sys::Win32::System::Threading::{
-    AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId, OpenProcess, OpenProcessToken,
+    AttachThreadInput, CreateEventW, GetCurrentProcessId, GetCurrentThreadId, OpenEventW,
+    OpenProcess, OpenProcessToken, SetEvent, WaitForMultipleObjects, EVENT_MODIFY_STATE, INFINITE,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -303,10 +306,159 @@ pub(super) fn is_target_foreground() -> bool {
     }
 }
 
+static REPAINT_CTX: Mutex<Option<eframe::egui::Context>> = Mutex::new(None);
+static REOPEN_REQUESTED: AtomicBool = AtomicBool::new(false);
+static REOPEN_SHUTDOWN: Mutex<Option<usize>> = Mutex::new(None);
+static REOPEN_THREAD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+
+pub(super) fn set_repaint_context(ctx: &eframe::egui::Context) {
+    if let Ok(mut lock) = REPAINT_CTX.lock() {
+        *lock = Some(ctx.clone());
+    }
+}
+
+fn request_repaint() {
+    if let Ok(lock) = REPAINT_CTX.lock() {
+        if let Some(ctx) = lock.as_ref() {
+            ctx.request_repaint();
+        }
+    }
+}
+
+pub(super) fn take_reopen_requested() -> bool {
+    REOPEN_REQUESTED.swap(false, Ordering::AcqRel)
+}
+
+fn reopen_event_name(pid: u32) -> String {
+    format!("Local\\CipherClipboard_Reopen_{pid}")
+}
+
+pub(super) fn setup_reopen_observer() {
+    teardown_reopen_observer();
+
+    // SAFETY: GetCurrentProcessId is side-effect-free.
+    let pid = unsafe { GetCurrentProcessId() };
+    let event_name = reopen_event_name(pid);
+    let name_wide: Vec<u16> = OsStr::new(&event_name)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // SAFETY: name_wide is null-terminated and live for the call.
+    let reopen_event = unsafe { CreateEventW(std::ptr::null(), 0, 0, name_wide.as_ptr()) };
+    if reopen_event.is_null() {
+        log_message("WARN", "Failed to create Windows reopen event");
+        return;
+    }
+
+    // SAFETY: Anonymous manual-reset event with null security attributes.
+    let shutdown_event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+    if shutdown_event.is_null() {
+        // SAFETY: reopen_event was checked non-null above.
+        unsafe {
+            CloseHandle(reopen_event);
+        }
+        log_message("WARN", "Failed to create Windows reopen shutdown event");
+        return;
+    }
+
+    if let Ok(mut lock) = REOPEN_SHUTDOWN.lock() {
+        *lock = Some(shutdown_event as usize);
+    }
+
+    let reopen_raw = reopen_event as usize;
+    let shutdown_raw = shutdown_event as usize;
+
+    let handle = std::thread::Builder::new()
+        .name("clipboard-windows-reopen".to_string())
+        .spawn(move || {
+            let handles = [shutdown_raw as HANDLE, reopen_raw as HANDLE];
+            loop {
+                // SAFETY: handles points to two valid event handles; 0 (FALSE) waits for any object.
+                let wait_res = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) };
+                if wait_res == WAIT_OBJECT_0 {
+                    break;
+                } else if wait_res == WAIT_OBJECT_0 + 1 {
+                    REOPEN_REQUESTED.store(true, Ordering::SeqCst);
+                    request_repaint();
+                } else {
+                    break;
+                }
+            }
+            // SAFETY: reopen_raw was created in setup_reopen_observer and is owned by this background thread.
+            unsafe {
+                CloseHandle(reopen_raw as HANDLE);
+            }
+        });
+
+    if let Ok(handle) = handle {
+        if let Ok(mut lock) = REOPEN_THREAD.lock() {
+            *lock = Some(handle);
+        }
+    } else {
+        // SAFETY: Both handles were checked non-null above.
+        unsafe {
+            CloseHandle(reopen_event);
+            CloseHandle(shutdown_event);
+        }
+    }
+}
+
+pub(super) fn teardown_reopen_observer() {
+    let shutdown_handle = REOPEN_SHUTDOWN.lock().ok().and_then(|mut lock| lock.take());
+    if let Some(raw) = shutdown_handle {
+        let handle = raw as HANDLE;
+        // SAFETY: handle is a live manual-reset event.
+        unsafe {
+            SetEvent(handle);
+        }
+    }
+
+    let thread = REOPEN_THREAD.lock().ok().and_then(|mut lock| lock.take());
+    if let Some(handle) = thread {
+        let _ = handle.join();
+    }
+
+    if let Some(raw) = shutdown_handle {
+        let handle = raw as HANDLE;
+        // SAFETY: handle is closed once after joining the background thread.
+        unsafe {
+            CloseHandle(handle);
+        }
+    }
+}
+
+fn signal_reopen_event(pid: u32) -> bool {
+    let event_name = reopen_event_name(pid);
+    let name_wide: Vec<u16> = OsStr::new(&event_name)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // SAFETY: name_wide is null-terminated and live for the call.
+    let h_event = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name_wide.as_ptr()) };
+    if h_event.is_null() {
+        false
+    } else {
+        // SAFETY: h_event is non-null and closed immediately after signaling.
+        let ok = unsafe { SetEvent(h_event) };
+        unsafe {
+            CloseHandle(h_event);
+        }
+        ok != 0
+    }
+}
+
 pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
+    let mut signaled = false;
+    if let Some(pid) = expected_pid {
+        signaled = signal_reopen_event(pid);
+    }
+
     struct SearchCtx {
         expected_pid: Option<u32>,
         found: HWND,
+        found_pid: u32,
     }
 
     // SAFETY: `EnumWindows` invokes this callback synchronously on the calling thread, so `lparam` is non-null, correctly aligned, and uniquely borrows the caller's live stack-local `SearchCtx` for the duration of the call; no callback state is retained or shared across threads. The title buffer is indexed only by the length `GetWindowTextW` reports.
@@ -330,6 +482,7 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
                 let title = String::from_utf16_lossy(&buf[..len_usize]);
                 if title == "CipherClipboard" {
                     ctx.found = hwnd;
+                    ctx.found_pid = pid;
                     return 0;
                 }
             }
@@ -340,13 +493,15 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
     let mut ctx = SearchCtx {
         expected_pid,
         found: std::ptr::null_mut(),
+        found_pid: 0,
     };
     // SAFETY: `enum_proc` is a valid callback whose `lparam` uniquely borrows this stack-local `ctx` for the synchronous `EnumWindows` call; `addr_of_mut!` is used to form the raw pointer without creating an aliasing reference. Stale HWNDs are passed only to APIs that fail safely.
     unsafe {
         EnumWindows(Some(enum_proc), std::ptr::addr_of_mut!(ctx) as LPARAM);
-        if ctx.found.is_null() {
-            false
-        } else {
+        if !ctx.found.is_null() {
+            if !signaled && ctx.found_pid != 0 {
+                let _ = signal_reopen_event(ctx.found_pid);
+            }
             // SW_RESTORE on a maximized/snapped window would un-maximize it.
             if IsIconic(ctx.found) != 0 {
                 ShowWindow(ctx.found, SW_RESTORE);
@@ -356,6 +511,8 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
             BringWindowToTop(ctx.found);
             SetForegroundWindow(ctx.found);
             true
+        } else {
+            signaled
         }
     }
 }

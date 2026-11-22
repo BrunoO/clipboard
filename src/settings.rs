@@ -433,6 +433,8 @@ pub(crate) struct AppSettings {
     pub(crate) max_history: usize,
     #[serde(default = "default_hide_on_blur")]
     pub(crate) hide_on_blur: bool,
+    #[serde(default = "default_minimize_to_taskbar")]
+    pub(crate) minimize_to_taskbar: bool,
     #[serde(default = "default_restore_focus")]
     pub(crate) restore_focus: bool,
     #[serde(default = "default_auto_paste")]
@@ -463,6 +465,10 @@ const fn default_preserve_secrets_on_prune() -> bool {
 
 const fn default_hide_on_blur() -> bool {
     crate::platform::default_hide_on_blur()
+}
+
+const fn default_minimize_to_taskbar() -> bool {
+    crate::platform::default_minimize_to_taskbar()
 }
 
 const fn default_restore_focus() -> bool {
@@ -510,6 +516,7 @@ impl Default for AppSettings {
             hide_on_copy: true,
             max_history: 100,
             hide_on_blur: default_hide_on_blur(),
+            minimize_to_taskbar: default_minimize_to_taskbar(),
             restore_focus: true,
             auto_paste: true,
             auto_paste_delay_ms: 120,
@@ -785,5 +792,33 @@ mod tests {
         let err = SettingsError::Serialization(json_err);
         assert!(err.to_string().contains("Failed to serialize settings"));
         assert!(std::error::Error::source(&err).is_some());
+    }
+
+    #[test]
+    fn test_minimize_to_taskbar_serialization_and_legacy_fallback() {
+        let default_settings = AppSettings::default();
+        assert!(!default_settings.minimize_to_taskbar);
+
+        // Legacy JSON without minimize_to_taskbar must deserialize cleanly to false
+        let legacy_json = r#"{
+            "hotkey": "Universal",
+            "hide_on_copy": true,
+            "max_history": 100,
+            "hide_on_blur": false
+        }"#;
+        let parsed: AppSettings =
+            serde_json::from_str(legacy_json).expect("Legacy JSON should deserialize");
+        assert!(!parsed.minimize_to_taskbar);
+
+        // JSON with explicit minimize_to_taskbar: true
+        let modern_json = r#"{
+            "hotkey": "Universal",
+            "hide_on_copy": true,
+            "max_history": 100,
+            "minimize_to_taskbar": true
+        }"#;
+        let parsed_modern: AppSettings =
+            serde_json::from_str(modern_json).expect("Modern JSON should deserialize");
+        assert!(parsed_modern.minimize_to_taskbar);
     }
 }

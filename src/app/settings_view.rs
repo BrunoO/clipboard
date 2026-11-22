@@ -374,6 +374,20 @@ impl ClipboardApp {
                 self.persist_settings();
             }
 
+            if crate::platform::supports_minimize_to_taskbar() {
+                let mut minimize_to_taskbar = self.settings.minimize_to_taskbar;
+                if ui
+                    .checkbox(
+                        &mut minimize_to_taskbar,
+                        "Keep in Taskbar & Alt+Tab when dismissed (minimize instead of hide)",
+                    )
+                    .changed()
+                {
+                    self.settings.minimize_to_taskbar = minimize_to_taskbar;
+                    self.persist_settings();
+                }
+            }
+
             let mut restore_focus = self.settings.restore_focus;
             if ui
                 .checkbox(

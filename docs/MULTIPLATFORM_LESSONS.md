@@ -20,7 +20,17 @@ Distilled from developing, hardening, and shipping CipherClipboard across **Wind
 
 ## 2. Windows-Specific Lessons
 
-- **System tray is mandatory when hiding the window.** On Windows, setting `Visible(false)` removes the window from the taskbar and `Alt+Tab`. Always keep a live tray icon (`src/tray.rs`) and fall back to `Minimized(true)` if tray initialization fails or Explorer restarts so users are never locked out.
+- **System tray, Alt+Tab, and window dismissal policy.** On Windows, setting `Visible(false)` removes the window from the taskbar and `Alt+Tab`.
+  - Always keep a live tray icon (`src/tray.rs`) and fall back to `Minimized(true)` if tray initialization fails or Explorer restarts so users are never locked out.
+  - Provide an explicit `minimize_to_taskbar` user setting: when enabled, dismissals minimize the window (`Minimized(true)`) rather than hiding it, guaranteeing presence in `Alt+Tab` and the Windows Taskbar for users who prefer standard desktop task switching.
+- **Window restoration grace period & blur dismiss guardrails.** In `App::logic()`, `handle_app_activation` runs after tray and hotkey handlers.
+  - When summoning the window (or on initial startup), record `last_show_instant = Some(Instant::now())`.
+  - Suppress all `hide_on_blur` dismissal while within the grace period (`elapsed < 500ms`), and do not latch `has_been_focused = true` during transient focus handoffs (e.g. tray context menu dismissals, which momentarily restore focus to background applications before CipherClipboard finishes activation).
+- **Cross-process reopen signaling for second-instance activation.** When launching a second instance while the app is hidden in the tray:
+  - Merely invoking Win32 `ShowWindow(hwnd, SW_SHOW)` from the outside leaves `eframe` unaware that the window was restored (keeping `window_state.is_visible == false`, rendering nothing).
+  - The primary instance must register a session-scoped named event (`Local\CipherClipboard_Reopen_{pid}`) and listen on a background thread (`setup_reopen_observer()`).
+  - When a second instance detects an existing lock in `activate_existing_instance`, it signals the event (`SetEvent`), causing the primary instance to set `REOPEN_REQUESTED` and wake via `ctx.request_repaint()`, ensuring `show_window()` is called internally.
+- **Surface hotkey conflicts at startup.** If global hotkey registration fails (common on Windows where `Ctrl+Shift+V` conflicts with Windows Terminal or PowerToys), record a warning toast (`pending_toast`) on startup rather than failing silently, so users understand why the hotkey is unresponsive.
 - **Respect UIPI (User Interface Privilege Isolation) on auto-paste.** Windows silently drops `SendInput` keystrokes sent from a medium-integrity process to an elevated (Administrator) window.
   - Check `PREVIOUS_HWND` (the captured paste target), *not* `GetForegroundWindow()` (which is still CipherClipboard during `hide_window` because `ViewportCommand::Visible(false)` is queued until end-of-frame).
   - A non-elevated process receives `ERROR_ACCESS_DENIED` when calling `OpenProcessToken(..., TOKEN_QUERY)` on an elevated process — treat `ERROR_ACCESS_DENIED` as elevated (fail closed) and skip synthetic `Ctrl+V`.

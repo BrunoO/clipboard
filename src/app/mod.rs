@@ -180,6 +180,7 @@ pub(crate) struct WindowFocusState {
     pub(crate) last_drag_or_move_instant: Option<Instant>,
     pub(crate) last_outer_rect: Option<egui::Rect>,
     pub(crate) last_hide_instant: Option<Instant>,
+    pub(crate) last_show_instant: Option<Instant>,
 }
 
 impl Default for WindowFocusState {
@@ -192,8 +193,28 @@ impl Default for WindowFocusState {
             last_drag_or_move_instant: None,
             last_outer_rect: None,
             last_hide_instant: None,
+            last_show_instant: Some(Instant::now()),
         }
     }
+}
+
+/// Pure decision helper for whether a window should hide on blur.
+#[allow(clippy::fn_params_excessive_bools)]
+#[must_use]
+pub(crate) const fn should_hide_on_blur(
+    has_been_focused: bool,
+    hide_on_blur_setting: bool,
+    in_show_grace_period: bool,
+    is_minimized: bool,
+    is_dragging_or_moving: bool,
+    is_outside: bool,
+) -> bool {
+    has_been_focused
+        && hide_on_blur_setting
+        && !in_show_grace_period
+        && !is_minimized
+        && !is_dragging_or_moving
+        && is_outside
 }
 
 /// Holds inter-thread communication channels and background services.
@@ -271,7 +292,21 @@ impl ClipboardApp {
     ) -> Self {
         db.apply_settings(&settings);
 
-        let mut startup_toast = None;
+        let mut startup_toast = if services.hotkey_service.is_none()
+            && settings.hotkey != crate::settings::HotkeyPreset::None
+        {
+            Some(Toast {
+                message: format!(
+                    "{} Global hotkey ({}) is unavailable or in use by another app",
+                    icons::WARNING,
+                    settings.hotkey.display_name(),
+                ),
+                severity: ToastSeverity::Warning,
+                shown_at: Instant::now(),
+            })
+        } else {
+            None
+        };
         let initial_items = match db.get_recent(settings.max_history, None) {
             Ok(items) => items,
             Err(e) => {
@@ -442,6 +477,7 @@ impl ClipboardApp {
         self.window_state.is_visible = true;
         self.window_state.has_been_focused = false;
         self.window_state.was_inactive_since_hidden = false;
+        self.window_state.last_show_instant = Some(Instant::now());
         self.selected_index = 0;
         self.dialogs.show_clear_confirm_dialog = false;
         self.scroll_to_selected = true;
@@ -472,7 +508,7 @@ impl ClipboardApp {
             .tray_service
             .as_ref()
             .is_some_and(TrayService::is_live);
-        platform::hide_window_viewport(ctx, has_live_tray);
+        platform::hide_window_viewport(ctx, has_live_tray, self.settings.minimize_to_taskbar);
 
         let mut auto_paste = auto_paste;
         if auto_paste {
@@ -1053,30 +1089,41 @@ impl ClipboardApp {
         let is_active = active_state.unwrap_or(false);
         let reopen_requested = crate::platform::take_reopen_requested();
 
+        // If an OS reopen was requested (e.g. macOS Dock click, Windows second-instance launch),
+        // ALWAYS summon and bring to front whether currently visible or hidden!
+        if reopen_requested {
+            self.show_window(ctx);
+            return;
+        }
+
+        let in_show_grace_period = self
+            .window_state
+            .last_show_instant
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(500));
+
         if self.window_state.is_visible {
             if is_focused {
-                self.window_state.has_been_focused = true;
-            } else if self.window_state.has_been_focused
-                && self.settings.hide_on_blur
-                && !ctx.input(|i| i.viewport().minimized.unwrap_or(false))
-            {
+                if !in_show_grace_period {
+                    self.window_state.has_been_focused = true;
+                }
+            } else {
+                let is_minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
                 let is_dragging_or_moving = pointer_down
                     || self
                         .window_state
                         .last_drag_or_move_instant
                         .is_some_and(|t| t.elapsed() < Duration::from_millis(350));
+                let is_outside = active_state.map_or(!is_focused, |active| !active);
 
-                if !is_dragging_or_moving {
-                    // On macOS, Windows, and X11 Linux, only dismiss when another application
-                    // actually becomes active (active_state == Some(false)). Titlebar drags,
-                    // StartDrag grabs, and WM move/resize grabs keep our app active.
-                    // If the session cannot report active-window ownership (e.g. pure Wayland),
-                    // fall back to `!is_focused`.
-                    let is_outside = active_state.map_or(!is_focused, |active| !active);
-
-                    if is_outside {
-                        self.hide_window(ctx, false, false);
-                    }
+                if should_hide_on_blur(
+                    self.window_state.has_been_focused,
+                    self.settings.hide_on_blur,
+                    in_show_grace_period,
+                    is_minimized,
+                    is_dragging_or_moving,
+                    is_outside,
+                ) {
+                    self.hide_window(ctx, false, false);
                 }
             }
         } else {
@@ -1090,9 +1137,8 @@ impl ClipboardApp {
                     .last_hide_instant
                     .is_none_or(|t| t.elapsed() >= Duration::from_millis(350));
 
-            // Reveal window if OS reopen was requested (Dock icon click),
-            // or if the app regained activation/focus after being hidden and inactive.
-            if reopen_requested || (allow_focus_reopen && (is_active || is_focused)) {
+            // Reveal window if the app regained activation/focus after being hidden and inactive.
+            if allow_focus_reopen && (is_active || is_focused) {
                 self.show_window(ctx);
             }
         }
@@ -2452,5 +2498,31 @@ mod tests {
         let nav = super::read_history_nav_input(&ctx);
         assert!(nav.copy_raw_selected);
         assert!(!nav.copy_selected);
+    }
+
+    #[test]
+    fn test_should_hide_on_blur_guardrails() {
+        use super::should_hide_on_blur;
+
+        // In show grace period: MUST NEVER hide on blur
+        assert!(!should_hide_on_blur(true, true, true, false, false, true));
+
+        // Window has not yet been focused: MUST NOT hide on blur
+        assert!(!should_hide_on_blur(false, true, false, false, false, true));
+
+        // Setting disabled: MUST NOT hide on blur
+        assert!(!should_hide_on_blur(true, false, false, false, false, true));
+
+        // Minimized: MUST NOT hide on blur
+        assert!(!should_hide_on_blur(true, true, false, true, false, true));
+
+        // Dragging or moving: MUST NOT hide on blur
+        assert!(!should_hide_on_blur(true, true, false, false, true, true));
+
+        // Not outside (still active/focused): MUST NOT hide
+        assert!(!should_hide_on_blur(true, true, false, false, false, false));
+
+        // All conditions met: hides cleanly
+        assert!(should_hide_on_blur(true, true, false, false, false, true));
     }
 }
