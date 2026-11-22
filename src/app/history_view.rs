@@ -231,11 +231,13 @@ impl ClipboardApp {
         let stroke = crate::theme::card_stroke(state.is_dark, state.is_selected);
         let fill = crate::theme::card_fill(state.is_dark, state.is_selected);
         let rounding = crate::theme::card_rounding();
+        let shadow = crate::theme::card_shadow(state.is_dark, state.is_selected);
 
         let frame_resp = egui::Frame::group(ui.style())
             .corner_radius(rounding)
             .stroke(stroke)
             .fill(fill)
+            .shadow(shadow)
             .inner_margin(8)
             .show(ui, |ui| {
                 let header_action = Self::render_item_header(

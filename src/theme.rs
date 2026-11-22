@@ -1,7 +1,9 @@
 //! Platform-adaptive UI theme providing native macOS Apple HIG styling,
 //! Windows 11 Fluent styling, and Linux Adwaita styling in both Dark and Light modes.
 
-use eframe::egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Stroke};
+use eframe::egui::{
+    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Shadow, Stroke,
+};
 
 /// Applies the platform-adaptive theme visuals (Dark or Light) to the egui context.
 pub(crate) fn setup_theme(ctx: &egui::Context, is_dark: bool) {
@@ -178,6 +180,101 @@ pub(crate) fn card_stroke(is_dark: bool, is_selected: bool) -> Stroke {
             ),
         )
     }
+}
+
+/// Ambient elevation drop shadow for clipboard item cards.
+/// Selected cards receive an elevated shadow to provide visual focus and depth,
+/// while unselected cards remain flush.
+#[must_use]
+pub(crate) const fn card_shadow(is_dark: bool, is_selected: bool) -> Shadow {
+    if is_selected {
+        Shadow {
+            offset: [0, 2],
+            blur: 10,
+            spread: 0,
+            color: if is_dark {
+                Color32::from_black_alpha(70)
+            } else {
+                Color32::from_black_alpha(28)
+            },
+        }
+    } else {
+        Shadow::NONE
+    }
+}
+
+/// Luminous brand accent color stops (Electric Cyan -> Electric Indigo -> Soft Violet).
+#[must_use]
+pub(crate) const fn brand_accent_stops(is_dark: bool) -> [Color32; 3] {
+    if is_dark {
+        [
+            Color32::from_rgb(34, 211, 238),  // Electric Cyan (#22D3EE)
+            Color32::from_rgb(99, 102, 241),  // Electric Indigo (#6366F1)
+            Color32::from_rgb(129, 140, 248), // Soft Violet (#818CF8)
+        ]
+    } else {
+        [
+            Color32::from_rgb(8, 145, 178),  // Deep Cyan (#0891B2)
+            Color32::from_rgb(79, 70, 229),  // Vibrant Indigo (#4F46E5)
+            Color32::from_rgb(109, 40, 217), // Deep Violet (#6D28D9)
+        ]
+    }
+}
+
+/// Paints a subtle, luminous horizontal gradient accent line along the top of a rectangle.
+/// Represents `CipherClipboard`'s brand signature: cryptographic vault protection meets electric speed.
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) fn paint_brand_top_accent(painter: &egui::Painter, rect: egui::Rect, is_dark: bool) {
+    let height = 2.0_f32;
+    if rect.width() <= 0.0 {
+        return;
+    }
+    let accent_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), height));
+
+    let [c_start, c_mid, _] = brand_accent_stops(is_dark);
+    let pct = if is_dark { 85_u32 } else { 70_u32 };
+    let apply_alpha = |c: Color32| -> Color32 {
+        Color32::from_rgba_premultiplied(
+            ((u32::from(c.r()) * pct) / 100) as u8,
+            ((u32::from(c.g()) * pct) / 100) as u8,
+            ((u32::from(c.b()) * pct) / 100) as u8,
+            ((255_u32 * pct) / 100) as u8,
+        )
+    };
+
+    let half_w = accent_rect.width() / 2.0;
+    let left_rect = egui::Rect::from_min_size(accent_rect.min, egui::vec2(half_w, height));
+    let right_rect = egui::Rect::from_min_size(
+        accent_rect.min + egui::vec2(half_w, 0.0),
+        egui::vec2(half_w, height),
+    );
+
+    // Left half: Transparent -> Cyan
+    let left_mesh = egui::Mesh {
+        indices: vec![0, 1, 2, 0, 2, 3],
+        vertices: vec![
+            egui::epaint::Vertex::untextured(left_rect.left_top(), Color32::TRANSPARENT),
+            egui::epaint::Vertex::untextured(left_rect.right_top(), apply_alpha(c_start)),
+            egui::epaint::Vertex::untextured(left_rect.right_bottom(), apply_alpha(c_start)),
+            egui::epaint::Vertex::untextured(left_rect.left_bottom(), Color32::TRANSPARENT),
+        ],
+        texture_id: egui::TextureId::default(),
+    };
+
+    // Right half: Cyan -> Indigo/Transparent
+    let right_mesh = egui::Mesh {
+        indices: vec![0, 1, 2, 0, 2, 3],
+        vertices: vec![
+            egui::epaint::Vertex::untextured(right_rect.left_top(), apply_alpha(c_mid)),
+            egui::epaint::Vertex::untextured(right_rect.right_top(), Color32::TRANSPARENT),
+            egui::epaint::Vertex::untextured(right_rect.right_bottom(), Color32::TRANSPARENT),
+            egui::epaint::Vertex::untextured(right_rect.left_bottom(), apply_alpha(c_mid)),
+        ],
+        texture_id: egui::TextureId::default(),
+    };
+
+    painter.add(left_mesh);
+    painter.add(right_mesh);
 }
 
 /// Selection background fill for egui visuals.
@@ -891,5 +988,24 @@ mod tests {
         let fallback = crate::platform::windows_font_candidates(None);
         assert!(fallback[0].to_string_lossy().starts_with(r"C:\Windows"));
         assert!(fallback[2].ends_with("arial.ttf"));
+    }
+
+    #[test]
+    fn test_card_shadow_and_brand_accent() {
+        for is_dark in [true, false] {
+            let unsel_shadow = card_shadow(is_dark, false);
+            assert_eq!(unsel_shadow, Shadow::NONE);
+
+            let sel_shadow = card_shadow(is_dark, true);
+            assert_ne!(sel_shadow, Shadow::NONE);
+            assert!(sel_shadow.blur > 0);
+            assert_ne!(sel_shadow.color, Color32::TRANSPARENT);
+
+            let stops = brand_accent_stops(is_dark);
+            for stop in stops {
+                assert_ne!(stop, Color32::TRANSPARENT);
+                assert!(relative_luminance(stop) > 0.0);
+            }
+        }
     }
 }

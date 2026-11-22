@@ -1164,6 +1164,7 @@ impl ClipboardApp {
                     .inner_margin(egui::Margin::symmetric(10, 6)),
             )
             .show(ui, |ui| {
+                crate::theme::paint_brand_top_accent(ui.painter(), ctx.viewport_rect(), is_dark);
                 ui.add_space(crate::theme::top_padding());
                 self.render_header_row(ui, &ctx, is_dark);
                 ui.add_space(6.0_f32);
