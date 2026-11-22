@@ -1,6 +1,6 @@
 # Feature Research: Stripping Source Formatting & Generalized Entry Transformations
 
-> **Status:** Phase 1 Implemented (Core Module, Strip Source Formatting, Raw Button, Shift+Enter Shortcut)  
+> **Status:** Phase 1 & 2 Implemented (Core Module, Generalized Transforms, Card Context Menu, Header Overflow Menu)  
 > **Date:** 2026-11-21  
 > **Scope:** Plain-text extraction ("strip source formatting") and a generalized entry transformation framework for `CipherClipboard`.
 
@@ -185,9 +185,9 @@ Any implementation must preserve the project's documented invariants:
    - Added `src/transform.rs` with `strip_source_formatting`, `has_strippable_formatting`, `TextTransform`, and comprehensive unit tests (ANSI CSI/OSC, HTML entities/tags, Markdown, zero-width chars, CRLF/NBSP).
    - Generalized `ItemAction::CopyFormattedJson` → `ItemAction::CopyTransformed`.
    - Added contextual `Raw` button in `render_kind_extra_buttons` + `Shift+Enter` shortcut for selected item.
-2. **Phase 2 — High-Value Generalized Transforms + Context Menu:**
-   - Add Whitespace/PDF unwrap, Case/Identifier conversions, Line operations, JSON Minify, and URL tracking-param stripping (all zero new crates).
-   - Add `Transform ▾` / right-click context menu on cards grouped by category.
+2. **Phase 2 — High-Value Generalized Transforms + Context Menu (Implemented):**
+   - Added Whitespace/PDF unwrap, Collapse Whitespace, Case/Identifier conversions (UPPERCASE, lowercase, Title Case, camelCase, snake_case, kebab-case), Line operations (Sort A–Z, Deduplicate, Remove Empty, Join with Comma), JSON Minify, Base64 encode/decode, and URL tracking parameter stripping (all zero new crates).
+   - Added `⋯` overflow button on card headers and right-click context menu on cards with grouped category submenus and security actions.
 3. **Phase 3 — Image OCR (`ItemKind::Image -> Text`):**
    - Add `platform::supports_image_ocr()` and `platform::extract_text_from_png()` (macOS Vision first with zero new crates, then Windows `windows` crate WinRT `OcrEngine`, plus optional Linux `tesseract` fallback).
    - Wire background OCR worker → `App::logic()` → clipboard copy + toast.

@@ -1,26 +1,45 @@
 //! Pure functional text transformation engine for `CipherClipboard`.
 //!
 //! Provides deterministic, allocation-bounded string transformations including source formatting
-//! stripping (ANSI, HTML, Markdown, invisible characters, CRLF/NBSP normalization), case conversions,
-//! and structured data formatting.
+//! stripping (ANSI, HTML, Markdown, invisible characters, CRLF/NBSP normalization), whitespace/line
+//! unwrapping, case and identifier conversions, line operations, structured data minification, Base64
+//! encoding/decoding, and URL tracking parameter stripping.
 //!
 //! All transformations are 100% safe Rust and adhere to `unsafe_code = "deny"`.
 
 use crate::db::{ClipboardItem, ItemKind};
+use crate::icons;
 
 /// Categories for organizing transformations in menus and palettes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum TransformCategory {
     Cleanup,
+    Case,
+    Lines,
     Developer,
+    Url,
+}
+
+impl TransformCategory {
+    #[must_use]
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Cleanup => "Cleanup",
+            Self::Case => "Case",
+            Self::Lines => "Lines",
+            Self::Developer => "Developer & Encode",
+            Self::Url => "URL & Web",
+        }
+    }
 }
 
 /// Errors that can occur during text transformation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum TransformError {
     InvalidJson,
+    InvalidBase64,
+    InvalidUtf8,
+    InvalidUrl,
     ExecutionFailed(String),
 }
 
@@ -28,6 +47,9 @@ impl std::fmt::Display for TransformError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidJson => write!(f, "Invalid JSON payload"),
+            Self::InvalidBase64 => write!(f, "Invalid Base64 sequence"),
+            Self::InvalidUtf8 => write!(f, "Decoded payload is not valid UTF-8"),
+            Self::InvalidUrl => write!(f, "Invalid URL format"),
             Self::ExecutionFailed(msg) => write!(f, "{msg}"),
         }
     }
@@ -37,20 +59,87 @@ impl std::error::Error for TransformError {}
 
 /// Unified descriptor for pure text transformations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum TextTransform {
+    // Cleanup
     StripFormatting,
+    UnwrapLines,
+    CollapseWhitespace,
+
+    // Case
+    Uppercase,
+    Lowercase,
+    TitleCase,
+    CamelCase,
+    SnakeCase,
+    KebabCase,
+
+    // Lines
+    SortLinesAsc,
+    DeduplicateLines,
+    RemoveEmptyLines,
+    JoinWithComma,
+
+    // Developer & Encode
     JsonPrettify,
+    JsonMinify,
+    Base64Encode,
+    Base64Decode,
+
+    // URL
+    StripTrackingParams,
 }
 
-#[allow(dead_code)]
 impl TextTransform {
+    /// Complete catalog of all transformations.
+    pub(crate) const ALL: &'static [Self] = &[
+        // Cleanup
+        Self::StripFormatting,
+        Self::UnwrapLines,
+        Self::CollapseWhitespace,
+        // Case
+        Self::Uppercase,
+        Self::Lowercase,
+        Self::TitleCase,
+        Self::CamelCase,
+        Self::SnakeCase,
+        Self::KebabCase,
+        // Lines
+        Self::SortLinesAsc,
+        Self::DeduplicateLines,
+        Self::RemoveEmptyLines,
+        Self::JoinWithComma,
+        // Developer & Encode
+        Self::JsonPrettify,
+        Self::JsonMinify,
+        Self::Base64Encode,
+        Self::Base64Decode,
+        // URL
+        Self::StripTrackingParams,
+    ];
+
     /// Unique machine identifier for this transform.
     #[must_use]
+    #[allow(dead_code)]
     pub(crate) const fn id(self) -> &'static str {
         match self {
             Self::StripFormatting => "strip_formatting",
+            Self::UnwrapLines => "unwrap_lines",
+            Self::CollapseWhitespace => "collapse_whitespace",
+            Self::Uppercase => "uppercase",
+            Self::Lowercase => "lowercase",
+            Self::TitleCase => "title_case",
+            Self::CamelCase => "camel_case",
+            Self::SnakeCase => "snake_case",
+            Self::KebabCase => "kebab_case",
+            Self::SortLinesAsc => "sort_lines_asc",
+            Self::DeduplicateLines => "deduplicate_lines",
+            Self::RemoveEmptyLines => "remove_empty_lines",
+            Self::JoinWithComma => "join_with_comma",
             Self::JsonPrettify => "json_prettify",
+            Self::JsonMinify => "json_minify",
+            Self::Base64Encode => "base64_encode",
+            Self::Base64Decode => "base64_decode",
+            Self::StripTrackingParams => "strip_tracking_params",
         }
     }
 
@@ -59,7 +148,23 @@ impl TextTransform {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::StripFormatting => "Strip Formatting",
+            Self::UnwrapLines => "Unwrap Hard Line Breaks",
+            Self::CollapseWhitespace => "Collapse Whitespace",
+            Self::Uppercase => "UPPERCASE",
+            Self::Lowercase => "lowercase",
+            Self::TitleCase => "Title Case",
+            Self::CamelCase => "camelCase",
+            Self::SnakeCase => "snake_case",
+            Self::KebabCase => "kebab-case",
+            Self::SortLinesAsc => "Sort Lines (A–Z)",
+            Self::DeduplicateLines => "Deduplicate Lines",
+            Self::RemoveEmptyLines => "Remove Empty Lines",
+            Self::JoinWithComma => "Join Lines with Comma",
             Self::JsonPrettify => "Prettify JSON",
+            Self::JsonMinify => "Minify JSON",
+            Self::Base64Encode => "Base64 Encode",
+            Self::Base64Decode => "Base64 Decode",
+            Self::StripTrackingParams => "Strip Tracking Parameters",
         }
     }
 
@@ -67,8 +172,23 @@ impl TextTransform {
     #[must_use]
     pub(crate) const fn category(self) -> TransformCategory {
         match self {
-            Self::StripFormatting => TransformCategory::Cleanup,
-            Self::JsonPrettify => TransformCategory::Developer,
+            Self::StripFormatting | Self::UnwrapLines | Self::CollapseWhitespace => {
+                TransformCategory::Cleanup
+            }
+            Self::Uppercase
+            | Self::Lowercase
+            | Self::TitleCase
+            | Self::CamelCase
+            | Self::SnakeCase
+            | Self::KebabCase => TransformCategory::Case,
+            Self::SortLinesAsc
+            | Self::DeduplicateLines
+            | Self::RemoveEmptyLines
+            | Self::JoinWithComma => TransformCategory::Lines,
+            Self::JsonPrettify | Self::JsonMinify | Self::Base64Encode | Self::Base64Decode => {
+                TransformCategory::Developer
+            }
+            Self::StripTrackingParams => TransformCategory::Url,
         }
     }
 
@@ -79,16 +199,97 @@ impl TextTransform {
             Self::StripFormatting => {
                 "Strip HTML tags, Markdown syntax, ANSI escape codes, and zero-width characters"
             }
+            Self::UnwrapLines => "Join lines broken mid-sentence while preserving paragraph breaks",
+            Self::CollapseWhitespace => {
+                "Collapse runs of whitespace and newlines into a single line"
+            }
+            Self::Uppercase => "Convert all letters to uppercase",
+            Self::Lowercase => "Convert all letters to lowercase",
+            Self::TitleCase => "Capitalize the first letter of each word",
+            Self::CamelCase => "Convert text or identifiers to camelCase",
+            Self::SnakeCase => "Convert text or identifiers to snake_case",
+            Self::KebabCase => "Convert text or identifiers to kebab-case",
+            Self::SortLinesAsc => "Sort lines alphabetically (A–Z)",
+            Self::DeduplicateLines => "Remove duplicate lines while preserving original order",
+            Self::RemoveEmptyLines => "Filter out empty or blank lines",
+            Self::JoinWithComma => "Join non-empty lines with a comma delimiter",
             Self::JsonPrettify => "Format JSON with clean 2-space indentation",
+            Self::JsonMinify => "Compress JSON into a single compact line",
+            Self::Base64Encode => "Encode plain text as Base64",
+            Self::Base64Decode => "Decode Base64 sequence back into plain text",
+            Self::StripTrackingParams => {
+                "Remove analytics query parameters (utm_*, fbclid, gclid, etc.) from URL"
+            }
+        }
+    }
+
+    /// Confirmation toast message on successful copy.
+    #[must_use]
+    pub(crate) fn toast_success(self) -> String {
+        match self {
+            Self::StripFormatting => {
+                format!("{} Copied raw plain text to clipboard!", icons::CHECK)
+            }
+            Self::UnwrapLines => format!("{} Copied unwrapped text to clipboard!", icons::CHECK),
+            Self::CollapseWhitespace => {
+                format!("{} Copied collapsed text to clipboard!", icons::CHECK)
+            }
+            Self::Uppercase => format!("{} Copied uppercase text to clipboard!", icons::CHECK),
+            Self::Lowercase => format!("{} Copied lowercase text to clipboard!", icons::CHECK),
+            Self::TitleCase => format!("{} Copied Title Case text to clipboard!", icons::CHECK),
+            Self::CamelCase => format!("{} Copied camelCase text to clipboard!", icons::CHECK),
+            Self::SnakeCase => format!("{} Copied snake_case text to clipboard!", icons::CHECK),
+            Self::KebabCase => format!("{} Copied kebab-case text to clipboard!", icons::CHECK),
+            Self::SortLinesAsc => format!("{} Copied sorted lines to clipboard!", icons::CHECK),
+            Self::DeduplicateLines => {
+                format!("{} Copied deduplicated lines to clipboard!", icons::CHECK)
+            }
+            Self::RemoveEmptyLines => {
+                format!("{} Copied text without empty lines!", icons::CHECK)
+            }
+            Self::JoinWithComma => {
+                format!("{} Copied comma-joined lines to clipboard!", icons::CHECK)
+            }
+            Self::JsonPrettify => format!("{} Copied formatted JSON to clipboard!", icons::CHECK),
+            Self::JsonMinify => format!("{} Copied minified JSON to clipboard!", icons::CHECK),
+            Self::Base64Encode => {
+                format!("{} Copied Base64 encoded text to clipboard!", icons::CHECK)
+            }
+            Self::Base64Decode => {
+                format!("{} Copied Base64 decoded text to clipboard!", icons::CHECK)
+            }
+            Self::StripTrackingParams => format!("{} Copied clean URL to clipboard!", icons::CHECK),
         }
     }
 
     /// Checks if this transform is applicable to the given clipboard item.
     #[must_use]
     pub(crate) fn applies_to(self, item: &ClipboardItem) -> bool {
+        if item.kind == ItemKind::Image {
+            return false;
+        }
+        let text = &item.content;
         match self {
             Self::StripFormatting => has_strippable_formatting(item),
-            Self::JsonPrettify => item.code_language() == Some(crate::code::CodeLanguage::Json),
+            Self::UnwrapLines
+            | Self::SortLinesAsc
+            | Self::DeduplicateLines
+            | Self::RemoveEmptyLines
+            | Self::JoinWithComma => text.contains('\n'),
+            Self::CollapseWhitespace => text.chars().any(char::is_whitespace),
+            Self::Uppercase
+            | Self::Lowercase
+            | Self::TitleCase
+            | Self::CamelCase
+            | Self::SnakeCase
+            | Self::KebabCase
+            | Self::Base64Encode => !text.trim().is_empty(),
+            Self::JsonPrettify | Self::JsonMinify => {
+                item.code_language() == Some(crate::code::CodeLanguage::Json)
+                    || is_json_heuristic(text)
+            }
+            Self::Base64Decode => is_likely_base64_text(text),
+            Self::StripTrackingParams => has_tracking_params(text),
         }
     }
 
@@ -96,22 +297,33 @@ impl TextTransform {
     pub(crate) fn apply(self, input: &str) -> Result<String, TransformError> {
         match self {
             Self::StripFormatting => Ok(strip_source_formatting(input)),
+            Self::UnwrapLines => Ok(unwrap_lines(input)),
+            Self::CollapseWhitespace => Ok(collapse_whitespace(input)),
+            Self::Uppercase => Ok(input.to_uppercase()),
+            Self::Lowercase => Ok(input.to_lowercase()),
+            Self::TitleCase => Ok(to_title_case(input)),
+            Self::CamelCase => Ok(to_camel_case(input)),
+            Self::SnakeCase => Ok(to_snake_case(input)),
+            Self::KebabCase => Ok(to_kebab_case(input)),
+            Self::SortLinesAsc => Ok(sort_lines_asc(input)),
+            Self::DeduplicateLines => Ok(deduplicate_lines(input)),
+            Self::RemoveEmptyLines => Ok(remove_empty_lines(input)),
+            Self::JoinWithComma => Ok(join_with_comma(input)),
             Self::JsonPrettify => {
                 crate::code::format_json(input).ok_or(TransformError::InvalidJson)
             }
+            Self::JsonMinify => json_minify(input),
+            Self::Base64Encode => Ok(base64_encode(input.as_bytes())),
+            Self::Base64Decode => {
+                let bytes = base64_decode(input.trim())?;
+                String::from_utf8(bytes).map_err(|_| TransformError::InvalidUtf8)
+            }
+            Self::StripTrackingParams => strip_url_tracking_params(input),
         }
     }
 }
 
 /// Strips all source formatting from text, returning clean plain text.
-///
-/// Execution pipeline:
-/// 1. ANSI escape code stripping (CSI and OSC sequences).
-/// 2. Invisible character removal (`\u{200B}`, `\u{200C}`, `\u{200D}`, `\u{FEFF}`, `\u{FE0E}`, `\u{FE0F}`).
-/// 3. Normalization of `\u{00A0}` (NBSP) to ASCII space and `\r\n`/`\r` to `\n`.
-/// 4. HTML/XML stripping: removes `<script>` and `<style>` blocks entirely, preserves line breaks for block tags, strips all other tags, and decodes HTML entities.
-/// 5. Markdown stripping: strips heading prefixes (`# `), blockquote prefixes (`> `), list markers (`- `, `* `, `1. `), unwraps inline/fenced code and emphasis (`**`, `__`, `*`, `_`, `~~`), and extracts link labels `[label](url)` and image alt text `![alt](url)`.
-/// 6. Whitespace normalization: trims line trailing whitespace, collapses 3+ consecutive newlines to 2, and trims outer leading/trailing whitespace.
 #[must_use]
 pub(crate) fn strip_source_formatting(input: &str) -> String {
     let s1 = strip_ansi(input);
@@ -129,7 +341,6 @@ pub(crate) fn has_strippable_formatting(item: &ClipboardItem) -> bool {
         return false;
     }
 
-    // Fast check for triggers to avoid redundant allocations on clean plain text.
     let text = &item.content;
     let has_candidate_chars = text.chars().any(|c| {
         matches!(
@@ -168,6 +379,331 @@ pub(crate) fn has_strippable_formatting(item: &ClipboardItem) -> bool {
     stripped != *text
 }
 
+/// Joins single newlines within paragraphs while preserving paragraph breaks (`\n\n`).
+fn unwrap_lines(input: &str) -> String {
+    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+    let paragraphs = normalized.split("\n\n");
+    let mut out_paragraphs = Vec::new();
+
+    for p in paragraphs {
+        let lines: Vec<&str> = p.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        if lines.is_empty() {
+            continue;
+        }
+        let mut joined = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                if joined.ends_with('-') && !joined.ends_with(" -") {
+                    joined.pop(); // Remove hyphen from split word
+                } else {
+                    joined.push(' ');
+                }
+            }
+            joined.push_str(line);
+        }
+        out_paragraphs.push(joined);
+    }
+
+    out_paragraphs.join("\n\n")
+}
+
+/// Collapses runs of whitespace and newlines into a single line.
+fn collapse_whitespace(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Sorts lines alphabetically case-insensitively.
+fn sort_lines_asc(input: &str) -> String {
+    let mut lines: Vec<&str> = input.lines().collect();
+    lines.sort_by_key(|a| a.to_lowercase());
+    lines.join("\n")
+}
+
+/// Deduplicates lines preserving their first occurrence.
+fn deduplicate_lines(input: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for line in input.lines() {
+        if seen.insert(line) {
+            out.push(line);
+        }
+    }
+    out.join("\n")
+}
+
+/// Removes blank or whitespace-only lines.
+fn remove_empty_lines(input: &str) -> String {
+    input
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Joins non-empty lines with a comma delimiter.
+fn join_with_comma(input: &str) -> String {
+    input
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Minifies JSON payload into a single line.
+fn json_minify(input: &str) -> Result<String, TransformError> {
+    let val: serde_json::Value =
+        serde_json::from_str(input).map_err(|_| TransformError::InvalidJson)?;
+    serde_json::to_string(&val).map_err(|e| TransformError::ExecutionFailed(e.to_string()))
+}
+
+/// Strips query parameters associated with web tracking.
+fn strip_url_tracking_params(input: &str) -> Result<String, TransformError> {
+    let trimmed = input.trim();
+    let mut url = url::Url::parse(trimmed).map_err(|_| TransformError::InvalidUrl)?;
+    if !url.has_host() {
+        return Err(TransformError::InvalidUrl);
+    }
+
+    let tracking_keys: [&str; 12] = [
+        "fbclid", "gclid", "mc_eid", "igshid", "ref", "msclkid", "twclid", "_ga", "_gl", "dclid",
+        "s_kwcid", "yclid",
+    ];
+
+    let pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(k, _)| {
+            let key = k.to_ascii_lowercase();
+            !key.starts_with("utm_") && !tracking_keys.contains(&key.as_str())
+        })
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+
+    if pairs.is_empty() {
+        url.set_query(None);
+    } else {
+        url.query_pairs_mut().clear().extend_pairs(pairs).finish();
+    }
+
+    Ok(url.to_string())
+}
+
+const BASE64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Encodes binary bytes as standard Base64 with padding.
+fn base64_encode(input: &[u8]) -> String {
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    let (chunks, remainder) = input.as_chunks::<3>();
+    for chunk in chunks {
+        let n = ((u32::from(chunk[0])) << 16) | ((u32::from(chunk[1])) << 8) | u32::from(chunk[2]);
+        out.push(BASE64_CHARS[((n >> 18) & 63) as usize] as char);
+        out.push(BASE64_CHARS[((n >> 12) & 63) as usize] as char);
+        out.push(BASE64_CHARS[((n >> 6) & 63) as usize] as char);
+        out.push(BASE64_CHARS[(n & 63) as usize] as char);
+    }
+    if remainder.len() == 1 {
+        let n = (u32::from(remainder[0])) << 16;
+        out.push(BASE64_CHARS[((n >> 18) & 63) as usize] as char);
+        out.push(BASE64_CHARS[((n >> 12) & 63) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if remainder.len() == 2 {
+        let n = ((u32::from(remainder[0])) << 16) | ((u32::from(remainder[1])) << 8);
+        out.push(BASE64_CHARS[((n >> 18) & 63) as usize] as char);
+        out.push(BASE64_CHARS[((n >> 12) & 63) as usize] as char);
+        out.push(BASE64_CHARS[((n >> 6) & 63) as usize] as char);
+        out.push('=');
+    }
+    out
+}
+
+fn decode_base64_char(c: u8) -> Result<u32, TransformError> {
+    match c {
+        b'A'..=b'Z' => Ok(u32::from(c - b'A')),
+        b'a'..=b'z' => Ok(u32::from(c - b'a' + 26)),
+        b'0'..=b'9' => Ok(u32::from(c - b'0' + 52)),
+        b'+' => Ok(62),
+        b'/' => Ok(63),
+        _ => Err(TransformError::InvalidBase64),
+    }
+}
+
+/// Decodes standard Base64 string into bytes.
+fn base64_decode(input: &str) -> Result<Vec<u8>, TransformError> {
+    let clean: String = input.chars().filter(|c| !c.is_whitespace()).collect();
+    if !clean.len().is_multiple_of(4) || clean.is_empty() {
+        return Err(TransformError::InvalidBase64);
+    }
+
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    let bytes = clean.as_bytes();
+    let (chunks, _) = bytes.as_chunks::<4>();
+
+    for chunk in chunks {
+        let c0 = decode_base64_char(chunk[0])?;
+        let c1 = decode_base64_char(chunk[1])?;
+
+        if chunk[2] == b'=' {
+            if chunk[3] != b'=' {
+                return Err(TransformError::InvalidBase64);
+            }
+            let n = (c0 << 18) | (c1 << 12);
+            out.push(((n >> 16) & 0xFF) as u8);
+        } else if chunk[3] == b'=' {
+            let c2 = decode_base64_char(chunk[2])?;
+            let n = (c0 << 18) | (c1 << 12) | (c2 << 6);
+            out.push(((n >> 16) & 0xFF) as u8);
+            out.push(((n >> 8) & 0xFF) as u8);
+        } else {
+            let c2 = decode_base64_char(chunk[2])?;
+            let c3 = decode_base64_char(chunk[3])?;
+            let n = (c0 << 18) | (c1 << 12) | (c2 << 6) | c3;
+            out.push(((n >> 16) & 0xFF) as u8);
+            out.push(((n >> 8) & 0xFF) as u8);
+            out.push((n & 0xFF) as u8);
+        }
+    }
+
+    Ok(out)
+}
+
+/// Splits text into word tokens across `camelCase`, `snake_case`, `kebab-case`, or whitespace boundaries.
+fn split_words(input: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let chars: Vec<char> = input.chars().collect();
+    let len = chars.len();
+
+    for i in 0..len {
+        let ch = chars[i];
+        if ch.is_alphanumeric() {
+            if !current.is_empty() {
+                let prev = chars[i - 1];
+                let camel_transition =
+                    (prev.is_lowercase() || prev.is_ascii_digit()) && ch.is_uppercase();
+                let acronym_transition = prev.is_uppercase()
+                    && ch.is_uppercase()
+                    && i + 1 < len
+                    && chars[i + 1].is_lowercase();
+
+                if camel_transition || acronym_transition {
+                    words.push(current);
+                    current = String::new();
+                }
+            }
+            current.push(ch);
+        } else if !current.is_empty() {
+            words.push(current);
+            current = String::new();
+        }
+    }
+
+    if !current.is_empty() {
+        words.push(current);
+    }
+
+    words
+}
+
+fn to_snake_case(input: &str) -> String {
+    let words = split_words(input);
+    words
+        .into_iter()
+        .map(|w| w.to_lowercase())
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+fn to_kebab_case(input: &str) -> String {
+    let words = split_words(input);
+    words
+        .into_iter()
+        .map(|w| w.to_lowercase())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn to_camel_case(input: &str) -> String {
+    let words = split_words(input);
+    let mut s = String::new();
+    for (idx, w) in words.into_iter().enumerate() {
+        if idx == 0 {
+            s.push_str(&w.to_lowercase());
+        } else {
+            let mut chars = w.chars();
+            if let Some(first) = chars.next() {
+                s.extend(first.to_uppercase());
+                s.extend(chars.map(|c| c.to_ascii_lowercase()));
+            }
+        }
+    }
+    s
+}
+
+fn to_title_case(input: &str) -> String {
+    let words = split_words(input);
+    let mut s = Vec::new();
+    for w in words {
+        let mut chars = w.chars();
+        if let Some(first) = chars.next() {
+            let mut capitalized = String::new();
+            capitalized.extend(first.to_uppercase());
+            capitalized.extend(chars.map(|c| c.to_ascii_lowercase()));
+            s.push(capitalized);
+        }
+    }
+    s.join(" ")
+}
+
+fn is_json_heuristic(text: &str) -> bool {
+    let trimmed = text.trim();
+    ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+        && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+}
+
+fn is_likely_base64_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.len() < 4 || !trimmed.len().is_multiple_of(4) {
+        return false;
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+    {
+        return false;
+    }
+    base64_decode(trimmed).is_ok_and(|bytes| String::from_utf8(bytes).is_ok())
+}
+
+fn has_tracking_params(text: &str) -> bool {
+    let trimmed = text.trim();
+    if let Ok(u) = url::Url::parse(trimmed) {
+        if u.has_host() && u.query().is_some() {
+            return u.query_pairs().any(|(k, _)| {
+                let key = k.to_ascii_lowercase();
+                key.starts_with("utm_")
+                    || matches!(
+                        key.as_str(),
+                        "fbclid"
+                            | "gclid"
+                            | "mc_eid"
+                            | "igshid"
+                            | "ref"
+                            | "msclkid"
+                            | "twclid"
+                            | "_ga"
+                            | "_gl"
+                            | "dclid"
+                            | "s_kwcid"
+                            | "yclid"
+                    )
+            });
+        }
+    }
+    false
+}
+
 /// Strips ANSI CSI and OSC escape sequences from `input`.
 fn strip_ansi(input: &str) -> String {
     if !input.contains('\x1b') {
@@ -182,7 +718,6 @@ fn strip_ansi(input: &str) -> String {
             match chars.peek().copied() {
                 Some('[') => {
                     chars.next(); // Consume '['
-                                  // Consume parameter and intermediate characters (0x20..=0x3F)
                     while let Some(&c) = chars.peek() {
                         if (0x20..=0x3F).contains(&(c as u32)) {
                             chars.next();
@@ -190,7 +725,6 @@ fn strip_ansi(input: &str) -> String {
                             break;
                         }
                     }
-                    // Consume final character (0x40..=0x7E)
                     if let Some(&c) = chars.peek() {
                         if (0x40..=0x7E).contains(&(c as u32)) {
                             chars.next();
@@ -199,7 +733,6 @@ fn strip_ansi(input: &str) -> String {
                 }
                 Some(']') => {
                     chars.next(); // Consume ']'
-                                  // Consume until BEL (0x07) or ST (\x1b\)
                     while let Some(c) = chars.next() {
                         if c == '\x07' {
                             break;
@@ -211,7 +744,6 @@ fn strip_ansi(input: &str) -> String {
                     }
                 }
                 Some(c) if c.is_ascii() => {
-                    // Consume single character escape (e.g. ESC N, ESC M)
                     chars.next();
                 }
                 _ => {}
@@ -383,7 +915,7 @@ fn is_block_tag(name: &str) -> bool {
     )
 }
 
-/// Decodes common HTML entities (named and numeric) to their plain character equivalents.
+/// Decodes common HTML entities to their plain character equivalents.
 fn decode_html_entities(input: &str) -> String {
     if !input.contains('&') {
         return input.to_string();
@@ -469,38 +1001,31 @@ fn strip_markdown(input: &str) -> String {
     for raw_line in input.lines() {
         let trimmed_start = raw_line.trim_start();
 
-        // Check for fenced code block toggle
         if trimmed_start.starts_with("```") || trimmed_start.starts_with("~~~") {
             in_fenced_code = !in_fenced_code;
             continue;
         }
 
         if in_fenced_code {
-            // Preserve code block contents verbatim
             out_lines.push(raw_line.to_string());
             continue;
         }
 
         let mut line = raw_line.to_string();
 
-        // Strip ATX headings: # Heading
         if let Some(rest) = strip_heading_prefix(&line) {
             line = rest;
         }
 
-        // Strip blockquote prefixes: > Quote
         if let Some(rest) = strip_blockquote_prefix(&line) {
             line = rest;
         }
 
-        // Strip bullet / number list prefixes: - Item, * Item, 1. Item
         if let Some(rest) = strip_list_prefix(&line) {
             line = rest;
         }
 
-        // Strip inline markdown elements: links, images, emphasis, inline code
         line = strip_inline_markdown(&line);
-
         out_lines.push(line);
     }
 
@@ -544,7 +1069,6 @@ fn strip_blockquote_prefix(line: &str) -> Option<String> {
 
 fn strip_list_prefix(line: &str) -> Option<String> {
     let trimmed = line.trim_start();
-    // Bullet lists: - , * , +
     if let Some(rest) = trimmed
         .strip_prefix("- ")
         .or_else(|| trimmed.strip_prefix("* "))
@@ -553,7 +1077,6 @@ fn strip_list_prefix(line: &str) -> Option<String> {
         return Some(rest.to_string());
     }
 
-    // Numbered lists: 1. , 12.
     let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
     if digits > 0 && digits < 10 {
         let after_digits = &trimmed[digits..];
@@ -566,13 +1089,9 @@ fn strip_list_prefix(line: &str) -> Option<String> {
 }
 
 fn strip_inline_markdown(line: &str) -> String {
-    // 1. Strip images: ![alt](url) -> alt
     let s1 = strip_images(line);
-    // 2. Strip links: [label](url) -> label
     let s2 = strip_links(&s1);
-    // 3. Strip inline code: `code` -> code
     let s3 = strip_inline_code(&s2);
-    // 4. Strip emphasis: **bold**, __bold__, *italic*, _italic_, ~~strike~~
     strip_emphasis(&s3)
 }
 
@@ -669,12 +1188,9 @@ fn strip_inline_code(input: &str) -> String {
 
 fn strip_emphasis(input: &str) -> String {
     let mut s = input.to_string();
-    // Strikethrough: ~~text~~
     s = replace_delimiter_pair(&s, "~~");
-    // Bold: **text** and __text__
     s = replace_delimiter_pair(&s, "**");
     s = replace_delimiter_pair(&s, "__");
-    // Italic: *text* and _text_
     s = replace_single_delimiter(&s, '*');
     s = replace_single_delimiter(&s, '_');
     s
@@ -718,20 +1234,21 @@ fn replace_single_delimiter(input: &str, delim: char) -> String {
     let mut i = 0;
 
     while i < len {
-        if chars[i] == delim {
-            // Delimiter must be followed by a non-whitespace character to be valid markdown opening
-            if i + 1 < len && !chars[i + 1].is_whitespace() && chars[i + 1] != delim {
-                let start = i + 1;
-                let mut end = start;
-                while end < len && chars[end] != delim {
-                    end += 1;
-                }
-                if end < len && chars[end] == delim && !chars[end - 1].is_whitespace() {
-                    let inner: String = chars[start..end].iter().collect();
-                    out.push_str(&inner);
-                    i = end + 1;
-                    continue;
-                }
+        if chars[i] == delim
+            && i + 1 < len
+            && !chars[i + 1].is_whitespace()
+            && chars[i + 1] != delim
+        {
+            let start = i + 1;
+            let mut end = start;
+            while end < len && chars[end] != delim {
+                end += 1;
+            }
+            if end < len && chars[end] == delim && !chars[end - 1].is_whitespace() {
+                let inner: String = chars[start..end].iter().collect();
+                out.push_str(&inner);
+                i = end + 1;
+                continue;
             }
         }
         out.push(chars[i]);
@@ -843,6 +1360,95 @@ mod tests {
     }
 
     #[test]
+    fn test_unwrap_lines() {
+        let input = "This is a sentence\nthat was broken by PDF.\n\nSecond paragraph here\nwith hyphen-\nated word.";
+        let unwrapped = unwrap_lines(input);
+        assert_eq!(
+            unwrapped,
+            "This is a sentence that was broken by PDF.\n\nSecond paragraph here with hyphenated word."
+        );
+    }
+
+    #[test]
+    fn test_collapse_whitespace() {
+        let input = "  Hello   world \n\t from \n\n clipboard  ";
+        assert_eq!(collapse_whitespace(input), "Hello world from clipboard");
+    }
+
+    #[test]
+    fn test_case_conversions() {
+        let input = "helloWorld_test-case XMLParser";
+        assert_eq!(to_snake_case(input), "hello_world_test_case_xml_parser");
+        assert_eq!(to_kebab_case(input), "hello-world-test-case-xml-parser");
+        assert_eq!(to_camel_case(input), "helloWorldTestCaseXmlParser");
+        assert_eq!(to_title_case(input), "Hello World Test Case Xml Parser");
+    }
+
+    #[test]
+    fn test_line_operations() {
+        let input = "banana\nApple\nbanana\n\norange\n";
+        assert_eq!(sort_lines_asc(input), "\nApple\nbanana\nbanana\norange");
+        assert_eq!(deduplicate_lines(input), "banana\nApple\n\norange");
+        assert_eq!(remove_empty_lines(input), "banana\nApple\nbanana\norange");
+        assert_eq!(join_with_comma(input), "banana, Apple, banana, orange");
+    }
+
+    #[test]
+    fn test_json_minify() {
+        let pretty = "{\n  \"key\": \"value\",\n  \"num\": 42\n}";
+        let minified = json_minify(pretty).unwrap();
+        assert_eq!(minified, "{\"key\":\"value\",\"num\":42}");
+        assert!(json_minify("not json").is_err());
+    }
+
+    #[test]
+    fn test_base64_roundtrip() {
+        let original = "CipherClipboard encrypted management!";
+        let encoded = base64_encode(original.as_bytes());
+        assert_eq!(
+            encoded,
+            "Q2lwaGVyQ2xpcGJvYXJkIGVuY3J5cHRlZCBtYW5hZ2VtZW50IQ=="
+        );
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(String::from_utf8(decoded).unwrap(), original);
+
+        assert!(base64_decode("invalid===base64").is_err());
+    }
+
+    #[test]
+    fn test_strip_url_tracking_params() {
+        let url = "https://example.com/item?id=99&utm_source=news&fbclid=12345&keep=true";
+        let cleaned = strip_url_tracking_params(url).unwrap();
+        assert_eq!(cleaned, "https://example.com/item?id=99&keep=true");
+
+        let url_only_tracking = "https://example.com/item?utm_source=twitter&gclid=abcd";
+        let cleaned_no_query = strip_url_tracking_params(url_only_tracking).unwrap();
+        assert_eq!(cleaned_no_query, "https://example.com/item");
+    }
+
+    #[test]
+    fn test_text_transform_execution() {
+        let json_item = ClipboardItem {
+            id: 5,
+            kind: ItemKind::Code,
+            content: "{\"name\":\"alice\",\"age\":30}".to_string(),
+            width: None,
+            height: None,
+            created_at: "2026-01-01".to_string(),
+            embedded_colors: vec![],
+        };
+
+        assert!(TextTransform::JsonPrettify.applies_to(&json_item));
+        let pretty = TextTransform::JsonPrettify
+            .apply(&json_item.content)
+            .unwrap();
+        assert!(pretty.contains('\n'));
+
+        let minified = TextTransform::JsonMinify.apply(&pretty).unwrap();
+        assert_eq!(minified, "{\"age\":30,\"name\":\"alice\"}");
+    }
+
+    #[test]
     fn test_has_strippable_formatting_detection() {
         let clean_item = ClipboardItem {
             id: 1,
@@ -887,39 +1493,5 @@ mod tests {
             embedded_colors: vec![],
         };
         assert!(!has_strippable_formatting(&image_item));
-    }
-
-    #[test]
-    fn test_text_transform_applies_and_execution() {
-        let json_item = ClipboardItem {
-            id: 5,
-            kind: ItemKind::Code,
-            content: "{\"name\":\"alice\",\"age\":30}".to_string(),
-            width: None,
-            height: None,
-            created_at: "2026-01-01".to_string(),
-            embedded_colors: vec![],
-        };
-
-        assert!(TextTransform::JsonPrettify.applies_to(&json_item));
-        let pretty = TextTransform::JsonPrettify
-            .apply(&json_item.content)
-            .unwrap();
-        assert!(pretty.contains('\n'));
-
-        let formatted_item = ClipboardItem {
-            id: 6,
-            kind: ItemKind::Text,
-            content: "**Bold** and [link](https://foo.com)".to_string(),
-            width: None,
-            height: None,
-            created_at: "2026-01-01".to_string(),
-            embedded_colors: vec![],
-        };
-        assert!(TextTransform::StripFormatting.applies_to(&formatted_item));
-        let raw = TextTransform::StripFormatting
-            .apply(&formatted_item.content)
-            .unwrap();
-        assert_eq!(raw, "Bold and link");
     }
 }

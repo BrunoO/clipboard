@@ -18,6 +18,7 @@ pub(super) enum ItemAction {
     ToggleSecret(i64, bool),
     ToggleRevealSecret(i64),
     Delete(i64),
+    ShowWarning(String),
 }
 
 #[derive(Clone, Copy)]
@@ -191,6 +192,7 @@ impl ClipboardApp {
                 self.refresh_items();
                 self.show_toast(&format!("{} Entry deleted.", icons::TRASH));
             }
+            ItemAction::ShowWarning(msg) => self.show_warning_toast(&msg),
             ItemAction::None => {}
         }
     }
@@ -283,6 +285,17 @@ impl ClipboardApp {
 
         if state.should_scroll {
             frame_resp.response.scroll_to_me(Some(egui::Align::Center));
+        }
+
+        let mut context_action = ItemAction::None;
+        frame_resp.response.context_menu(|ui| {
+            let menu_act = Self::render_card_transform_menu(ui, item, state.is_revealed);
+            if !matches!(menu_act, ItemAction::None) {
+                context_action = menu_act;
+            }
+        });
+        if !matches!(context_action, ItemAction::None) {
+            action = context_action;
         }
 
         let clicked = frame_resp.response.clicked();
@@ -466,6 +479,17 @@ impl ClipboardApp {
             action = extra_action;
         }
 
+        let mut overflow_action = ItemAction::None;
+        ui.menu_button("⋯", |ui| {
+            let menu_action = Self::render_card_transform_menu(ui, item, is_revealed);
+            if !matches!(menu_action, ItemAction::None) {
+                overflow_action = menu_action;
+            }
+        });
+        if !matches!(overflow_action, ItemAction::None) {
+            action = overflow_action;
+        }
+
         action
     }
 
@@ -574,6 +598,116 @@ impl ClipboardApp {
                 toast: format!("{} Copied raw plain text to clipboard!", icons::CHECK),
                 is_secret: item.kind == ItemKind::Secret,
             };
+        }
+
+        action
+    }
+
+    fn render_card_transform_menu(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_revealed: bool,
+    ) -> ItemAction {
+        let mut action = ItemAction::None;
+
+        if item.kind != ItemKind::Image {
+            let applicable: Vec<crate::transform::TextTransform> =
+                crate::transform::TextTransform::ALL
+                    .iter()
+                    .copied()
+                    .filter(|t| t.applies_to(item))
+                    .collect();
+
+            let categories = [
+                crate::transform::TransformCategory::Cleanup,
+                crate::transform::TransformCategory::Case,
+                crate::transform::TransformCategory::Lines,
+                crate::transform::TransformCategory::Developer,
+                crate::transform::TransformCategory::Url,
+            ];
+
+            for cat in categories {
+                let cat_transforms: Vec<crate::transform::TextTransform> = applicable
+                    .iter()
+                    .copied()
+                    .filter(|t| t.category() == cat)
+                    .collect();
+
+                if !cat_transforms.is_empty() {
+                    ui.menu_button(cat.label(), |ui| {
+                        for t in cat_transforms {
+                            if ui.button(t.label()).on_hover_text(t.tooltip()).clicked() {
+                                ui.close();
+                                match t.apply(&item.content) {
+                                    Ok(res) => {
+                                        action = ItemAction::CopyTransformed {
+                                            content: res,
+                                            toast: t.toast_success(),
+                                            is_secret: item.kind == ItemKind::Secret,
+                                        };
+                                    }
+                                    Err(e) => {
+                                        action = ItemAction::ShowWarning(format!(
+                                            "Transformation failed: {e}"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
+            ui.separator();
+        }
+
+        // Security / Secret classification
+        if item.kind != ItemKind::Image {
+            let is_secret = item.kind == ItemKind::Secret;
+            let secret_label = if is_secret {
+                format!(
+                    "{} Unmark as Secret ({}+L)",
+                    icons::LOCK_OPEN,
+                    crate::platform::PRIMARY_MODIFIER_NAME
+                )
+            } else {
+                format!(
+                    "{} Mark as Secret ({}+L)",
+                    icons::LOCK,
+                    crate::platform::PRIMARY_MODIFIER_NAME
+                )
+            };
+            if ui.button(secret_label).clicked() {
+                ui.close();
+                action = ItemAction::ToggleSecret(item.id, !is_secret);
+            }
+
+            if is_secret {
+                let reveal_label = if is_revealed {
+                    format!("{} Mask Secret Content", icons::EYE_SLASH)
+                } else {
+                    format!("{} Reveal Secret Content", icons::EYE)
+                };
+                if ui.button(reveal_label).clicked() {
+                    ui.close();
+                    action = ItemAction::ToggleRevealSecret(item.id);
+                }
+            }
+
+            ui.separator();
+        }
+
+        if ui.button(format!("{} Copy (Enter)", icons::COPY)).clicked() {
+            ui.close();
+            action = Self::item_copy_action(item);
+        }
+
+        if ui
+            .button(format!("{} Delete Entry (Delete)", icons::TRASH))
+            .clicked()
+        {
+            ui.close();
+            action = ItemAction::Delete(item.id);
         }
 
         action
