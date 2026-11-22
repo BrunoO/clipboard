@@ -303,6 +303,26 @@ impl ClipboardApp {
         }
 
         let clicked = frame_resp.response.clicked();
+
+        if state.is_selected {
+            // Crisp vertical accent indicator along the left edge of the selected card
+            let card_rect = frame_resp.response.rect;
+            let strip_rect = egui::Rect::from_min_size(
+                egui::pos2(card_rect.min.x, card_rect.min.y + 3.0),
+                egui::vec2(3.0, (card_rect.height() - 6.0).max(4.0)),
+            );
+            ui.painter().rect_filled(
+                strip_rect,
+                egui::CornerRadius {
+                    nw: 2,
+                    ne: 0,
+                    sw: 2,
+                    se: 0,
+                },
+                crate::theme::accent_color(state.is_dark),
+            );
+        }
+
         (action, clicked)
     }
 
@@ -423,7 +443,7 @@ impl ClipboardApp {
                     Self::render_shortcut_badge(ui, num, is_selected, is_dark);
                 }
 
-                action = Self::render_item_header_actions(ui, item, is_revealed);
+                action = Self::render_item_header_actions(ui, item, is_selected, is_revealed);
             });
         });
 
@@ -453,21 +473,42 @@ impl ClipboardApp {
     fn render_item_header_actions(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
+        is_selected: bool,
         is_revealed: bool,
     ) -> ItemAction {
-        let mut action = if ui
+        let mut action = ItemAction::None;
+
+        let mut overflow_action = ItemAction::None;
+        ui.menu_button("⋯", |ui| {
+            let menu_action = Self::render_card_transform_menu(ui, item, is_revealed);
+            if !matches!(menu_action, ItemAction::None) {
+                overflow_action = menu_action;
+            }
+        });
+        if !matches!(overflow_action, ItemAction::None) {
+            action = overflow_action;
+        }
+
+        let eye_action = Self::render_secret_reveal_button(ui, item, is_revealed);
+        if !matches!(eye_action, ItemAction::None) {
+            action = eye_action;
+        }
+
+        if !is_selected {
+            return action;
+        }
+
+        if ui
             .small_button(icons::button_icon(icons::TRASH))
             .on_hover_text("Delete entry (Delete or Cmd+Backspace)")
             .clicked()
         {
-            ItemAction::Delete(item.id)
-        } else {
-            ItemAction::None
-        };
+            action = ItemAction::Delete(item.id);
+        }
 
-        let secret_action = Self::render_secret_header_buttons(ui, item, is_revealed);
-        if !matches!(secret_action, ItemAction::None) {
-            action = secret_action;
+        let lock_action = Self::render_secret_toggle_button(ui, item);
+        if !matches!(lock_action, ItemAction::None) {
+            action = lock_action;
         }
 
         if ui
@@ -483,27 +524,32 @@ impl ClipboardApp {
             action = extra_action;
         }
 
-        let mut overflow_action = ItemAction::None;
-        ui.menu_button("⋯", |ui| {
-            let menu_action = Self::render_card_transform_menu(ui, item, is_revealed);
-            if !matches!(menu_action, ItemAction::None) {
-                overflow_action = menu_action;
-            }
-        });
-        if !matches!(overflow_action, ItemAction::None) {
-            action = overflow_action;
-        }
-
         action
     }
 
-    fn render_secret_header_buttons(
+    fn render_secret_reveal_button(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
         is_revealed: bool,
     ) -> ItemAction {
-        let mut action = ItemAction::None;
+        if item.kind == ItemKind::Secret {
+            let (eye_icon, eye_tip) = if is_revealed {
+                (icons::EYE_SLASH, "Mask secret")
+            } else {
+                (icons::EYE, "Reveal secret")
+            };
+            if ui
+                .small_button(icons::button_icon(eye_icon))
+                .on_hover_text(eye_tip)
+                .clicked()
+            {
+                return ItemAction::ToggleRevealSecret(item.id);
+            }
+        }
+        ItemAction::None
+    }
 
+    fn render_secret_toggle_button(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
         if item.kind != ItemKind::Image {
             let is_secret = item.kind == ItemKind::Secret;
             let (lock_icon, lock_tip) = if is_secret {
@@ -528,26 +574,10 @@ impl ClipboardApp {
                 .on_hover_text(lock_tip)
                 .clicked()
             {
-                action = ItemAction::ToggleSecret(item.id, !is_secret);
+                return ItemAction::ToggleSecret(item.id, !is_secret);
             }
         }
-
-        if item.kind == ItemKind::Secret {
-            let (eye_icon, eye_tip) = if is_revealed {
-                (icons::EYE_SLASH, "Mask secret")
-            } else {
-                (icons::EYE, "Reveal secret")
-            };
-            if ui
-                .small_button(icons::button_icon(eye_icon))
-                .on_hover_text(eye_tip)
-                .clicked()
-            {
-                action = ItemAction::ToggleRevealSecret(item.id);
-            }
-        }
-
-        action
+        ItemAction::None
     }
 
     fn item_copy_action(item: &ClipboardItem) -> ItemAction {
@@ -1212,12 +1242,18 @@ impl ClipboardApp {
 
     fn render_url_content(ui: &mut egui::Ui, content: &str, is_dark: bool) -> ItemAction {
         let preview = Self::format_display_preview(content, 180);
-
         let link_color = crate::theme::link_color(is_dark);
 
         let label = ui.add(
-            egui::Label::new(egui::RichText::new(preview).color(link_color).underline())
-                .sense(egui::Sense::click()),
+            egui::Label::new(
+                egui::RichText::new(preview)
+                    .size(12.0)
+                    .line_height(Some(16.0))
+                    .color(link_color)
+                    .underline(),
+            )
+            .wrap()
+            .sense(egui::Sense::click()),
         );
 
         if label.clicked() {
@@ -1236,9 +1272,11 @@ impl ClipboardApp {
         let label = ui.add(
             egui::Label::new(
                 egui::RichText::new(preview)
-                    .monospace()
-                    .color(crate::theme::text_preview(is_dark)),
+                    .size(12.5)
+                    .line_height(Some(17.0))
+                    .color(crate::theme::text_primary(is_dark)),
             )
+            .wrap()
             .sense(egui::Sense::click()),
         );
 
