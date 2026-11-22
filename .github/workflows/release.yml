@@ -136,10 +136,19 @@ jobs:
           Compress-Archive -Path "$portableDir\*" -DestinationPath "dist\CipherClipboard-$env:VERSION-windows-x64-portable.zip" -Force
           Remove-Item -Recurse -Force $portableDir
 
+      - name: Package MSIX for Microsoft Store
+        shell: pwsh
+        env:
+          MSSTORE_PACKAGE_NAME: ${{ vars.MSSTORE_PACKAGE_NAME }}
+          MSSTORE_PUBLISHER: ${{ vars.MSSTORE_PUBLISHER }}
+          MSSTORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MSSTORE_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          .\scripts\windows\package-msix.ps1 -Version "$env:VERSION"
+
       - name: Compute SHA-256 checksums
         shell: pwsh
         run: |
-          $files = @(Get-ChildItem -Path "dist" -File | Where-Object { $_.Extension -in @(".exe", ".zip") })
+          $files = @(Get-ChildItem -Path "dist" -File | Where-Object { $_.Extension -in @(".exe", ".zip", ".msix") })
           if ($files.Count -eq 0) {
             throw "No Windows release artifacts found in dist to checksum"
           }
@@ -159,6 +168,7 @@ jobs:
           subject-path: |
             dist/*.exe
             dist/*.zip
+            dist/*.msix
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
@@ -170,6 +180,7 @@ jobs:
           files: |
             dist/*.exe
             dist/*.zip
+            dist/*.msix
             dist/*.sha256
             dist/SHA256SUMS-windows-x64.txt
 
