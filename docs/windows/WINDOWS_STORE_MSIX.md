@@ -23,9 +23,10 @@ To customize the MSIX manifest with your Partner Center registration details, co
 | :--- | :--- | :--- | :--- |
 | `MSSTORE_PACKAGE_NAME` | **Package/Identity/Name** from Partner Center | `12345BrunoO.CipherClipboard` | `BrunoO.CipherClipboard` |
 | `MSSTORE_PUBLISHER` | **Package/Identity/Publisher** from Partner Center | `CN=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX` | `CN=BrunoO-CipherClipboard` |
-| `MSSTORE_PUBLISHER_DISPLAY_NAME` | **Publisher display name** from Partner Center | `BrunoO` | `BrunoO` |
+| `MSSTORE_PUBLISHER_DISPLAY_NAME` | **Publisher display name** from Partner Center | `Bruno O.` | `Bruno O.` |
 
 > [!NOTE]
+> `MSSTORE_PUBLISHER_DISPLAY_NAME` must match your developer name in Partner Center exactly, including whitespace and trailing punctuation (e.g., `Bruno O.`).
 > If these variables are not set in GitHub repository settings, the workflow falls back to the sensible defaults listed above, allowing the CI workflow to build and test-sign cleanly.
 
 ---

@@ -50,8 +50,11 @@ if ([string]::IsNullOrWhiteSpace($PublisherDisplayName)) {
     if (-not [string]::IsNullOrWhiteSpace($env:MSSTORE_PUBLISHER_DISPLAY_NAME)) {
         $PublisherDisplayName = $env:MSSTORE_PUBLISHER_DISPLAY_NAME
     } else {
-        $PublisherDisplayName = "BrunoO"
+        $PublisherDisplayName = "Bruno O."
     }
+}
+if ($PublisherDisplayName -eq "Bruno O") {
+    $PublisherDisplayName = "Bruno O."
 }
 
 if ([string]::IsNullOrWhiteSpace($OpenSslDllName)) {
@@ -138,17 +141,45 @@ if ($sdkVersions.Count -eq 0) {
 
 $selectedSdk = $sdkVersions[0].FullName
 $makeAppx = Join-Path $selectedSdk "x64\MakeAppx.exe"
+$makePri  = Join-Path $selectedSdk "x64\MakePri.exe"
 $signTool = Join-Path $selectedSdk "x64\SignTool.exe"
 
 if (-not (Test-Path $makeAppx)) {
     throw "MakeAppx.exe not found at $makeAppx"
+}
+if (-not (Test-Path $makePri)) {
+    throw "MakePri.exe not found at $makePri"
 }
 if (-not (Test-Path $signTool)) {
     throw "SignTool.exe not found at $signTool"
 }
 Write-Host "Using Windows SDK tools from $selectedSdk"
 
-# 8. Create MSIX package
+# 8. Generate Package Resource Index (resources.pri)
+Write-Host "Creating PRI configuration..."
+$priConfig = "$stageDir\priconfig.xml"
+& $makePri createconfig /cf $priConfig /dq "en-US" /pv 10.0.0 /o
+if ($LASTEXITCODE -ne 0) {
+    throw "MakePri.exe createconfig failed with exit code $LASTEXITCODE"
+}
+
+# Remove autoResourcePackage elements if present so MakePri creates a single standalone resources.pri
+[xml]$priXml = Get-Content $priConfig
+$packagingNode = $priXml.SelectSingleNode("//packaging")
+if ($packagingNode) {
+    $packagingNode.ParentNode.RemoveChild($packagingNode) | Out-Null
+    $priXml.Save($priConfig)
+}
+
+Write-Host "Compiling Package Resource Index (resources.pri)..."
+& $makePri new /pr $stageDir /cf $priConfig /mn $targetManifest /of "$stageDir\resources.pri" /o
+if ($LASTEXITCODE -ne 0) {
+    throw "MakePri.exe new failed with exit code $LASTEXITCODE"
+}
+Remove-Item $priConfig -Force
+Write-Host "Generated resources.pri at $stageDir\resources.pri"
+
+# 9. Create MSIX package
 New-Item -ItemType Directory -Force -Path "dist" | Out-Null
 $outputMsix = "dist\CipherClipboard-$rawVersion-windows-x64.msix"
 if (Test-Path $outputMsix) {
@@ -156,12 +187,12 @@ if (Test-Path $outputMsix) {
 }
 
 Write-Host "Building MSIX package: $outputMsix"
-& $makeAppx pack /d $stageDir /p $outputMsix /nv /o
+& $makeAppx pack /l /d $stageDir /p $outputMsix /o
 if ($LASTEXITCODE -ne 0) {
     throw "MakeAppx.exe failed with exit code $LASTEXITCODE"
 }
 
-# 9. Test-sign MSIX
+# 10. Test-sign MSIX
 # Note: For Microsoft Store submission, Microsoft strips and re-signs the package
 # with Microsoft's official store key upon publication. Signing in CI ensures structural
 # integrity, validates publisher matching, and allows local sideload testing.
