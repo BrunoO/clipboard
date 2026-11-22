@@ -343,6 +343,7 @@ fn generate_random_hex_key() -> Zeroizing<String> {
     hex_key
 }
 
+#[allow(clippy::missing_const_for_fn)]
 pub(crate) fn set_restricted_dir_permissions(path: &Path) {
     crate::platform::fs_security::set_restricted_dir_permissions(path);
 }

@@ -312,6 +312,7 @@ pub(crate) fn assert_protected_key_file_on_disk(path: &Path, expected_key: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use tempfile::tempdir;
 
     #[cfg(unix)]
