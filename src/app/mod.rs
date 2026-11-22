@@ -1161,18 +1161,18 @@ impl ClipboardApp {
             .frame(
                 egui::Frame::new()
                     .fill(crate::theme::panel_background(is_dark))
-                    .inner_margin(egui::Margin::symmetric(10, 6)),
+                    .inner_margin(egui::Margin::symmetric(10, 5)),
             )
             .show(ui, |ui| {
                 crate::theme::paint_brand_top_accent(ui.painter(), ctx.viewport_rect(), is_dark);
                 ui.add_space(crate::theme::top_padding());
                 self.render_header_row(ui, &ctx, is_dark);
-                ui.add_space(6.0_f32);
+                ui.add_space(4.0_f32);
                 if self.active_view == ActiveView::History {
                     self.render_search_bar(ui, is_dark);
-                    ui.add_space(6.0_f32);
-                    self.render_filter_tabs(ui, is_dark);
                     ui.add_space(4.0_f32);
+                    self.render_filter_tabs(ui, is_dark);
+                    ui.add_space(2.0_f32);
                 }
             });
     }
@@ -1239,7 +1239,7 @@ impl ClipboardApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
 
-            if ui.available_width() > 260.0 {
+            if ui.available_width() > 220.0 {
                 let badge = if self.settings.hotkey == HotkeyPreset::Custom
                     && !self.settings.custom_hotkey.is_empty()
                 {
@@ -1267,14 +1267,6 @@ impl ClipboardApp {
             .clicked()
         {
             self.hide_window(ctx, self.settings.restore_focus, false);
-        }
-
-        if ui
-            .small_button(icons::button_icon(icons::POWER))
-            .on_hover_text(crate::platform::quit_shortcut_tooltip())
-            .clicked()
-        {
-            self.quit(ctx);
         }
 
         if render_view_toggle_button(
@@ -1319,19 +1311,19 @@ impl ClipboardApp {
             .fill(crate::theme::search_bg(is_dark))
             .stroke(crate::theme::search_stroke(is_dark, is_focused))
             .corner_radius(crate::theme::search_rounding())
-            .inner_margin(egui::Margin::symmetric(8, 6))
+            .inner_margin(egui::Margin::symmetric(8, 5))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(icons::MAGNIFYING_GLASS)
                             .color(crate::theme::text_secondary(is_dark))
-                            .size(14.0_f32),
+                            .size(13.0_f32),
                     );
                     let search_box = ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
                             .hint_text(
                                 egui::RichText::new(
-                                    "Search clipboard history... (↑/↓ to select, Enter to paste)",
+                                    "Search history... (↑/↓ to select, ↵ to paste)",
                                 )
                                 .color(crate::theme::text_secondary(is_dark)),
                             )
@@ -1339,11 +1331,17 @@ impl ClipboardApp {
                             .desired_width(f32::INFINITY),
                     );
 
-                    if !self.search_query.is_empty()
-                        && ui
-                            .small_button(icons::button_icon(icons::X))
-                            .on_hover_text("Clear search")
-                            .clicked()
+                    if self.search_query.is_empty() {
+                        ui.label(
+                            egui::RichText::new("ESC")
+                                .size(9.0_f32)
+                                .color(crate::theme::text_secondary(is_dark))
+                                .strong(),
+                        );
+                    } else if ui
+                        .small_button(icons::button_icon(icons::X))
+                        .on_hover_text("Clear search")
+                        .clicked()
                     {
                         self.search_query.clear();
                     }

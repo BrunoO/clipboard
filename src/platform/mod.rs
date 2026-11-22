@@ -458,6 +458,7 @@ pub(crate) const fn navigation_hint_label() -> &'static str {
 
 /// Returns the tooltip for the header Quit button.
 #[must_use]
+#[allow(dead_code)]
 pub(crate) const fn quit_shortcut_tooltip() -> &'static str {
     if cfg!(target_os = "macos") {
         "Quit CipherClipboard (Cmd+Q)"

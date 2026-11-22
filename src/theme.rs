@@ -751,7 +751,7 @@ pub(crate) fn render_segmented_tab(
 
     let text = format!("{label} ({count})");
     let button = egui::Button::new(crate::icons::label_job(
-        icon, selected, &text, 11.0_f32, text_color,
+        icon, selected, &text, 10.5_f32, text_color,
     ))
     .fill(fill)
     .stroke(stroke)
