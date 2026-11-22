@@ -132,6 +132,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (monitor_handle, monitor_shutdown_tx) =
                 monitor::start_clipboard_monitor(monitor_db, monitor_ctx, notify_tx);
 
+            let (ocr_tx, ocr_rx) = std::sync::mpsc::channel();
+
             let services = AppServices {
                 notify_rx,
                 hotkey_rx,
@@ -140,6 +142,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 tray_service,
                 monitor_shutdown_tx,
                 monitor_handle,
+                ocr_rx,
+                ocr_tx,
             };
 
             Ok(Box::new(ClipboardApp::new(

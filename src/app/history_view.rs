@@ -14,6 +14,7 @@ pub(super) enum ItemAction {
     },
     CopyColor(String, String),
     CopyImage(i64),
+    ExtractTextFromImage(i64),
     OpenBrowser(String),
     ToggleSecret(i64, bool),
     ToggleRevealSecret(i64),
@@ -157,6 +158,7 @@ impl ClipboardApp {
                 self.show_toast(&format!("{} Copied {name}: {val}", icons::CHECK));
             }
             ItemAction::CopyImage(id) => self.copy_image_by_id(id, ctx),
+            ItemAction::ExtractTextFromImage(id) => self.start_image_ocr(id, ctx),
             ItemAction::OpenBrowser(url) => self.open_url_in_browser(&url),
             ItemAction::ToggleSecret(id, make_secret) => {
                 let operation = if make_secret {
@@ -600,15 +602,38 @@ impl ClipboardApp {
             };
         }
 
+        if item.kind == ItemKind::Image
+            && crate::platform::supports_image_ocr()
+            && ui
+                .small_button(format!("{} Extract Text", icons::FILE_TEXT))
+                .on_hover_text("Extract text from image using on-device OCR")
+                .clicked()
+        {
+            action = ItemAction::ExtractTextFromImage(item.id);
+        }
+
         action
     }
 
+    #[allow(clippy::too_many_lines)]
     fn render_card_transform_menu(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
         is_revealed: bool,
     ) -> ItemAction {
         let mut action = ItemAction::None;
+
+        if item.kind == ItemKind::Image && crate::platform::supports_image_ocr() {
+            if ui
+                .button(format!("{} Extract Text", icons::FILE_TEXT))
+                .on_hover_text("Extract text from image using on-device OCR")
+                .clicked()
+            {
+                ui.close();
+                action = ItemAction::ExtractTextFromImage(item.id);
+            }
+            ui.separator();
+        }
 
         if item.kind != ItemKind::Image {
             let applicable: Vec<crate::transform::TextTransform> =
@@ -1303,5 +1328,14 @@ mod tests {
         assert!(sanitize_browser_url("ftp://files.example.com/archive.zip").is_none());
         assert!(sanitize_browser_url("--new-window https://example.com").is_none());
         assert!(sanitize_browser_url("https://").is_none());
+    }
+
+    #[test]
+    fn test_extract_text_from_image_action_dispatch() {
+        let (mut app, _notify_tx, _dir) = crate::app::tests::test_app_with_channels();
+        let ctx = eframe::egui::Context::default();
+        // Dispatching ExtractTextFromImage for an image that does not exist surfaces warning
+        app.dispatch_item_action(super::ItemAction::ExtractTextFromImage(999), &ctx);
+        assert!(app.toast.is_some());
     }
 }

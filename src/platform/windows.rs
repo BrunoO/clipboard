@@ -5,6 +5,9 @@ use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
+use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
+use windows::Media::Ocr::OcrEngine;
+use windows::Storage::Streams::DataWriter;
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{CloseHandle, GlobalFree, LocalFree, HANDLE, HWND, LPARAM};
 use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
@@ -841,4 +844,64 @@ pub(crate) fn dpapi_unprotect(
         copied
     };
     Ok(plaintext)
+}
+
+static OCR_SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+pub(super) fn supports_image_ocr() -> bool {
+    *OCR_SUPPORTED.get_or_init(|| OcrEngine::TryCreateFromUserProfileLanguages().is_ok())
+}
+
+pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> {
+    if png_bytes.is_empty() {
+        return Err("Image payload is empty".to_string());
+    }
+
+    let (width, height, mut bgra) =
+        crate::media::png_to_rgba(png_bytes).map_err(|e| format!("Failed to decode PNG: {e}"))?;
+
+    for pixel in bgra.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+
+    let width_i32 =
+        i32::try_from(width).map_err(|_| "Image width exceeds integer limit".to_string())?;
+    let height_i32 =
+        i32::try_from(height).map_err(|_| "Image height exceeds integer limit".to_string())?;
+
+    let writer =
+        DataWriter::new().map_err(|e| format!("Failed to create Windows DataWriter: {e}"))?;
+    writer
+        .WriteBytes(&bgra)
+        .map_err(|e| format!("Failed to write image buffer: {e}"))?;
+    let buffer = writer
+        .DetachBuffer()
+        .map_err(|e| format!("Failed to detach image buffer: {e}"))?;
+
+    let bitmap = SoftwareBitmap::CreateCopyWithAlphaFromBuffer(
+        &buffer,
+        BitmapPixelFormat::Bgra8,
+        width_i32,
+        height_i32,
+        BitmapAlphaMode::Premultiplied,
+    )
+    .map_err(|e| format!("Failed to create SoftwareBitmap: {e}"))?;
+
+    let engine = OcrEngine::TryCreateFromUserProfileLanguages()
+        .map_err(|e| format!("No OCR language pack installed for user profile: {e}"))?;
+
+    let op = engine
+        .RecognizeAsync(&bitmap)
+        .map_err(|e| format!("Failed to start OCR operation: {e}"))?;
+
+    let result = op
+        .join()
+        .map_err(|e| format!("OCR recognition failed: {e}"))?;
+
+    let text = result
+        .Text()
+        .map_err(|e| format!("Failed to retrieve OCR text: {e}"))?
+        .to_string();
+
+    Ok(text.replace("\r\n", "\n"))
 }

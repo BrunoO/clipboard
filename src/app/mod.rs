@@ -206,6 +206,8 @@ pub(crate) struct AppServices {
     pub(crate) tray_service: Option<TrayService>,
     pub(crate) monitor_shutdown_tx: Sender<()>,
     pub(crate) monitor_handle: Option<std::thread::JoinHandle<()>>,
+    pub(crate) ocr_rx: Receiver<Result<(i64, String), (i64, String)>>,
+    pub(crate) ocr_tx: Sender<Result<(i64, String), (i64, String)>>,
 }
 
 impl AppServices {
@@ -877,6 +879,78 @@ impl ClipboardApp {
             )),
             Err(error) => {
                 self.show_error_toast(&format!("{} Failed to load image: {error}", icons::WARNING));
+            }
+        }
+    }
+
+    fn start_image_ocr(&mut self, id: i64, ctx: &egui::Context) {
+        if !crate::platform::supports_image_ocr() {
+            self.show_warning_toast(&format!(
+                "{} Image OCR is not supported on this platform.",
+                icons::WARNING
+            ));
+            return;
+        }
+
+        let png_bytes = match self.db.get_image_data(id) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                self.show_warning_toast(&format!(
+                    "{} Image data is no longer available.",
+                    icons::WARNING
+                ));
+                return;
+            }
+            Err(err) => {
+                self.show_error_toast(&format!("{} Failed to load image: {err}", icons::WARNING));
+                return;
+            }
+        };
+
+        self.show_toast(&format!(
+            "{} Extracting text from image...",
+            icons::ARROWS_CLOCKWISE
+        ));
+
+        let ocr_tx = self.services.ocr_tx.clone();
+        let ctx_clone = ctx.clone();
+        let thread_name = format!("image-ocr-worker-{id}");
+        let spawn_res = std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                let res = crate::platform::extract_text_from_png(&png_bytes)
+                    .map(|text| (id, text))
+                    .map_err(|err| (id, err));
+                let _ = ocr_tx.send(res);
+                ctx_clone.request_repaint();
+            });
+
+        if let Err(e) = spawn_res {
+            crate::logging::log_message("ERROR", &format!("Failed to spawn OCR worker: {e}"));
+            self.show_error_toast(&format!("{} Failed to start OCR: {e}", icons::WARNING));
+        }
+    }
+
+    fn handle_ocr_results(&mut self, ctx: &egui::Context) {
+        while let Ok(res) = self.services.ocr_rx.try_recv() {
+            match res {
+                Ok((_id, text)) => {
+                    let trimmed = text.trim();
+                    if trimmed.is_empty() {
+                        self.show_toast(&format!("{} No text detected in image.", icons::INFO));
+                    } else {
+                        let char_count = trimmed.chars().count();
+                        let line_count = trimmed.lines().count();
+                        let toast = format!(
+                            "{} Extracted {char_count} chars ({line_count} lines) to clipboard!",
+                            icons::CHECK
+                        );
+                        self.copy_transformed_to_clipboard(trimmed, &toast, false, ctx);
+                    }
+                }
+                Err((_id, err)) => {
+                    self.show_warning_toast(&format!("{} OCR failed: {err}", icons::WARNING));
+                }
             }
         }
     }
@@ -1633,6 +1707,7 @@ impl eframe::App for ClipboardApp {
         self.handle_app_activation(ctx);
         self.handle_monitor_updates();
         self.handle_clipboard_auto_clear();
+        self.handle_ocr_results(ctx);
 
         if let Some((_, deadline)) = &self.pending_clipboard_clear {
             ctx.request_repaint_after(deadline.saturating_duration_since(Instant::now()));
@@ -1965,6 +2040,7 @@ mod tests {
         let (_notify_tx, notify_rx) = std::sync::mpsc::channel();
         let (_hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
         let (tray_tx, tray_rx) = std::sync::mpsc::channel();
+        let (ocr_tx, ocr_rx) = std::sync::mpsc::channel();
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("quit_test.db");
         let key = format!("{:016x}", 1_u64).repeat(4);
@@ -1988,6 +2064,8 @@ mod tests {
                 tray_service: None,
                 monitor_shutdown_tx: shutdown_tx,
                 monitor_handle: None,
+                ocr_rx,
+                ocr_tx,
             },
             texture_cache: super::ImageTextureCache::new(),
             window_state: WindowFocusState {
@@ -2072,6 +2150,7 @@ mod tests {
         let (_notify_tx, notify_rx) = std::sync::mpsc::channel();
         let (_hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
         let (_tray_tx, tray_rx) = std::sync::mpsc::channel();
+        let (ocr_tx, ocr_rx) = std::sync::mpsc::channel();
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("copy_test.db");
         let key = format!("{:016x}", 1_u64).repeat(4);
@@ -2095,6 +2174,8 @@ mod tests {
                 tray_service: None,
                 monitor_shutdown_tx: shutdown_tx,
                 monitor_handle: None,
+                ocr_rx,
+                ocr_tx,
             },
             texture_cache: super::ImageTextureCache::new(),
             window_state: WindowFocusState {
@@ -2120,11 +2201,13 @@ mod tests {
         assert!(app.toast.is_some());
     }
 
-    fn test_app_with_channels() -> (ClipboardApp, std::sync::mpsc::Sender<()>, tempfile::TempDir) {
+    pub(super) fn test_app_with_channels(
+    ) -> (ClipboardApp, std::sync::mpsc::Sender<()>, tempfile::TempDir) {
         let (shutdown_tx, _shutdown_rx) = std::sync::mpsc::channel();
         let (notify_tx, notify_rx) = std::sync::mpsc::channel();
         let (_hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
         let (_tray_tx, tray_rx) = std::sync::mpsc::channel();
+        let (ocr_tx, ocr_rx) = std::sync::mpsc::channel();
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("contract_test.db");
         let key = format!("{:016x}", 3_u64).repeat(4);
@@ -2149,6 +2232,8 @@ mod tests {
                 tray_service: None,
                 monitor_shutdown_tx: shutdown_tx,
                 monitor_handle: None,
+                ocr_rx,
+                ocr_tx,
             },
             texture_cache: super::ImageTextureCache::new(),
             window_state: WindowFocusState {

@@ -279,6 +279,37 @@ pub(crate) fn auto_paste_permission_missing() -> bool {
     }
 }
 
+/// Returns `true` if the platform natively supports extracting text from images (Image OCR).
+/// Supported on macOS (Apple Vision framework) and Windows 10/11 (`WinRT` `Windows.Media.Ocr`).
+#[must_use]
+pub(crate) fn supports_image_ocr() -> bool {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        backend::supports_image_ocr()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
+
+/// Extracts plain text from PNG-encoded image bytes using the platform's native OCR framework.
+///
+/// # Errors
+/// Returns an error message if OCR is unsupported on the platform, if the image cannot
+/// be decoded, or if OCR processing fails.
+pub(crate) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        backend::extract_text_from_png(png_bytes)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = png_bytes;
+        Err("Image OCR is only supported on macOS and Windows".to_string())
+    }
+}
+
 /// Prompts the user for OS Accessibility permission required by auto-paste (macOS).
 pub(crate) fn prompt_auto_paste_permission() {
     #[cfg(target_os = "macos")]
@@ -998,5 +1029,12 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_none());
+    }
+
+    #[test]
+    fn test_image_ocr_helpers_do_not_panic() {
+        let _ = supports_image_ocr();
+        let res = extract_text_from_png(&[]);
+        assert!(res.is_err());
     }
 }

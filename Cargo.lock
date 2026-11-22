@@ -802,6 +802,7 @@ dependencies = [
  "tray-icon",
  "url",
  "webbrowser",
+ "windows",
  "windows-sys 0.61.2",
  "winres",
  "x11rb 0.14.0",

@@ -1,8 +1,8 @@
 # Feature Research: Stripping Source Formatting & Generalized Entry Transformations
 
-> **Status:** Phase 1 & 2 Implemented (Core Module, Generalized Transforms, Card Context Menu, Header Overflow Menu)  
-> **Date:** 2026-11-21  
-> **Scope:** Plain-text extraction ("strip source formatting") and a generalized entry transformation framework for `CipherClipboard`.
+> **Status:** Phase 1, 2 & 3 Implemented (Core Module, Generalized Transforms, Context/Overflow Menus, Image OCR for macOS & Windows)  
+> **Date:** 2026-11-22  
+> **Scope:** Plain-text extraction ("strip source formatting"), generalized entry transformation framework, and native on-device Image OCR for `CipherClipboard`.
 
 ---
 
@@ -188,9 +188,10 @@ Any implementation must preserve the project's documented invariants:
 2. **Phase 2 — High-Value Generalized Transforms + Context Menu (Implemented):**
    - Added Whitespace/PDF unwrap, Collapse Whitespace, Case/Identifier conversions (UPPERCASE, lowercase, Title Case, camelCase, snake_case, kebab-case), Line operations (Sort A–Z, Deduplicate, Remove Empty, Join with Comma), JSON Minify, Base64 encode/decode, and URL tracking parameter stripping (all zero new crates).
    - Added `⋯` overflow button on card headers and right-click context menu on cards with grouped category submenus and security actions.
-3. **Phase 3 — Image OCR (`ItemKind::Image -> Text`):**
-   - Add `platform::supports_image_ocr()` and `platform::extract_text_from_png()` (macOS Vision first with zero new crates, then Windows `windows` crate WinRT `OcrEngine`, plus optional Linux `tesseract` fallback).
-   - Wire background OCR worker → `App::logic()` → clipboard copy + toast.
+3. **Phase 3 — Image OCR (`ItemKind::Image -> Text`) (Implemented for macOS and Windows):**
+   - Added `platform::supports_image_ocr()` and `platform::extract_text_from_png()` using Apple Vision (`VNRecognizeTextRequest` / `VNImageRequestHandler`) on macOS (zero new crates) and WinRT `Windows.Media.Ocr` (`OcrEngine`) on Windows 10/11 (`windows` crate), with graceful unsupported fallback on Linux.
+   - Wired background thread OCR worker (`image-ocr-worker-{id}`) → `App::logic()` via `services.ocr_rx` → clipboard copy + feedback toast.
+   - Added contextual `Extract Text` action in card header extra buttons and right-click context menu for `ItemKind::Image`.
 4. **Phase 4 — Quick Transform Palette & Optional Auto-Rules:**
    - Add `Cmd/Ctrl+T` searchable Transform Palette with live before/after preview.
    - Evaluate opt-in capture-time auto-transforms (e.g., URL tracking param stripping) in `AppSettings`.
