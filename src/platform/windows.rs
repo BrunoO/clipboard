@@ -860,7 +860,8 @@ pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> 
     let (width, height, mut bgra) =
         crate::media::png_to_rgba(png_bytes).map_err(|e| format!("Failed to decode PNG: {e}"))?;
 
-    for pixel in bgra.chunks_exact_mut(4) {
+    let (chunks, _) = bgra.as_chunks_mut::<4>();
+    for pixel in chunks {
         pixel.swap(0, 2);
     }
 

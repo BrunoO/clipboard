@@ -521,26 +521,7 @@ pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> 
         let mut error: *mut Object = std::ptr::null_mut();
         let success: bool = msg_send![handler, performRequests: req_array error: &mut error];
 
-        let result = if !success {
-            let err_desc = if !error.is_null() {
-                let desc: *mut Object = msg_send![error, localizedDescription];
-                if !desc.is_null() {
-                    let utf8: *const std::os::raw::c_char = msg_send![desc, UTF8String];
-                    if !utf8.is_null() {
-                        std::ffi::CStr::from_ptr(utf8)
-                            .to_string_lossy()
-                            .into_owned()
-                    } else {
-                        "Vision text recognition request failed".to_string()
-                    }
-                } else {
-                    "Vision text recognition request failed".to_string()
-                }
-            } else {
-                "Vision text recognition request failed".to_string()
-            };
-            Err(err_desc)
-        } else {
+        let result = if success {
             let results: *mut Object = msg_send![request, results];
             if results.is_null() {
                 Ok(String::new())
@@ -576,6 +557,25 @@ pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> 
                 }
                 Ok(lines.join("\n"))
             }
+        } else {
+            let err_desc = if error.is_null() {
+                "Vision text recognition request failed".to_string()
+            } else {
+                let desc: *mut Object = msg_send![error, localizedDescription];
+                if desc.is_null() {
+                    "Vision text recognition request failed".to_string()
+                } else {
+                    let utf8: *const std::os::raw::c_char = msg_send![desc, UTF8String];
+                    if utf8.is_null() {
+                        "Vision text recognition request failed".to_string()
+                    } else {
+                        std::ffi::CStr::from_ptr(utf8)
+                            .to_string_lossy()
+                            .into_owned()
+                    }
+                }
+            };
+            Err(err_desc)
         };
 
         let _: () = msg_send![request, release];
