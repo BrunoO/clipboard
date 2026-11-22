@@ -258,6 +258,7 @@ pub(crate) struct ClipboardApp {
     current_is_dark: Option<bool>,
     title_bar_dark_mode: Option<bool>,
     is_quitting: bool,
+    pub(crate) copied_item_pulse: Option<(i64, Instant)>,
 }
 
 impl ClipboardApp {
@@ -323,6 +324,7 @@ impl ClipboardApp {
             current_is_dark: None,
             title_bar_dark_mode: None,
             is_quitting: false,
+            copied_item_pulse: None,
         }
     }
 
@@ -957,6 +959,9 @@ impl ClipboardApp {
 
     fn copy_filtered_item(&mut self, filtered_indices: &[usize], slot: usize, ctx: &egui::Context) {
         if let Some(&item_idx) = filtered_indices.get(slot) {
+            if let Some(item) = self.items.get(item_idx) {
+                self.copied_item_pulse = Some((item.id, Instant::now()));
+            }
             let copy_action = self.items.get(item_idx).map(|item| match item.kind {
                 ItemKind::Image => ItemAction::CopyImage(item.id),
                 ItemKind::Secret => ItemAction::CopySecret(item.content.clone()),
@@ -979,6 +984,7 @@ impl ClipboardApp {
     ) {
         if let Some(&item_idx) = filtered_indices.get(slot) {
             if let Some(item) = self.items.get(item_idx) {
+                self.copied_item_pulse = Some((item.id, Instant::now()));
                 if item.kind == ItemKind::Image {
                     self.copy_image_by_id(item.id, ctx);
                 } else {
@@ -1319,6 +1325,8 @@ impl ClipboardApp {
                             .color(crate::theme::text_secondary(is_dark))
                             .size(13.0_f32),
                     );
+                    let trailing_width = 38.0_f32;
+                    let edit_width = (ui.available_width() - trailing_width).max(60.0);
                     let search_box = ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
                             .hint_text(
@@ -1328,19 +1336,38 @@ impl ClipboardApp {
                                 .color(crate::theme::text_secondary(is_dark)),
                             )
                             .frame(egui::Frame::NONE)
-                            .desired_width(f32::INFINITY),
+                            .desired_width(edit_width),
                     );
 
                     if self.search_query.is_empty() {
-                        ui.label(
-                            egui::RichText::new("ESC")
-                                .size(9.0_f32)
-                                .color(crate::theme::text_secondary(is_dark))
-                                .strong(),
-                        );
+                        egui::Frame::new()
+                            .corner_radius(crate::theme::pill_rounding())
+                            .fill(if is_dark {
+                                egui::Color32::from_white_alpha(14)
+                            } else {
+                                egui::Color32::from_black_alpha(10)
+                            })
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                if is_dark {
+                                    egui::Color32::from_white_alpha(22)
+                                } else {
+                                    egui::Color32::from_black_alpha(18)
+                                },
+                            ))
+                            .inner_margin(egui::Margin::symmetric(5, 2))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new("ESC")
+                                        .size(9.0_f32)
+                                        .color(crate::theme::text_secondary(is_dark))
+                                        .strong(),
+                                )
+                                .on_hover_text("Press ESC to dismiss window");
+                            });
                     } else if ui
                         .small_button(icons::button_icon(icons::X))
-                        .on_hover_text("Clear search")
+                        .on_hover_text("Clear search (ESC)")
                         .clicked()
                     {
                         self.search_query.clear();
@@ -1354,6 +1381,7 @@ impl ClipboardApp {
             });
     }
 
+    #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
     fn render_bottom_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         egui::Panel::bottom("bottom_panel")
             .frame(
@@ -1368,13 +1396,63 @@ impl ClipboardApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if let Some(toast) = &self.toast {
-                        if toast.shown_at.elapsed() < Duration::from_secs(2) {
-                            let color = match toast.severity {
-                                ToastSeverity::Success => crate::theme::success_color(is_dark),
-                                ToastSeverity::Warning => crate::theme::warning_color(is_dark),
-                                ToastSeverity::Error => crate::theme::error_color(is_dark),
+                        let elapsed = toast.shown_at.elapsed();
+                        if elapsed < Duration::from_millis(2500) {
+                            ui.ctx().request_repaint();
+                            let alpha_factor = if elapsed < Duration::from_millis(1800) {
+                                1.0_f32
+                            } else {
+                                (1.0_f32 - ((elapsed.as_millis() as f32) - 1800.0) / 700.0)
+                                    .clamp(0.0, 1.0)
                             };
-                            ui.label(egui::RichText::new(&toast.message).color(color).strong());
+
+                            let (base_bg, base_stroke, base_text) = match toast.severity {
+                                ToastSeverity::Success => (
+                                    if is_dark {
+                                        egui::Color32::from_rgba_premultiplied(18, 48, 28, 180)
+                                    } else {
+                                        egui::Color32::from_rgba_premultiplied(235, 250, 240, 230)
+                                    },
+                                    crate::theme::success_color(is_dark),
+                                    crate::theme::success_color(is_dark),
+                                ),
+                                ToastSeverity::Warning => (
+                                    if is_dark {
+                                        egui::Color32::from_rgba_premultiplied(48, 38, 18, 180)
+                                    } else {
+                                        egui::Color32::from_rgba_premultiplied(254, 248, 235, 230)
+                                    },
+                                    crate::theme::warning_color(is_dark),
+                                    crate::theme::warning_color(is_dark),
+                                ),
+                                ToastSeverity::Error => (
+                                    if is_dark {
+                                        egui::Color32::from_rgba_premultiplied(48, 18, 20, 180)
+                                    } else {
+                                        egui::Color32::from_rgba_premultiplied(254, 235, 238, 230)
+                                    },
+                                    crate::theme::error_color(is_dark),
+                                    crate::theme::error_color(is_dark),
+                                ),
+                            };
+
+                            let bg_color = base_bg.gamma_multiply(alpha_factor);
+                            let stroke_color = base_stroke.gamma_multiply(alpha_factor);
+                            let text_color = base_text.gamma_multiply(alpha_factor);
+
+                            egui::Frame::new()
+                                .corner_radius(crate::theme::pill_rounding())
+                                .fill(bg_color)
+                                .stroke(egui::Stroke::new(1.0, stroke_color))
+                                .inner_margin(egui::Margin::symmetric(8, 3))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(&toast.message)
+                                            .size(11.0)
+                                            .color(text_color)
+                                            .strong(),
+                                    );
+                                });
                         } else {
                             self.toast = None;
                         }
@@ -2083,6 +2161,7 @@ mod tests {
             current_is_dark: None,
             title_bar_dark_mode: None,
             is_quitting: false,
+            copied_item_pulse: None,
         };
 
         assert!(!app.is_quitting);
@@ -2193,6 +2272,7 @@ mod tests {
             current_is_dark: None,
             title_bar_dark_mode: None,
             is_quitting: false,
+            copied_item_pulse: None,
         };
 
         let ctx = egui::Context::default();
@@ -2251,6 +2331,7 @@ mod tests {
             current_is_dark: None,
             title_bar_dark_mode: None,
             is_quitting: false,
+            copied_item_pulse: None,
         };
 
         (app, notify_tx, dir)

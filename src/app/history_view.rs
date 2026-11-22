@@ -2,6 +2,7 @@ use super::{ClipboardApp, ContentFilter, ImageTextureCache};
 use crate::db::{ClipboardItem, Database, ItemKind};
 use crate::icons;
 use eframe::egui;
+use std::time::{Duration, Instant};
 
 pub(super) enum ItemAction {
     None,
@@ -30,6 +31,7 @@ struct ItemRenderState {
     should_scroll: bool,
     is_revealed: bool,
     is_dark: bool,
+    is_pulse: bool,
 }
 
 impl ClipboardApp {
@@ -204,6 +206,9 @@ impl ClipboardApp {
                         let shortcut_num = if slot < 9 { Some(slot + 1) } else { None };
                         let should_scroll = is_selected && should_scroll_selected;
                         let is_revealed = self.revealed_secrets.contains(&item.id);
+                        let is_pulse = self.copied_item_pulse.as_ref().is_some_and(|(id, at)| {
+                            *id == item.id && at.elapsed() < Duration::from_millis(600)
+                        });
 
                         let (item_action, clicked) = Self::render_clipboard_item(
                             ui,
@@ -217,11 +222,24 @@ impl ClipboardApp {
                                 should_scroll,
                                 is_revealed,
                                 is_dark,
+                                is_pulse,
                             },
                         );
 
                         if clicked {
                             clicked_slot = Some(slot);
+                        }
+
+                        match item_action {
+                            ItemAction::CopyText(_)
+                            | ItemAction::CopySecret(_)
+                            | ItemAction::CopyTransformed { .. }
+                            | ItemAction::CopyColor(_, _)
+                            | ItemAction::CopyImage(_) => {
+                                self.copied_item_pulse = Some((item.id, Instant::now()));
+                                ctx.request_repaint();
+                            }
+                            _ => {}
                         }
 
                         if !matches!(item_action, ItemAction::None) {
@@ -418,6 +436,17 @@ impl ClipboardApp {
                 },
                 crate::theme::accent_color(state.is_dark),
             );
+        }
+
+        if state.is_pulse {
+            let card_rect = frame_resp.response.rect;
+            ui.painter().rect_stroke(
+                card_rect,
+                rounding,
+                egui::Stroke::new(2.0, crate::theme::success_color(state.is_dark)),
+                egui::StrokeKind::Inside,
+            );
+            ui.ctx().request_repaint();
         }
 
         (action, clicked)
