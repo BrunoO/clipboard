@@ -773,7 +773,6 @@ impl ClipboardApp {
         action
     }
 
-    #[allow(clippy::too_many_lines)]
     fn render_card_transform_menu(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
@@ -781,119 +780,189 @@ impl ClipboardApp {
     ) -> ItemAction {
         let mut action = ItemAction::None;
 
-        if item.kind == ItemKind::Image && crate::platform::supports_image_ocr() {
-            if ui
-                .button(format!("{} Extract Text", icons::FILE_TEXT))
-                .on_hover_text("Extract text from image using on-device OCR")
-                .clicked()
-            {
-                ui.close();
-                action = ItemAction::ExtractTextFromImage(item.id);
-            }
-            ui.separator();
+        let image_action = Self::render_transform_menu_image_section(ui, item);
+        if !matches!(image_action, ItemAction::None) {
+            action = image_action;
         }
 
-        if item.kind != ItemKind::Image {
-            let applicable: Vec<crate::transform::TextTransform> =
-                crate::transform::TextTransform::ALL
-                    .iter()
-                    .copied()
-                    .filter(|t| t.applies_to(item))
-                    .collect();
-
-            let categories = [
-                crate::transform::TransformCategory::Cleanup,
-                crate::transform::TransformCategory::Case,
-                crate::transform::TransformCategory::Lines,
-                crate::transform::TransformCategory::Developer,
-                crate::transform::TransformCategory::Url,
-            ];
-
-            for cat in categories {
-                let cat_transforms: Vec<crate::transform::TextTransform> = applicable
-                    .iter()
-                    .copied()
-                    .filter(|t| t.category() == cat)
-                    .collect();
-
-                if !cat_transforms.is_empty() {
-                    ui.menu_button(cat.label(), |ui| {
-                        for t in cat_transforms {
-                            if ui.button(t.label()).on_hover_text(t.tooltip()).clicked() {
-                                ui.close();
-                                match t.apply(&item.content) {
-                                    Ok(res) => {
-                                        action = ItemAction::CopyTransformed {
-                                            content: res,
-                                            toast: t.toast_success(),
-                                            is_secret: item.kind == ItemKind::Secret,
-                                        };
-                                    }
-                                    Err(e) => {
-                                        action = ItemAction::ShowWarning(format!(
-                                            "Transformation failed: {e}"
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-
-            ui.separator();
+        let transform_action = Self::render_transform_menu_text_sections(ui, item);
+        if !matches!(transform_action, ItemAction::None) {
+            action = transform_action;
         }
 
-        // Security / Secret classification
-        if item.kind != ItemKind::Image {
-            let is_secret = item.kind == ItemKind::Secret;
-            let secret_label = if is_secret {
-                format!(
-                    "{} Unmark as Secret ({}+L)",
-                    icons::LOCK_OPEN,
-                    crate::platform::PRIMARY_MODIFIER_NAME
-                )
-            } else {
-                format!(
-                    "{} Mark as Secret ({}+L)",
-                    icons::LOCK,
-                    crate::platform::PRIMARY_MODIFIER_NAME
-                )
-            };
-            if ui.button(secret_label).clicked() {
-                ui.close();
-                action = ItemAction::ToggleSecret(item.id, !is_secret);
-            }
-
-            if is_secret {
-                let reveal_label = if is_revealed {
-                    format!("{} Mask Secret Content", icons::EYE_SLASH)
-                } else {
-                    format!("{} Reveal Secret Content", icons::EYE)
-                };
-                if ui.button(reveal_label).clicked() {
-                    ui.close();
-                    action = ItemAction::ToggleRevealSecret(item.id);
-                }
-            }
-
-            ui.separator();
+        let security_action = Self::render_transform_menu_security_section(ui, item, is_revealed);
+        if !matches!(security_action, ItemAction::None) {
+            action = security_action;
         }
 
-        if ui.button(format!("{} Copy (Enter)", icons::COPY)).clicked() {
+        let footer_action = Self::render_transform_menu_footer_actions(ui, item);
+        if !matches!(footer_action, ItemAction::None) {
+            action = footer_action;
+        }
+
+        action
+    }
+
+    fn render_transform_menu_image_section(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+        if item.kind != ItemKind::Image || !crate::platform::supports_image_ocr() {
+            return ItemAction::None;
+        }
+
+        let action = if ui
+            .button(format!("{} Extract Text", icons::FILE_TEXT))
+            .on_hover_text("Extract text from image using on-device OCR")
+            .clicked()
+        {
             ui.close();
-            action = Self::item_copy_action(item);
+            ItemAction::ExtractTextFromImage(item.id)
+        } else {
+            ItemAction::None
+        };
+        ui.separator();
+        action
+    }
+
+    fn render_transform_menu_text_sections(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+        if item.kind == ItemKind::Image {
+            return ItemAction::None;
         }
+
+        let mut action = ItemAction::None;
+        let applicable: Vec<crate::transform::TextTransform> = crate::transform::TextTransform::ALL
+            .iter()
+            .copied()
+            .filter(|t| t.applies_to(item))
+            .collect();
+
+        let categories = [
+            crate::transform::TransformCategory::Cleanup,
+            crate::transform::TransformCategory::Case,
+            crate::transform::TransformCategory::Lines,
+            crate::transform::TransformCategory::Developer,
+            crate::transform::TransformCategory::Url,
+        ];
+
+        for cat in categories {
+            let cat_action = Self::render_transform_menu_category(ui, item, &applicable, cat);
+            if !matches!(cat_action, ItemAction::None) {
+                action = cat_action;
+            }
+        }
+
+        ui.separator();
+        action
+    }
+
+    fn render_transform_menu_category(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        applicable: &[crate::transform::TextTransform],
+        cat: crate::transform::TransformCategory,
+    ) -> ItemAction {
+        let cat_transforms: Vec<crate::transform::TextTransform> = applicable
+            .iter()
+            .copied()
+            .filter(|t| t.category() == cat)
+            .collect();
+
+        if cat_transforms.is_empty() {
+            return ItemAction::None;
+        }
+
+        let mut action = ItemAction::None;
+        ui.menu_button(cat.label(), |ui| {
+            for t in cat_transforms {
+                let transform_action = Self::render_transform_menu_item(ui, item, t);
+                if !matches!(transform_action, ItemAction::None) {
+                    action = transform_action;
+                }
+            }
+        });
+        action
+    }
+
+    fn render_transform_menu_item(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        t: crate::transform::TextTransform,
+    ) -> ItemAction {
+        if !ui.button(t.label()).on_hover_text(t.tooltip()).clicked() {
+            return ItemAction::None;
+        }
+
+        ui.close();
+        match t.apply(&item.content) {
+            Ok(res) => ItemAction::CopyTransformed {
+                content: res,
+                toast: t.toast_success(),
+                is_secret: item.kind == ItemKind::Secret,
+            },
+            Err(e) => ItemAction::ShowWarning(format!("Transformation failed: {e}")),
+        }
+    }
+
+    fn render_transform_menu_security_section(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_revealed: bool,
+    ) -> ItemAction {
+        if item.kind == ItemKind::Image {
+            return ItemAction::None;
+        }
+
+        let mut action = ItemAction::None;
+        let is_secret = item.kind == ItemKind::Secret;
+        let secret_label = if is_secret {
+            format!(
+                "{} Unmark as Secret ({}+L)",
+                icons::LOCK_OPEN,
+                crate::platform::PRIMARY_MODIFIER_NAME
+            )
+        } else {
+            format!(
+                "{} Mark as Secret ({}+L)",
+                icons::LOCK,
+                crate::platform::PRIMARY_MODIFIER_NAME
+            )
+        };
+        if ui.button(secret_label).clicked() {
+            ui.close();
+            action = ItemAction::ToggleSecret(item.id, !is_secret);
+        }
+
+        if is_secret {
+            let reveal_label = if is_revealed {
+                format!("{} Mask Secret Content", icons::EYE_SLASH)
+            } else {
+                format!("{} Reveal Secret Content", icons::EYE)
+            };
+            if ui.button(reveal_label).clicked() {
+                ui.close();
+                action = ItemAction::ToggleRevealSecret(item.id);
+            }
+        }
+
+        ui.separator();
+        action
+    }
+
+    fn render_transform_menu_footer_actions(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+        let copy_action = if ui.button(format!("{} Copy (Enter)", icons::COPY)).clicked() {
+            ui.close();
+            Self::item_copy_action(item)
+        } else {
+            ItemAction::None
+        };
 
         if ui
             .button(format!("{} Delete Entry (Delete)", icons::TRASH))
             .clicked()
         {
             ui.close();
-            action = ItemAction::Delete(item.id);
+            ItemAction::Delete(item.id)
+        } else {
+            copy_action
         }
-
-        action
     }
 
     fn render_secret_content(
@@ -905,18 +974,10 @@ impl ClipboardApp {
         let mut action = ItemAction::None;
         let warn_c = crate::theme::warning_color(is_dark);
 
-        let bg_fill = if is_dark {
-            egui::Color32::from_rgba_premultiplied(36, 28, 16, 140)
-        } else {
-            egui::Color32::from_rgba_premultiplied(254, 249, 238, 220)
-        };
+        let bg_fill = themed_rgba(is_dark, [36, 28, 16, 140], [254, 249, 238, 220]);
         let stroke = egui::Stroke::new(
             1.0,
-            if is_dark {
-                egui::Color32::from_rgba_premultiplied(120, 90, 40, 140)
-            } else {
-                egui::Color32::from_rgba_premultiplied(230, 200, 140, 200)
-            },
+            themed_rgba(is_dark, [120, 90, 40, 140], [230, 200, 140, 200]),
         );
 
         egui::Frame::new()
@@ -1566,18 +1627,10 @@ impl ClipboardApp {
         let mut action = ItemAction::None;
         let link_color = crate::theme::link_color(is_dark);
 
-        let bg_fill = if is_dark {
-            egui::Color32::from_rgba_premultiplied(20, 35, 60, 60)
-        } else {
-            egui::Color32::from_rgba_premultiplied(235, 243, 255, 180)
-        };
+        let bg_fill = themed_rgba(is_dark, [20, 35, 60, 60], [235, 243, 255, 180]);
         let stroke = egui::Stroke::new(
             1.0,
-            if is_dark {
-                egui::Color32::from_rgba_premultiplied(40, 70, 120, 70)
-            } else {
-                egui::Color32::from_rgba_premultiplied(180, 210, 250, 180)
-            },
+            themed_rgba(is_dark, [40, 70, 120, 70], [180, 210, 250, 180]),
         );
 
         egui::Frame::new()
@@ -1705,6 +1758,11 @@ impl ClipboardApp {
 
         ItemAction::None
     }
+}
+
+const fn themed_rgba(is_dark: bool, dark: [u8; 4], light: [u8; 4]) -> egui::Color32 {
+    let [r, g, b, a] = if is_dark { dark } else { light };
+    egui::Color32::from_rgba_premultiplied(r, g, b, a)
 }
 
 /// Validates and normalizes a URL before passing it to the OS browser launcher.

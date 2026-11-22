@@ -91,7 +91,7 @@ pub(crate) enum TextTransform {
 
 impl TextTransform {
     /// Complete catalog of all transformations.
-    pub(crate) const ALL: &'static [Self] = &[
+    pub(crate) const ALL: &[Self] = &[
         // Cleanup
         Self::StripFormatting,
         Self::UnwrapLines,
@@ -117,55 +117,41 @@ impl TextTransform {
         Self::StripTrackingParams,
     ];
 
+    /// Machine identifier and user-facing label for this transform.
+    const fn id_and_label(self) -> (&'static str, &'static str) {
+        match self {
+            Self::StripFormatting => ("strip_formatting", "Strip Formatting"),
+            Self::UnwrapLines => ("unwrap_lines", "Unwrap Hard Line Breaks"),
+            Self::CollapseWhitespace => ("collapse_whitespace", "Collapse Whitespace"),
+            Self::Uppercase => ("uppercase", "UPPERCASE"),
+            Self::Lowercase => ("lowercase", "lowercase"),
+            Self::TitleCase => ("title_case", "Title Case"),
+            Self::CamelCase => ("camel_case", "camelCase"),
+            Self::SnakeCase => ("snake_case", "snake_case"),
+            Self::KebabCase => ("kebab_case", "kebab-case"),
+            Self::SortLinesAsc => ("sort_lines_asc", "Sort Lines (A–Z)"),
+            Self::DeduplicateLines => ("deduplicate_lines", "Deduplicate Lines"),
+            Self::RemoveEmptyLines => ("remove_empty_lines", "Remove Empty Lines"),
+            Self::JoinWithComma => ("join_with_comma", "Join Lines with Comma"),
+            Self::JsonPrettify => ("json_prettify", "Prettify JSON"),
+            Self::JsonMinify => ("json_minify", "Minify JSON"),
+            Self::Base64Encode => ("base64_encode", "Base64 Encode"),
+            Self::Base64Decode => ("base64_decode", "Base64 Decode"),
+            Self::StripTrackingParams => ("strip_tracking_params", "Strip Tracking Parameters"),
+        }
+    }
+
     /// Unique machine identifier for this transform.
     #[must_use]
     #[allow(dead_code)]
     pub(crate) const fn id(self) -> &'static str {
-        match self {
-            Self::StripFormatting => "strip_formatting",
-            Self::UnwrapLines => "unwrap_lines",
-            Self::CollapseWhitespace => "collapse_whitespace",
-            Self::Uppercase => "uppercase",
-            Self::Lowercase => "lowercase",
-            Self::TitleCase => "title_case",
-            Self::CamelCase => "camel_case",
-            Self::SnakeCase => "snake_case",
-            Self::KebabCase => "kebab_case",
-            Self::SortLinesAsc => "sort_lines_asc",
-            Self::DeduplicateLines => "deduplicate_lines",
-            Self::RemoveEmptyLines => "remove_empty_lines",
-            Self::JoinWithComma => "join_with_comma",
-            Self::JsonPrettify => "json_prettify",
-            Self::JsonMinify => "json_minify",
-            Self::Base64Encode => "base64_encode",
-            Self::Base64Decode => "base64_decode",
-            Self::StripTrackingParams => "strip_tracking_params",
-        }
+        self.id_and_label().0
     }
 
     /// User-facing label for this transform.
     #[must_use]
     pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::StripFormatting => "Strip Formatting",
-            Self::UnwrapLines => "Unwrap Hard Line Breaks",
-            Self::CollapseWhitespace => "Collapse Whitespace",
-            Self::Uppercase => "UPPERCASE",
-            Self::Lowercase => "lowercase",
-            Self::TitleCase => "Title Case",
-            Self::CamelCase => "camelCase",
-            Self::SnakeCase => "snake_case",
-            Self::KebabCase => "kebab-case",
-            Self::SortLinesAsc => "Sort Lines (A–Z)",
-            Self::DeduplicateLines => "Deduplicate Lines",
-            Self::RemoveEmptyLines => "Remove Empty Lines",
-            Self::JoinWithComma => "Join Lines with Comma",
-            Self::JsonPrettify => "Prettify JSON",
-            Self::JsonMinify => "Minify JSON",
-            Self::Base64Encode => "Base64 Encode",
-            Self::Base64Decode => "Base64 Decode",
-            Self::StripTrackingParams => "Strip Tracking Parameters",
-        }
+        self.id_and_label().1
     }
 
     /// Category for organizing in menus.
@@ -715,45 +701,56 @@ fn strip_ansi(input: &str) -> String {
 
     while let Some(ch) = chars.next() {
         if ch == '\x1b' {
-            match chars.peek().copied() {
-                Some('[') => {
-                    chars.next(); // Consume '['
-                    while let Some(&c) = chars.peek() {
-                        if (0x20..=0x3F).contains(&(c as u32)) {
-                            chars.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    if let Some(&c) = chars.peek() {
-                        if (0x40..=0x7E).contains(&(c as u32)) {
-                            chars.next();
-                        }
-                    }
-                }
-                Some(']') => {
-                    chars.next(); // Consume ']'
-                    while let Some(c) = chars.next() {
-                        if c == '\x07' {
-                            break;
-                        }
-                        if c == '\x1b' && chars.peek() == Some(&'\\') {
-                            chars.next();
-                            break;
-                        }
-                    }
-                }
-                Some(c) if c.is_ascii() => {
-                    chars.next();
-                }
-                _ => {}
-            }
+            consume_escape_sequence(&mut chars);
         } else {
             out.push(ch);
         }
     }
 
     out
+}
+
+/// Consumes the payload following an ESC byte, if it is a recognized sequence.
+fn consume_escape_sequence(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    match chars.peek().copied() {
+        Some('[') => consume_csi_sequence(chars),
+        Some(']') => consume_osc_sequence(chars),
+        Some(c) if c.is_ascii() => {
+            chars.next();
+        }
+        _ => {}
+    }
+}
+
+/// Consumes CSI parameter bytes (0x20..=0x3F) and the final byte (0x40..=0x7E).
+fn consume_csi_sequence(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    chars.next(); // Consume '['
+    while let Some(&c) = chars.peek() {
+        if matches!(c, ' '..='?') {
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if let Some(&c) = chars.peek() {
+        if matches!(c, '@'..='~') {
+            chars.next();
+        }
+    }
+}
+
+/// Consumes an OSC payload terminated by BEL or the ESC `\` string terminator.
+fn consume_osc_sequence(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    chars.next(); // Consume ']'
+    while let Some(c) = chars.next() {
+        if c == '\x07' {
+            break;
+        }
+        if c == '\x1b' && chars.peek() == Some(&'\\') {
+            chars.next();
+            break;
+        }
+    }
 }
 
 /// Strips zero-width/invisible characters and normalizes CRLF and NBSP.
@@ -790,78 +787,89 @@ fn strip_html_tags(input: &str) -> String {
     let mut i = 0;
 
     while i < len {
-        if chars[i] == '<' {
-            let remaining = &chars[i..];
-            if starts_with_tag_ignore_case(remaining, "script") {
-                i += 7;
-                while i < len {
-                    if chars[i] == '<' && starts_with_tag_ignore_case(&chars[i..], "/script") {
-                        while i < len && chars[i] != '>' {
-                            i += 1;
-                        }
-                        if i < len {
-                            i += 1;
-                        }
-                        break;
-                    }
-                    i += 1;
-                }
-                continue;
-            } else if starts_with_tag_ignore_case(remaining, "style") {
-                i += 6;
-                while i < len {
-                    if chars[i] == '<' && starts_with_tag_ignore_case(&chars[i..], "/style") {
-                        while i < len && chars[i] != '>' {
-                            i += 1;
-                        }
-                        if i < len {
-                            i += 1;
-                        }
-                        break;
-                    }
-                    i += 1;
-                }
-                continue;
-            }
-
-            let mut tag_content = String::new();
-            let mut in_quotes = None;
-            i += 1; // Skip '<'
-
-            while i < len {
-                let ch = chars[i];
-                if let Some(q) = in_quotes {
-                    if ch == q {
-                        in_quotes = None;
-                    }
-                } else if ch == '"' || ch == '\'' {
-                    in_quotes = Some(ch);
-                } else if ch == '>' {
-                    i += 1;
-                    break;
-                }
-                tag_content.push(ch);
-                i += 1;
-            }
-
-            let clean_tag = tag_content.trim();
-            let tag_name = clean_tag
-                .trim_start_matches('/')
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-
-            if is_block_tag(&tag_name) {
-                out.push('\n');
-            }
-        } else {
+        if chars[i] != '<' {
             out.push(chars[i]);
             i += 1;
+            continue;
+        }
+
+        let remaining = &chars[i..];
+        if starts_with_tag_ignore_case(remaining, "script") {
+            i = skip_closed_block(&chars, i, "script", "/script");
+            continue;
+        }
+        if starts_with_tag_ignore_case(remaining, "style") {
+            i = skip_closed_block(&chars, i, "style", "/style");
+            continue;
+        }
+
+        let (tag_content, next_i) = consume_tag_content(&chars, i);
+        i = next_i;
+        if is_block_tag_content(&tag_content) {
+            out.push('\n');
         }
     }
 
     out
+}
+
+/// Skips an opening tag and everything up to and including its closing tag.
+fn skip_closed_block(chars: &[char], mut i: usize, open_tag: &str, close_tag: &str) -> usize {
+    let len = chars.len();
+    i += open_tag.len() + 1; // Skip '<' and the opening tag name.
+
+    while i < len {
+        if chars[i] == '<' && starts_with_tag_ignore_case(&chars[i..], close_tag) {
+            while i < len && chars[i] != '>' {
+                i += 1;
+            }
+            if i < len {
+                i += 1;
+            }
+            break;
+        }
+        i += 1;
+    }
+
+    i
+}
+
+/// Reads a tag body up to its unquoted `>`, returning the body and the next index.
+fn consume_tag_content(chars: &[char], mut i: usize) -> (String, usize) {
+    let len = chars.len();
+    let mut tag_content = String::new();
+    let mut in_quotes = None;
+    i += 1; // Skip '<'
+
+    while i < len {
+        let ch = chars[i];
+        if let Some(q) = in_quotes {
+            if ch == q {
+                in_quotes = None;
+            }
+        } else if ch == '"' || ch == '\'' {
+            in_quotes = Some(ch);
+        } else if ch == '>' {
+            i += 1;
+            break;
+        }
+        tag_content.push(ch);
+        i += 1;
+    }
+
+    (tag_content, i)
+}
+
+/// Reports whether a raw tag body (e.g. `/div class="x"`) names a block tag.
+fn is_block_tag_content(tag_content: &str) -> bool {
+    let tag_name = tag_content
+        .trim()
+        .trim_start_matches('/')
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    is_block_tag(&tag_name)
 }
 
 fn starts_with_tag_ignore_case(chars: &[char], tag_name: &str) -> bool {
@@ -1115,36 +1123,12 @@ fn strip_bracket_links(input: &str, is_image: bool) -> String {
     let mut i = 0;
 
     while i < len {
-        let matches_prefix = if is_image {
-            i + 1 < len && chars[i] == '!' && chars[i + 1] == '['
-        } else {
-            chars[i] == '[' && (i == 0 || chars[i - 1] != '!')
-        };
-
-        if matches_prefix {
+        if matches_link_prefix(&chars, i, is_image) {
             let label_start = if is_image { i + 2 } else { i + 1 };
-            let mut label_end = label_start;
-            while label_end < len && chars[label_end] != ']' {
-                label_end += 1;
-            }
-
-            if label_end < len
-                && label_end + 1 < len
-                && chars[label_end] == ']'
-                && chars[label_end + 1] == '('
-            {
-                let url_start = label_end + 2;
-                let mut url_end = url_start;
-                while url_end < len && chars[url_end] != ')' {
-                    url_end += 1;
-                }
-
-                if url_end < len && chars[url_end] == ')' {
-                    let label: String = chars[label_start..label_end].iter().collect();
-                    out.push_str(&label);
-                    i = url_end + 1;
-                    continue;
-                }
+            if let Some((label, next_i)) = consume_bracket_link(&chars, label_start) {
+                out.push_str(&label);
+                i = next_i;
+                continue;
             }
         }
 
@@ -1153,6 +1137,41 @@ fn strip_bracket_links(input: &str, is_image: bool) -> String {
     }
 
     out
+}
+
+/// Reports whether a `[label]` or `![label]` begins at `i`.
+const fn matches_link_prefix(chars: &[char], i: usize, is_image: bool) -> bool {
+    if is_image {
+        i + 1 < chars.len() && chars[i] == '!' && chars[i + 1] == '['
+    } else {
+        chars[i] == '[' && (i == 0 || chars[i - 1] != '!')
+    }
+}
+
+/// Consumes `[label](url)` starting at the label, returning the label and the next index.
+fn consume_bracket_link(chars: &[char], label_start: usize) -> Option<(String, usize)> {
+    let len = chars.len();
+    let mut label_end = label_start;
+    while label_end < len && chars[label_end] != ']' {
+        label_end += 1;
+    }
+
+    if label_end + 1 >= len || chars[label_end] != ']' || chars[label_end + 1] != '(' {
+        return None;
+    }
+
+    let url_start = label_end + 2;
+    let mut url_end = url_start;
+    while url_end < len && chars[url_end] != ')' {
+        url_end += 1;
+    }
+
+    if url_end >= len || chars[url_end] != ')' {
+        return None;
+    }
+
+    let label: String = chars[label_start..label_end].iter().collect();
+    Some((label, url_end + 1))
 }
 
 fn strip_inline_code(input: &str) -> String {

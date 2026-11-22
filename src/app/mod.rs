@@ -1381,7 +1381,6 @@ impl ClipboardApp {
             });
     }
 
-    #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
     fn render_bottom_panel(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         egui::Panel::bottom("bottom_panel")
             .frame(
@@ -1395,118 +1394,141 @@ impl ClipboardApp {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if let Some(toast) = &self.toast {
-                        let elapsed = toast.shown_at.elapsed();
-                        if elapsed < Duration::from_millis(2500) {
-                            ui.ctx().request_repaint();
-                            let alpha_factor = if elapsed < Duration::from_millis(1800) {
-                                1.0_f32
-                            } else {
-                                (1.0_f32 - ((elapsed.as_millis() as f32) - 1800.0) / 700.0)
-                                    .clamp(0.0, 1.0)
-                            };
-
-                            let (base_bg, base_stroke, base_text) = match toast.severity {
-                                ToastSeverity::Success => (
-                                    if is_dark {
-                                        egui::Color32::from_rgba_premultiplied(18, 48, 28, 180)
-                                    } else {
-                                        egui::Color32::from_rgba_premultiplied(235, 250, 240, 230)
-                                    },
-                                    crate::theme::success_color(is_dark),
-                                    crate::theme::success_color(is_dark),
-                                ),
-                                ToastSeverity::Warning => (
-                                    if is_dark {
-                                        egui::Color32::from_rgba_premultiplied(48, 38, 18, 180)
-                                    } else {
-                                        egui::Color32::from_rgba_premultiplied(254, 248, 235, 230)
-                                    },
-                                    crate::theme::warning_color(is_dark),
-                                    crate::theme::warning_color(is_dark),
-                                ),
-                                ToastSeverity::Error => (
-                                    if is_dark {
-                                        egui::Color32::from_rgba_premultiplied(48, 18, 20, 180)
-                                    } else {
-                                        egui::Color32::from_rgba_premultiplied(254, 235, 238, 230)
-                                    },
-                                    crate::theme::error_color(is_dark),
-                                    crate::theme::error_color(is_dark),
-                                ),
-                            };
-
-                            let bg_color = base_bg.gamma_multiply(alpha_factor);
-                            let stroke_color = base_stroke.gamma_multiply(alpha_factor);
-                            let text_color = base_text.gamma_multiply(alpha_factor);
-
-                            egui::Frame::new()
-                                .corner_radius(crate::theme::pill_rounding())
-                                .fill(bg_color)
-                                .stroke(egui::Stroke::new(1.0, stroke_color))
-                                .inner_margin(egui::Margin::symmetric(8, 3))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new(&toast.message)
-                                            .size(11.0)
-                                            .color(text_color)
-                                            .strong(),
-                                    );
-                                });
-                        } else {
-                            self.toast = None;
-                        }
-                    } else {
-                        let key_status = match self.key_storage_mode {
-                            crate::crypto::KeyStorageMode::OsKeyring => {
-                                format!(
-                                    "{} {} entries • SQLCipher encrypted",
-                                    icons::SHIELD_CHECK,
-                                    self.items.len()
-                                )
-                            }
-                            crate::crypto::KeyStorageMode::LocalFileFallback => {
-                                format!(
-                                    "{} {} entries • Local key file (keyring unavailable)",
-                                    icons::WARNING,
-                                    self.items.len()
-                                )
-                            }
-                            crate::crypto::KeyStorageMode::LocalFileFallbackDegraded => {
-                                format!(
-                                    "{} {} entries • Local key file (permissions degraded)",
-                                    icons::WARNING,
-                                    self.items.len()
-                                )
-                            }
-                        };
-                        let status_color = match self.key_storage_mode {
-                            crate::crypto::KeyStorageMode::OsKeyring => {
-                                crate::theme::text_secondary(is_dark)
-                            }
-                            crate::crypto::KeyStorageMode::LocalFileFallback => {
-                                crate::theme::warning_color(is_dark)
-                            }
-                            crate::crypto::KeyStorageMode::LocalFileFallbackDegraded => {
-                                crate::theme::error_color(is_dark)
-                            }
-                        };
-                        ui.label(
-                            egui::RichText::new(key_status)
-                                .color(status_color)
-                                .size(11.0_f32),
-                        );
+                    if !self.render_toast(ui, is_dark) {
+                        self.render_storage_status(ui, is_dark);
                     }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(crate::platform::navigation_hint_label())
-                                .color(crate::theme::text_secondary(is_dark))
-                                .size(10.5_f32),
-                        );
-                    });
+                    Self::render_navigation_hint(ui, is_dark);
                 });
             });
+    }
+
+    /// Renders the active toast in the status slot. Returns `true` whenever a toast
+    /// was present (including the frame where it expires), so the caller skips the
+    /// fallback status indicator exactly as before.
+    #[allow(clippy::cast_precision_loss)]
+    fn render_toast(&mut self, ui: &mut egui::Ui, is_dark: bool) -> bool {
+        let Some(toast) = self.toast.as_ref() else {
+            return false;
+        };
+
+        let elapsed = toast.shown_at.elapsed();
+        if elapsed >= Duration::from_millis(2500) {
+            self.toast = None;
+            return true;
+        }
+
+        ui.ctx().request_repaint();
+        let alpha_factor = if elapsed < Duration::from_millis(1800) {
+            1.0_f32
+        } else {
+            (1.0_f32 - ((elapsed.as_millis() as f32) - 1800.0) / 700.0).clamp(0.0, 1.0)
+        };
+
+        let (base_bg, base_stroke, base_text) = Self::toast_colors(toast.severity, is_dark);
+        let bg_color = base_bg.gamma_multiply(alpha_factor);
+        let stroke_color = base_stroke.gamma_multiply(alpha_factor);
+        let text_color = base_text.gamma_multiply(alpha_factor);
+
+        egui::Frame::new()
+            .corner_radius(crate::theme::pill_rounding())
+            .fill(bg_color)
+            .stroke(egui::Stroke::new(1.0, stroke_color))
+            .inner_margin(egui::Margin::symmetric(8, 3))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(&toast.message)
+                        .size(11.0)
+                        .color(text_color)
+                        .strong(),
+                );
+            });
+        true
+    }
+
+    /// Maps a severity to the toast background and accent colors.
+    const fn toast_colors(
+        severity: ToastSeverity,
+        is_dark: bool,
+    ) -> (egui::Color32, egui::Color32, egui::Color32) {
+        let (background, accent) = match severity {
+            ToastSeverity::Success => (
+                if is_dark {
+                    egui::Color32::from_rgba_premultiplied(18, 48, 28, 180)
+                } else {
+                    egui::Color32::from_rgba_premultiplied(235, 250, 240, 230)
+                },
+                crate::theme::success_color(is_dark),
+            ),
+            ToastSeverity::Warning => (
+                if is_dark {
+                    egui::Color32::from_rgba_premultiplied(48, 38, 18, 180)
+                } else {
+                    egui::Color32::from_rgba_premultiplied(254, 248, 235, 230)
+                },
+                crate::theme::warning_color(is_dark),
+            ),
+            ToastSeverity::Error => (
+                if is_dark {
+                    egui::Color32::from_rgba_premultiplied(48, 18, 20, 180)
+                } else {
+                    egui::Color32::from_rgba_premultiplied(254, 235, 238, 230)
+                },
+                crate::theme::error_color(is_dark),
+            ),
+        };
+        (background, accent, accent)
+    }
+
+    /// Renders the key-storage status shown when no toast is active.
+    fn render_storage_status(&self, ui: &mut egui::Ui, is_dark: bool) {
+        let key_status = match self.key_storage_mode {
+            crate::crypto::KeyStorageMode::OsKeyring => {
+                format!(
+                    "{} {} entries • SQLCipher encrypted",
+                    icons::SHIELD_CHECK,
+                    self.items.len()
+                )
+            }
+            crate::crypto::KeyStorageMode::LocalFileFallback => {
+                format!(
+                    "{} {} entries • Local key file (keyring unavailable)",
+                    icons::WARNING,
+                    self.items.len()
+                )
+            }
+            crate::crypto::KeyStorageMode::LocalFileFallbackDegraded => {
+                format!(
+                    "{} {} entries • Local key file (permissions degraded)",
+                    icons::WARNING,
+                    self.items.len()
+                )
+            }
+        };
+        let status_color = match self.key_storage_mode {
+            crate::crypto::KeyStorageMode::OsKeyring => crate::theme::text_secondary(is_dark),
+            crate::crypto::KeyStorageMode::LocalFileFallback => {
+                crate::theme::warning_color(is_dark)
+            }
+            crate::crypto::KeyStorageMode::LocalFileFallbackDegraded => {
+                crate::theme::error_color(is_dark)
+            }
+        };
+        ui.label(
+            egui::RichText::new(key_status)
+                .color(status_color)
+                .size(11.0_f32),
+        );
+    }
+
+    /// Renders the right-aligned navigation/keyboard hint.
+    fn render_navigation_hint(ui: &mut egui::Ui, is_dark: bool) {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(crate::platform::navigation_hint_label())
+                    .color(crate::theme::text_secondary(is_dark))
+                    .size(10.5_f32),
+            );
+        });
     }
 
     fn get_filtered_indices(&self) -> Vec<usize> {

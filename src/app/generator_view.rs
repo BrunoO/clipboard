@@ -143,25 +143,30 @@ impl ClipboardApp {
                     self.password_gen.regenerate();
                 }
 
-                let eye_icon = if self.password_gen.reveal_value {
-                    icons::EYE_SLASH
-                } else {
-                    icons::EYE
-                };
-                if ui
-                    .button(icons::button_icon(eye_icon))
-                    .on_hover_text(if self.password_gen.reveal_value {
-                        "Hide password"
-                    } else {
-                        "Reveal password"
-                    })
-                    .clicked()
-                {
-                    self.password_gen.reveal_value = !self.password_gen.reveal_value;
-                    self.save_generator_preferences();
-                }
+                self.render_reveal_toggle(ui);
             });
         });
+    }
+
+    /// Renders the reveal/hide password toggle and persists the preference on click.
+    fn render_reveal_toggle(&mut self, ui: &mut egui::Ui) {
+        let eye_icon = if self.password_gen.reveal_value {
+            icons::EYE_SLASH
+        } else {
+            icons::EYE
+        };
+        if ui
+            .button(icons::button_icon(eye_icon))
+            .on_hover_text(if self.password_gen.reveal_value {
+                "Hide password"
+            } else {
+                "Reveal password"
+            })
+            .clicked()
+        {
+            self.password_gen.reveal_value = !self.password_gen.reveal_value;
+            self.save_generator_preferences();
+        }
     }
 
     #[allow(clippy::cast_possible_truncation)]

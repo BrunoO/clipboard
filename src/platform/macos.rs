@@ -2,7 +2,7 @@
 #![allow(unexpected_cfgs)]
 
 use objc::declare::ClassDecl;
-use objc::runtime::{Object, Sel};
+use objc::runtime::{Class, Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
@@ -473,6 +473,149 @@ pub(super) fn supports_image_ocr() -> bool {
         && objc::runtime::Class::get("VNRecognizeTextRequest").is_some()
 }
 
+/// Looks up the two Vision classes needed for OCR, keeping the original
+/// class-not-found error messages. This only queries the `ObjC` runtime and
+/// performs no message sends, so it needs no autorelease pool of its own.
+fn ocr_classes() -> Result<(&'static Class, &'static Class), String> {
+    let handler_cls = Class::get("VNImageRequestHandler")
+        .ok_or_else(|| "VNImageRequestHandler class not found".to_string())?;
+    let request_cls = Class::get("VNRecognizeTextRequest")
+        .ok_or_else(|| "VNRecognizeTextRequest class not found".to_string())?;
+    Ok((handler_cls, request_cls))
+}
+
+/// # Safety
+/// All `ObjC` message sends happen inside the caller's autorelease pool, every
+/// handle is null-checked before use, and a partially built handler is released
+/// before returning an error so the caller only ever owns the returned pair.
+unsafe fn build_request_handler(
+    png_bytes: &[u8],
+    handler_cls: &'static Class,
+    request_cls: &'static Class,
+) -> Result<(*mut Object, *mut Object), String> {
+    let ns_data: *mut Object = msg_send![
+        class!(NSData),
+        dataWithBytes: png_bytes.as_ptr()
+        length: png_bytes.len()
+    ];
+    if ns_data.is_null() {
+        return Err("Failed to allocate NSData for image".to_string());
+    }
+
+    let nil_opts: *mut Object = std::ptr::null_mut();
+    let handler_alloc: *mut Object = msg_send![handler_cls, alloc];
+    let handler: *mut Object = msg_send![handler_alloc, initWithData: ns_data options: nil_opts];
+    if handler.is_null() {
+        return Err("Failed to create VNImageRequestHandler".to_string());
+    }
+
+    let request_alloc: *mut Object = msg_send![request_cls, alloc];
+    let request: *mut Object = msg_send![request_alloc, init];
+    if request.is_null() {
+        let _: () = msg_send![handler, release];
+        return Err("Failed to create VNRecognizeTextRequest".to_string());
+    }
+
+    // VNRequestTextRecognitionLevelAccurate = 1
+    let _: () = msg_send![request, setRecognitionLevel: 1isize];
+    let _: () = msg_send![request, setUsesLanguageCorrection: true];
+
+    Ok((handler, request))
+}
+
+/// # Safety
+/// All `ObjC` message sends happen inside the caller's autorelease pool and the
+/// `error` out-pointer is only read after `performRequests:` has populated it.
+unsafe fn perform_ocr_request(
+    handler: *mut Object,
+    request: *mut Object,
+) -> Result<String, String> {
+    let req_array: *mut Object = msg_send![class!(NSArray), arrayWithObject: request];
+    let mut error: *mut Object = std::ptr::null_mut();
+    let success: bool = msg_send![handler, performRequests: req_array error: &mut error];
+    if success {
+        Ok(recognized_text(request))
+    } else {
+        Err(vision_error_description(error))
+    }
+}
+
+/// # Safety
+/// All `ObjC` message sends happen inside the caller's autorelease pool and every
+/// handle is null-checked before use.
+unsafe fn vision_error_description(error: *mut Object) -> String {
+    const FALLBACK: &str = "Vision text recognition request failed";
+    if error.is_null() {
+        return FALLBACK.to_string();
+    }
+    let desc: *mut Object = msg_send![error, localizedDescription];
+    if desc.is_null() {
+        return FALLBACK.to_string();
+    }
+    let utf8: *const std::os::raw::c_char = msg_send![desc, UTF8String];
+    if utf8.is_null() {
+        return FALLBACK.to_string();
+    }
+    std::ffi::CStr::from_ptr(utf8)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Returns the recognized string of an observation's top candidate, preserving
+/// every null/invalid check of the original nested extraction.
+///
+/// # Safety
+/// All `ObjC` message sends happen inside the caller's autorelease pool and every
+/// handle is null-checked before use.
+unsafe fn first_candidate_text(obs: *mut Object) -> Option<String> {
+    let top_candidates: *mut Object = msg_send![obs, topCandidates: 1usize];
+    if top_candidates.is_null() {
+        return None;
+    }
+    let cand_count: usize = msg_send![top_candidates, count];
+    if cand_count == 0 {
+        return None;
+    }
+    let cand: *mut Object = msg_send![top_candidates, objectAtIndex: 0usize];
+    if cand.is_null() {
+        return None;
+    }
+    let str_obj: *mut Object = msg_send![cand, string];
+    if str_obj.is_null() {
+        return None;
+    }
+    let utf8_ptr: *const std::os::raw::c_char = msg_send![str_obj, UTF8String];
+    if utf8_ptr.is_null() {
+        return None;
+    }
+    std::ffi::CStr::from_ptr(utf8_ptr)
+        .to_str()
+        .ok()
+        .map(str::to_string)
+}
+
+/// # Safety
+/// All `ObjC` message sends happen inside the caller's autorelease pool and every
+/// handle is null-checked before use.
+unsafe fn recognized_text(request: *mut Object) -> String {
+    let results: *mut Object = msg_send![request, results];
+    if results.is_null() {
+        return String::new();
+    }
+    let count: usize = msg_send![results, count];
+    let mut lines = Vec::with_capacity(count);
+    for i in 0..count {
+        let obs: *mut Object = msg_send![results, objectAtIndex: i];
+        if obs.is_null() {
+            continue;
+        }
+        if let Some(line) = first_candidate_text(obs) {
+            lines.push(line);
+        }
+    }
+    lines.join("\n")
+}
+
 pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> {
     if !supports_image_ocr() {
         return Err("Apple Vision framework is not available on this macOS version".to_string());
@@ -481,102 +624,13 @@ pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> 
         return Err("Image payload is empty".to_string());
     }
 
-    // SAFETY: Vision request performed inside autoreleasepool;
-    // all ObjC object handles are null-checked and released properly.
+    // SAFETY: The whole Vision request runs inside one autorelease pool; helpers
+    // null-check every `ObjC` handle, and request/handler are released exactly once.
     objc::rc::autoreleasepool(|| unsafe {
-        let handler_cls = objc::runtime::Class::get("VNImageRequestHandler")
-            .ok_or_else(|| "VNImageRequestHandler class not found".to_string())?;
-        let request_cls = objc::runtime::Class::get("VNRecognizeTextRequest")
-            .ok_or_else(|| "VNRecognizeTextRequest class not found".to_string())?;
+        let (handler_cls, request_cls) = ocr_classes()?;
+        let (handler, request) = build_request_handler(png_bytes, handler_cls, request_cls)?;
 
-        let ns_data: *mut Object = msg_send![
-            class!(NSData),
-            dataWithBytes: png_bytes.as_ptr()
-            length: png_bytes.len()
-        ];
-        if ns_data.is_null() {
-            return Err("Failed to allocate NSData for image".to_string());
-        }
-
-        let nil_opts: *mut Object = std::ptr::null_mut();
-        let handler_alloc: *mut Object = msg_send![handler_cls, alloc];
-        let handler: *mut Object =
-            msg_send![handler_alloc, initWithData: ns_data options: nil_opts];
-        if handler.is_null() {
-            return Err("Failed to create VNImageRequestHandler".to_string());
-        }
-
-        let request_alloc: *mut Object = msg_send![request_cls, alloc];
-        let request: *mut Object = msg_send![request_alloc, init];
-        if request.is_null() {
-            let _: () = msg_send![handler, release];
-            return Err("Failed to create VNRecognizeTextRequest".to_string());
-        }
-
-        // VNRequestTextRecognitionLevelAccurate = 1
-        let _: () = msg_send![request, setRecognitionLevel: 1isize];
-        let _: () = msg_send![request, setUsesLanguageCorrection: true];
-
-        let req_array: *mut Object = msg_send![class!(NSArray), arrayWithObject: request];
-        let mut error: *mut Object = std::ptr::null_mut();
-        let success: bool = msg_send![handler, performRequests: req_array error: &mut error];
-
-        let result = if success {
-            let results: *mut Object = msg_send![request, results];
-            if results.is_null() {
-                Ok(String::new())
-            } else {
-                let count: usize = msg_send![results, count];
-                let mut lines = Vec::with_capacity(count);
-                for i in 0..count {
-                    let obs: *mut Object = msg_send![results, objectAtIndex: i];
-                    if obs.is_null() {
-                        continue;
-                    }
-                    let top_candidates: *mut Object = msg_send![obs, topCandidates: 1usize];
-                    if top_candidates.is_null() {
-                        continue;
-                    }
-                    let cand_count: usize = msg_send![top_candidates, count];
-                    if cand_count > 0 {
-                        let cand: *mut Object = msg_send![top_candidates, objectAtIndex: 0usize];
-                        if !cand.is_null() {
-                            let str_obj: *mut Object = msg_send![cand, string];
-                            if !str_obj.is_null() {
-                                let utf8_ptr: *const std::os::raw::c_char =
-                                    msg_send![str_obj, UTF8String];
-                                if !utf8_ptr.is_null() {
-                                    let cstr = std::ffi::CStr::from_ptr(utf8_ptr);
-                                    if let Ok(s) = cstr.to_str() {
-                                        lines.push(s.to_string());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Ok(lines.join("\n"))
-            }
-        } else {
-            let err_desc = if error.is_null() {
-                "Vision text recognition request failed".to_string()
-            } else {
-                let desc: *mut Object = msg_send![error, localizedDescription];
-                if desc.is_null() {
-                    "Vision text recognition request failed".to_string()
-                } else {
-                    let utf8: *const std::os::raw::c_char = msg_send![desc, UTF8String];
-                    if utf8.is_null() {
-                        "Vision text recognition request failed".to_string()
-                    } else {
-                        std::ffi::CStr::from_ptr(utf8)
-                            .to_string_lossy()
-                            .into_owned()
-                    }
-                }
-            };
-            Err(err_desc)
-        };
+        let result = perform_ocr_request(handler, request);
 
         let _: () = msg_send![request, release];
         let _: () = msg_send![handler, release];
