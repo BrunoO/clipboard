@@ -399,6 +399,7 @@ pub(crate) const fn text_secondary(is_dark: bool) -> Color32 {
 
 /// Monospace content preview text color (WCAG AAA compliant: >= 11.0:1 contrast).
 #[must_use]
+#[allow(dead_code)]
 pub(crate) const fn text_preview(is_dark: bool) -> Color32 {
     if is_dark {
         Color32::from_rgb(235, 235, 240)

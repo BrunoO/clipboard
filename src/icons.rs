@@ -9,6 +9,7 @@ pub(crate) const ARROW_LEFT: &str = mi::ICON_ARROW_BACK.codepoint;
 pub(crate) const ARROW_SQUARE_OUT: &str = mi::ICON_OPEN_IN_NEW.codepoint;
 pub(crate) const BRACKETS_CURLY: &str = mi::ICON_DATA_OBJECT.codepoint;
 pub(crate) const CHECK: &str = mi::ICON_CHECK.codepoint;
+#[allow(dead_code)]
 pub(crate) const CLIPBOARD: &str = mi::ICON_CONTENT_PASTE.codepoint;
 pub(crate) const CLOCK_COUNTER_CLOCKWISE: &str = mi::ICON_HISTORY.codepoint;
 pub(crate) const CODE: &str = mi::ICON_CODE.codepoint;

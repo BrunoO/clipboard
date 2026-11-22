@@ -41,48 +41,145 @@ impl ClipboardApp {
         egui::CentralPanel::default().show(ui, |ui| {
             if filtered_indices.is_empty() {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(35.0);
-                    let (empty_icon, empty_hint) = match filter {
-                        ContentFilter::All => (icons::CLIPBOARD, "No clipboard history found."),
-                        ContentFilter::Text => (icons::FILE_TEXT, "No text entries found."),
-                        ContentFilter::Links => {
-                            (icons::LINK, "No links found in clipboard history.")
-                        }
-                        ContentFilter::Code => {
-                            (icons::CODE, "No code snippets found in clipboard history.")
-                        }
-                        ContentFilter::Colors => {
-                            (icons::PALETTE, "No colors found in clipboard history.")
-                        }
-                        ContentFilter::Secrets => {
-                            (icons::LOCK, "No secret entries found in clipboard history.")
-                        }
-                        ContentFilter::Image => (icons::IMAGE, "No image entries found."),
+                    ui.add_space(20.0);
+                    let (empty_icon, empty_title, empty_hint) = match filter {
+                        ContentFilter::All => (
+                            icons::SHIELD_CHECK,
+                            "Your Encrypted Vault is Ready",
+                            "Copy text, code, colors, or screenshots in any application to securely save them here.",
+                        ),
+                        ContentFilter::Text => (
+                            icons::FILE_TEXT,
+                            "No Plain Text Clippings",
+                            "Text clips you copy will appear here with instant formatting tools.",
+                        ),
+                        ContentFilter::Links => (
+                            icons::LINK,
+                            "No Links Saved Yet",
+                            "URLs you copy will be bookmarked here with 1-click browser launch.",
+                        ),
+                        ContentFilter::Code => (
+                            icons::CODE,
+                            "No Code Snippets Found",
+                            "Programming snippets will be automatically highlighted with syntax colors.",
+                        ),
+                        ContentFilter::Colors => (
+                            icons::PALETTE,
+                            "No Colors Captured",
+                            "HEX, RGB, HSL, and CSS color codes will render as interactive enameled swatches.",
+                        ),
+                        ContentFilter::Secrets => (
+                            icons::LOCK,
+                            "No Secret Vault Items",
+                            "Sensitive keys, passwords, and tokens are protected here with zero-logging.",
+                        ),
+                        ContentFilter::Image => (
+                            icons::IMAGE,
+                            "No Images Captured",
+                            "Screenshots and images copied to your clipboard will be previewed here.",
+                        ),
                     };
-                    ui.label(
-                        icons::outlined(empty_icon)
-                            .size(28.0)
-                            .color(crate::theme::text_secondary(is_dark)),
-                    );
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(empty_hint)
-                            .color(crate::theme::text_primary(is_dark))
-                            .strong(),
-                    );
-                    ui.label(
-                        egui::RichText::new(
-                            "Copy text, links, or screenshots in any app to save here!",
-                        )
-                        .size(12.0)
-                        .color(crate::theme::text_secondary(is_dark)),
-                    );
+
+                    let card_fill = crate::theme::card_fill(is_dark, false);
+                    let card_stroke = crate::theme::card_stroke(is_dark, false);
+                    let card_shadow = crate::theme::card_shadow(is_dark, false);
+
+                    egui::Frame::group(ui.style())
+                        .corner_radius(12)
+                        .fill(card_fill)
+                        .stroke(card_stroke)
+                        .shadow(card_shadow)
+                        .inner_margin(egui::Margin::symmetric(24, 20))
+                        .show(ui, |ui| {
+                            ui.set_max_width(320.0);
+                            ui.vertical_centered(|ui| {
+                                let accent = crate::theme::accent_color(is_dark);
+                                let halo_fill = if is_dark {
+                                    egui::Color32::from_rgba_premultiplied(35, 45, 65, 120)
+                                } else {
+                                    egui::Color32::from_rgba_premultiplied(225, 238, 255, 200)
+                                };
+
+                                egui::Frame::new()
+                                    .corner_radius(22)
+                                    .fill(halo_fill)
+                                    .stroke(egui::Stroke::new(1.0, accent))
+                                    .inner_margin(egui::Margin::same(10))
+                                    .show(ui, |ui| {
+                                        ui.label(icons::outlined(empty_icon).size(24.0).color(accent));
+                                    });
+
+                                ui.add_space(12.0);
+
+                                ui.label(
+                                    egui::RichText::new(empty_title)
+                                        .size(14.0)
+                                        .strong()
+                                        .color(crate::theme::text_primary(is_dark)),
+                                );
+
+                                ui.add_space(4.0);
+
+                                ui.label(
+                                    egui::RichText::new(empty_hint)
+                                        .size(11.5)
+                                        .line_height(Some(16.0))
+                                        .color(crate::theme::text_secondary(is_dark)),
+                                );
+
+                                ui.add_space(16.0);
+
+                                ui.horizontal_wrapped(|ui| {
+                                    let mod_name = crate::platform::PRIMARY_MODIFIER_NAME;
+                                    Self::render_tip_chip(ui, &format!("{mod_name}+C"), "Capture", is_dark);
+                                    Self::render_tip_chip(ui, &format!("{mod_name}+1..9"), "Paste", is_dark);
+                                    Self::render_tip_chip(ui, "ESC", "Dismiss", is_dark);
+                                });
+                            });
+                        });
                 });
                 return;
             }
 
             self.render_items_scroll_area(ui, &filtered_indices, &ctx, is_dark);
         });
+    }
+
+    fn render_tip_chip(ui: &mut egui::Ui, key: &str, label: &str, is_dark: bool) {
+        let bg = if is_dark {
+            egui::Color32::from_white_alpha(10)
+        } else {
+            egui::Color32::from_black_alpha(8)
+        };
+        let stroke = egui::Stroke::new(
+            1.0,
+            if is_dark {
+                egui::Color32::from_white_alpha(20)
+            } else {
+                egui::Color32::from_black_alpha(18)
+            },
+        );
+        egui::Frame::new()
+            .corner_radius(crate::theme::pill_rounding())
+            .fill(bg)
+            .stroke(stroke)
+            .inner_margin(egui::Margin::symmetric(6, 3))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(key)
+                            .monospace()
+                            .size(10.0)
+                            .strong()
+                            .color(crate::theme::accent_color(is_dark)),
+                    );
+                    ui.label(
+                        egui::RichText::new(label)
+                            .size(10.0)
+                            .color(crate::theme::text_secondary(is_dark)),
+                    );
+                });
+            });
     }
 
     fn render_items_scroll_area(
@@ -776,32 +873,112 @@ impl ClipboardApp {
         is_revealed: bool,
         is_dark: bool,
     ) -> ItemAction {
-        let display = if is_revealed {
-            Self::format_display_preview(content, 180)
-        } else {
-            let bullet_len = content.chars().count().clamp(8, 24);
-            "•".repeat(bullet_len)
-        };
+        let mut action = ItemAction::None;
+        let warn_c = crate::theme::warning_color(is_dark);
 
-        let label = ui.add(
-            egui::Label::new(
-                egui::RichText::new(display)
-                    .monospace()
-                    .color(crate::theme::text_preview(is_dark)),
-            )
-            .sense(egui::Sense::click()),
+        let bg_fill = if is_dark {
+            egui::Color32::from_rgba_premultiplied(36, 28, 16, 140)
+        } else {
+            egui::Color32::from_rgba_premultiplied(254, 249, 238, 220)
+        };
+        let stroke = egui::Stroke::new(
+            1.0,
+            if is_dark {
+                egui::Color32::from_rgba_premultiplied(120, 90, 40, 140)
+            } else {
+                egui::Color32::from_rgba_premultiplied(230, 200, 140, 200)
+            },
         );
 
-        if label.clicked() {
-            ItemAction::CopySecret(content.to_string())
-        } else {
-            if label.hovered() {
-                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-            }
-            ItemAction::None
-        }
+        egui::Frame::new()
+            .fill(bg_fill)
+            .stroke(stroke)
+            .corner_radius(6)
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                if is_revealed {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{} Sensitive", icons::WARNING))
+                                .size(10.5)
+                                .color(warn_c)
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new("• Click content to copy")
+                                .size(10.0)
+                                .color(crate::theme::text_secondary(is_dark)),
+                        );
+                    });
+                    ui.add_space(4.0);
+
+                    let display = Self::format_display_preview(content, 180);
+                    let label = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(display)
+                                .monospace()
+                                .size(12.0)
+                                .color(crate::theme::text_primary(is_dark)),
+                        )
+                        .wrap()
+                        .sense(egui::Sense::click()),
+                    );
+
+                    if label.clicked() {
+                        action = ItemAction::CopySecret(content.to_string());
+                    } else if label.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
+                } else {
+                    let char_count = content.chars().count().clamp(8, 24);
+                    let mut bullet_groups = Vec::new();
+                    let mut remaining = char_count;
+                    while remaining > 0 {
+                        let chunk = remaining.min(4);
+                        bullet_groups.push("•".repeat(chunk));
+                        remaining -= chunk;
+                    }
+                    let bullets_display = bullet_groups.join("  ");
+
+                    let mut resp = ui
+                        .horizontal(|ui| {
+                            ui.label(icons::outlined(icons::LOCK).size(14.0).color(warn_c));
+                            ui.add_space(2.0);
+                            ui.label(
+                                egui::RichText::new(bullets_display)
+                                    .monospace()
+                                    .size(13.0)
+                                    .strong()
+                                    .color(warn_c),
+                            );
+                        })
+                        .response;
+
+                    ui.add_space(2.0);
+                    let hint = ui.label(
+                        egui::RichText::new("Encrypted vault entry • Click capsule to copy")
+                            .size(10.0)
+                            .color(crate::theme::text_secondary(is_dark)),
+                    );
+
+                    resp = resp.union(hint);
+                    let clickable_resp = ui.interact(
+                        resp.rect,
+                        ui.scope_id().with("vault_capsule"),
+                        egui::Sense::click(),
+                    );
+                    if clickable_resp.clicked() {
+                        action = ItemAction::CopySecret(content.to_string());
+                    } else if clickable_resp.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
+                }
+            });
+
+        action
     }
 
+    #[allow(clippy::too_many_lines)]
     fn render_code_content(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) -> ItemAction {
         let lang = item
             .code_language()
@@ -810,22 +987,96 @@ impl ClipboardApp {
         let mut action = ItemAction::None;
 
         let canvas_fill = if is_dark {
-            egui::Color32::from_rgb(26, 27, 34)
+            egui::Color32::from_rgb(20, 21, 26)
         } else {
-            egui::Color32::from_rgb(244, 244, 247)
+            egui::Color32::from_rgb(243, 244, 248)
         };
         let canvas_stroke = if is_dark {
-            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 50, 56))
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 48, 58))
         } else {
-            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(220, 220, 226))
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(218, 220, 228))
         };
 
         egui::Frame::canvas(ui.style())
-            .corner_radius(4)
+            .corner_radius(6)
             .fill(canvas_fill)
             .stroke(canvas_stroke)
-            .inner_margin(6)
+            .inner_margin(egui::Margin {
+                left: 8,
+                right: 8,
+                top: 6,
+                bottom: 8,
+            })
             .show(ui, |ui| {
+                // Mini-IDE window bar
+                ui.horizontal(|ui| {
+                    let (dot_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(36.0, 10.0), egui::Sense::hover());
+                    let p = ui.painter();
+                    let cy = dot_rect.center().y;
+                    let r = 3.5_f32;
+                    p.circle_filled(
+                        egui::pos2(dot_rect.min.x + 4.0, cy),
+                        r,
+                        egui::Color32::from_rgb(255, 95, 86),
+                    );
+                    p.circle_filled(
+                        egui::pos2(dot_rect.min.x + 15.0, cy),
+                        r,
+                        egui::Color32::from_rgb(255, 189, 46),
+                    );
+                    p.circle_filled(
+                        egui::pos2(dot_rect.min.x + 26.0, cy),
+                        r,
+                        egui::Color32::from_rgb(39, 201, 63),
+                    );
+
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(lang.name())
+                            .monospace()
+                            .size(10.0)
+                            .color(crate::theme::text_secondary(is_dark)),
+                    );
+
+                    if lang == crate::code::CodeLanguage::Json {
+                        if let Some(pretty) = crate::code::format_json(&item.content) {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .small_button(format!("{} Prettify", icons::BRACKETS_CURLY))
+                                        .on_hover_text("Copy formatted JSON with indentation")
+                                        .clicked()
+                                    {
+                                        action = ItemAction::CopyTransformed {
+                                            content: pretty,
+                                            toast: format!(
+                                                "{} Copied formatted JSON to clipboard!",
+                                                icons::CHECK
+                                            ),
+                                            is_secret: item.kind == ItemKind::Secret,
+                                        };
+                                    }
+                                },
+                            );
+                        }
+                    }
+                });
+
+                ui.add_space(3.0);
+                let sep_color = if is_dark {
+                    egui::Color32::from_rgb(38, 40, 48)
+                } else {
+                    egui::Color32::from_rgb(228, 230, 236)
+                };
+                let (sep_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 1.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect_filled(sep_rect, 0, sep_color);
+                ui.add_space(4.0);
+
                 let preview: String = item
                     .content
                     .lines()
@@ -1041,11 +1292,36 @@ impl ClipboardApp {
             );
         }
 
-        // Crisp border around entire swatch
+        // Tactile enameled tile sheen on top 38%
+        if rect.height() >= 12.0 && rect.width() >= 12.0 {
+            let sheen_h = (rect.height() * 0.38).round().max(3.0);
+            let sheen_rect = egui::Rect::from_min_size(
+                rect.min + egui::vec2(1.0, 1.0),
+                egui::vec2(rect.width() - 2.0, sheen_h),
+            );
+            painter.rect_filled(
+                sheen_rect,
+                egui::CornerRadius {
+                    nw: r_radius.saturating_sub(1),
+                    ne: r_radius.saturating_sub(1),
+                    sw: 0,
+                    se: 0,
+                },
+                egui::Color32::from_white_alpha(32),
+            );
+        }
+
+        // Crisp double border: dark inner shadow stroke + soft white outer highlight
         painter.rect_stroke(
             rect,
             r_radius,
-            egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(50)),
+            egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(35)),
+            egui::StrokeKind::Inside,
+        );
+        painter.rect_stroke(
+            rect,
+            r_radius,
+            egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(45)),
             egui::StrokeKind::Inside,
         );
     }
@@ -1068,8 +1344,8 @@ impl ClipboardApp {
     }
 
     fn render_color_swatch(ui: &mut egui::Ui, parsed: crate::color::ParsedColor) -> egui::Response {
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(44.0, 32.0), egui::Sense::click());
-        Self::paint_color_swatch(ui.painter(), rect, parsed, 4);
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(48.0, 34.0), egui::Sense::click());
+        Self::paint_color_swatch(ui.painter(), rect, parsed, 6);
         response.on_hover_ui(|ui| {
             Self::render_color_tooltip(ui, parsed);
         })
@@ -1241,29 +1517,98 @@ impl ClipboardApp {
     }
 
     fn render_url_content(ui: &mut egui::Ui, content: &str, is_dark: bool) -> ItemAction {
-        let preview = Self::format_display_preview(content, 180);
-        let link_color = crate::theme::link_color(is_dark);
-
-        let label = ui.add(
-            egui::Label::new(
-                egui::RichText::new(preview)
-                    .size(12.0)
-                    .line_height(Some(16.0))
-                    .color(link_color)
-                    .underline(),
-            )
-            .wrap()
-            .sense(egui::Sense::click()),
+        let trimmed = content.trim();
+        let (host, path_display) = url::Url::parse(trimmed).map_or_else(
+            |_| ("link".to_string(), trimmed.to_string()),
+            |parsed_url| {
+                let h = parsed_url.host_str().unwrap_or("link").to_string();
+                let mut p = parsed_url.path().to_string();
+                if let Some(q) = parsed_url.query() {
+                    p.push('?');
+                    p.push_str(q);
+                }
+                if p == "/" {
+                    p = String::new();
+                }
+                (h, p)
+            },
         );
 
-        if label.clicked() {
-            ItemAction::CopyText(content.to_string())
+        let mut action = ItemAction::None;
+        let link_color = crate::theme::link_color(is_dark);
+
+        let bg_fill = if is_dark {
+            egui::Color32::from_rgba_premultiplied(20, 35, 60, 60)
         } else {
-            if label.hovered() {
-                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-            }
-            ItemAction::None
-        }
+            egui::Color32::from_rgba_premultiplied(235, 243, 255, 180)
+        };
+        let stroke = egui::Stroke::new(
+            1.0,
+            if is_dark {
+                egui::Color32::from_rgba_premultiplied(40, 70, 120, 70)
+            } else {
+                egui::Color32::from_rgba_premultiplied(180, 210, 250, 180)
+            },
+        );
+
+        egui::Frame::new()
+            .fill(bg_fill)
+            .stroke(stroke)
+            .corner_radius(6)
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(icons::outlined(icons::LINK).size(13.0).color(link_color));
+
+                    let host_label = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&host)
+                                .size(12.5)
+                                .strong()
+                                .color(link_color),
+                        )
+                        .sense(egui::Sense::click()),
+                    );
+                    if host_label.clicked() {
+                        action = ItemAction::CopyText(content.to_string());
+                    } else if host_label.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button(format!("{} Open", icons::ARROW_SQUARE_OUT))
+                            .on_hover_text("Open link in default browser")
+                            .clicked()
+                        {
+                            action = ItemAction::OpenBrowser(trimmed.to_string());
+                        }
+                    });
+                });
+
+                if !path_display.is_empty() {
+                    ui.add_space(2.0);
+                    let display_path = Self::format_display_preview(&path_display, 120);
+                    let path_label = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(display_path)
+                                .size(11.0)
+                                .line_height(Some(15.0))
+                                .color(crate::theme::text_secondary(is_dark)),
+                        )
+                        .wrap()
+                        .sense(egui::Sense::click()),
+                    );
+
+                    if path_label.clicked() {
+                        action = ItemAction::CopyText(content.to_string());
+                    } else if path_label.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
+                }
+            });
+
+        action
     }
 
     fn render_text_content(ui: &mut egui::Ui, content: &str, is_dark: bool) -> ItemAction {
