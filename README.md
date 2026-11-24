@@ -125,9 +125,17 @@ sudo dnf install libX11-devel libxcb-devel dbus-devel openssl-devel pkgconf-pkg-
   $env:OPENSSL_INCLUDE_DIR = "$env:OPENSSL_DIR\include"
   cargo build
   ```
-  Use the `MD` import library — Rust's MSVC target links the dynamic CRT. Do not flatten the `MD`/`MT` lib directories into one. (Alternatively, use vcpkg and set these variables to its installed directories.)
+  Use the `MD` import library — Rust's MSVC target links the dynamic CRT. Do not flatten the `MD`/`MT` lib directories into one.
 
   `bundled-sqlcipher` links `libcrypto` **dynamically** on Windows, so ship the matching `libcrypto-3-x64.dll` next to the executable (the release workflow pins and stages it). `OPENSSL_STATIC=1` is an `openssl-sys` setting and has **no effect** with this feature set — do not remove the DLL line from `scripts/windows/setup.iss`, or the exe will fail at startup with a missing-DLL error.
+
+  (Alternatively, use `winget install -e --id ShiningLight.OpenSSL.Dev`, `vcpkg`, or fetch a portable OpenSSL ZIP via CMake `FetchContent`:
+  ```powershell
+  cmake -S scripts\windows\openssl -B build-openssl
+  # Use the OPENSSL_DIR and PATH printed by CMake, then run:
+  cargo build
+  ```
+  If needed, pass `-DOPENSSL_ZIP_URL=<url>` to use a different version or internal mirror.)
 
 ---
 

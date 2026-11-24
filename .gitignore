@@ -6,3 +6,4 @@ data/
 sonar-results/
 .scannerwork/
 lcov.info
+build-openssl/
