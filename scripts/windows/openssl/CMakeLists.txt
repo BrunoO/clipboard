@@ -36,10 +36,16 @@ if(OPENSSL_MODE STREQUAL "source")
         set(_openssl_target "VC-WIN32")
     endif()
 
+    set(RESOLVED_OPENSSL_DIR "${CMAKE_BINARY_DIR}/openssl-install")
+    file(MAKE_DIRECTORY "${RESOLVED_OPENSSL_DIR}")
+    file(TO_NATIVE_PATH "${RESOLVED_OPENSSL_DIR}" NATIVE_OPENSSL_DIR)
+    file(TO_NATIVE_PATH "${RESOLVED_OPENSSL_DIR}/ssl" NATIVE_OPENSSL_SSL_DIR)
+    file(TO_NATIVE_PATH "${RESOLVED_OPENSSL_DIR}/bin" NATIVE_OPENSSL_BIN_DIR)
+
     set(_configure_args
         "${_openssl_target}"
-        "--prefix=${CMAKE_BINARY_DIR}/openssl-install"
-        "--openssldir=${CMAKE_BINARY_DIR}/openssl-install/ssl"
+        "--prefix=${NATIVE_OPENSSL_DIR}"
+        "--openssldir=${NATIVE_OPENSSL_SSL_DIR}"
         no-apps
         no-docs
         no-tests
@@ -56,8 +62,6 @@ if(OPENSSL_MODE STREQUAL "source")
         list(APPEND _configure_args no-asm)
     endif()
 
-    set(RESOLVED_OPENSSL_DIR "${CMAKE_BINARY_DIR}/openssl-install")
-
     ExternalProject_Add(
         openssl_libcrypto
         URL "${OPENSSL_SOURCE_URL}"
@@ -65,11 +69,8 @@ if(OPENSSL_MODE STREQUAL "source")
         BUILD_IN_SOURCE 1
         CONFIGURE_COMMAND "${PERL_EXECUTABLE}" Configure ${_configure_args}
         BUILD_COMMAND nmake build_libs
-        INSTALL_COMMAND nmake install_dev
+        INSTALL_COMMAND nmake install_sw
     )
-
-    file(TO_NATIVE_PATH "${RESOLVED_OPENSSL_DIR}" NATIVE_OPENSSL_DIR)
-    file(TO_NATIVE_PATH "${RESOLVED_OPENSSL_DIR}/bin" NATIVE_OPENSSL_BIN_DIR)
 
     message(STATUS "Configured OpenSSL (source -> libcrypto only).")
     message(STATUS "Run from an x64 Native Tools Command Prompt for VS:")
