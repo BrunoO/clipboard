@@ -129,13 +129,19 @@ sudo dnf install libX11-devel libxcb-devel dbus-devel openssl-devel pkgconf-pkg-
 
   `bundled-sqlcipher` links `libcrypto` **dynamically** on Windows, so ship the matching `libcrypto-3-x64.dll` next to the executable (the release workflow pins and stages it). `OPENSSL_STATIC=1` is an `openssl-sys` setting and has **no effect** with this feature set — do not remove the DLL line from `scripts/windows/setup.iss`, or the exe will fail at startup with a missing-DLL error.
 
-  (Alternatively, use `winget install -e --id ShiningLight.OpenSSL.Dev`, `vcpkg`, or fetch a portable OpenSSL ZIP via CMake `FetchContent`:
+  (Alternatively, use `winget install -e --id ShiningLight.OpenSSL.Dev`, `vcpkg`, or fetch/build `libcrypto` via CMake:
   ```powershell
+  # Prebuilt portable ZIP via FetchContent (no Perl/NASM):
   cmake -S scripts\windows\openssl -B build-openssl
+
+  # Or build only libcrypto from OpenSSL sources via ExternalProject_Add (requires Perl + VS Native Tools):
+  cmake -S scripts\windows\openssl -B build-openssl -DOPENSSL_MODE=source
+  cmake --build build-openssl
+
   # Use the OPENSSL_DIR and PATH printed by CMake, then run:
   cargo build
   ```
-  If needed, pass `-DOPENSSL_ZIP_URL=<url>` to use a different version or internal mirror.)
+  Pass `-DOPENSSL_ZIP_URL=<url>` (prebuilt) or `-DOPENSSL_SOURCE_URL=<url>` (source) to override the download URL.)
 
 ---
 
