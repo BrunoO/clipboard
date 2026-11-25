@@ -54,9 +54,16 @@ jobs:
           "VERSION=$version" >> $env:GITHUB_ENV
           "TAG_NAME=$tag" >> $env:GITHUB_ENV
 
-      - name: Install Windows OpenSSL dependencies
+      - name: Configure native Perl for vendored OpenSSL
         shell: pwsh
-        run: .\scripts\windows\setup-openssl-ci.ps1
+        run: |
+          $strawberryPerl = "C:\Strawberry\perl\bin\perl.exe"
+          if (Test-Path $strawberryPerl -PathType Leaf) {
+            "OPENSSL_SRC_PERL=$strawberryPerl" >> $env:GITHUB_ENV
+            Write-Host "Using Strawberry Perl for openssl-src: $strawberryPerl"
+          } else {
+            Write-Host "Strawberry Perl not found at $strawberryPerl; using default perl on PATH"
+          }
 
       - name: Install Inno Setup
         run: |
@@ -69,7 +76,7 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
-      - name: Verify executable and stage pinned OpenSSL DLL
+      - name: Verify executable and static OpenSSL linkage
         shell: pwsh
         run: |
           $exePath = "target\release\CipherClipboard.exe"
@@ -81,25 +88,11 @@ jobs:
             throw "$exePath is missing embedded Windows icon/version resources"
           }
           Write-Host "Embedded version resource: $($versionInfo.ProductName) $($versionInfo.ProductVersion)"
-          $dllName = $env:OPENSSL_RUNTIME_DLL
-          if ([string]::IsNullOrWhiteSpace($env:OPENSSL_DIR) -or [string]::IsNullOrWhiteSpace($dllName)) {
-            throw "OPENSSL_DIR / OPENSSL_RUNTIME_DLL are not set"
-          }
-          $matches = @(Get-ChildItem -Path $env:OPENSSL_DIR -Filter $dllName -File -Recurse)
-          if ($matches.Count -eq 0) {
-            throw "$dllName was not found under OPENSSL_DIR ($env:OPENSSL_DIR)"
-          }
-          $hashes = @($matches | ForEach-Object { (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash } | Select-Object -Unique)
-          if ($hashes.Count -gt 1) {
-            throw "Multiple different $dllName files under OPENSSL_DIR; refusing to guess which one matches the import library"
-          }
-          Copy-Item $matches[0].FullName -Destination "target\release\$dllName" -Force
           $exeText = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes((Resolve-Path $exePath).Path))
-          if (-not $exeText.Contains($dllName)) {
-            throw "$exePath does not import $dllName; staged DLL does not match the linked import library"
+          if ($exeText -match 'libcrypto-\d+-x64\.dll') {
+            throw "$exePath unexpectedly imports an external OpenSSL DLL ($($matches[0])) instead of linking vendored OpenSSL statically"
           }
-          Write-Host "Staged $dllName (SHA256 $($hashes[0])) from $($matches[0].FullName)"
-          Write-Host "CipherClipboard.exe built successfully."
+          Write-Host "CipherClipboard.exe built cleanly with statically linked vendored OpenSSL."
 
       - name: Download Visual C++ redistributable
         shell: pwsh
@@ -119,7 +112,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "dist"
-          & iscc.exe /DMyAppVersion="$env:VERSION" /DOpenSslDllName="$env:OPENSSL_RUNTIME_DLL" scripts\windows\setup.iss
+          & iscc.exe /DMyAppVersion="$env:VERSION" scripts\windows\setup.iss
 
       - name: Package portable ZIP archive
         shell: pwsh
@@ -127,7 +120,6 @@ jobs:
           $portableDir = "dist\CipherClipboard-$env:VERSION-windows-x64-portable"
           New-Item -ItemType Directory -Force -Path $portableDir
           Copy-Item "target\release\CipherClipboard.exe" -Destination $portableDir
-          Copy-Item "target\release\$env:OPENSSL_RUNTIME_DLL" -Destination $portableDir
           Copy-Item "target\release\vc_redist.x64.exe" -Destination $portableDir
           Copy-Item "assets\icon.ico" -Destination $portableDir
           Copy-Item "assets\icon.png" -Destination $portableDir

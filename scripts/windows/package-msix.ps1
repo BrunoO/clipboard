@@ -54,12 +54,8 @@ if ([string]::IsNullOrWhiteSpace($PublisherDisplayName)) {
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($OpenSslDllName)) {
-    if (-not [string]::IsNullOrWhiteSpace($env:OPENSSL_RUNTIME_DLL)) {
-        $OpenSslDllName = $env:OPENSSL_RUNTIME_DLL
-    } else {
-        $OpenSslDllName = "libcrypto-3-x64.dll"
-    }
+if ([string]::IsNullOrWhiteSpace($OpenSslDllName) -and -not [string]::IsNullOrWhiteSpace($env:OPENSSL_RUNTIME_DLL)) {
+    $OpenSslDllName = $env:OPENSSL_RUNTIME_DLL
 }
 
 Write-Host "================ MSIX Packaging Configuration ================"
@@ -67,7 +63,11 @@ Write-Host "Package Version:        $msixVersion (from $rawVersion)"
 Write-Host "Package Name:           $PackageName"
 Write-Host "Publisher:              $Publisher"
 Write-Host "Publisher Display Name: $PublisherDisplayName"
-Write-Host "OpenSSL DLL:            $OpenSslDllName"
+if (-not [string]::IsNullOrWhiteSpace($OpenSslDllName)) {
+    Write-Host "OpenSSL DLL:            $OpenSslDllName"
+} else {
+    Write-Host "OpenSSL DLL:            <vendored statically>"
+}
 Write-Host "==============================================================="
 
 # 2. Prepare staging directory
@@ -77,19 +77,21 @@ if (Test-Path $stageDir) {
 }
 New-Item -ItemType Directory -Force -Path "$stageDir\Assets" | Out-Null
 
-# 3. Stage executable and OpenSSL DLL
+# 3. Stage executable and optional external OpenSSL DLL
 $exeSource = "target\release\CipherClipboard.exe"
 if (-not (Test-Path $exeSource)) {
     throw "Executable not found at $exeSource. Run 'cargo build --release' first."
 }
 Copy-Item $exeSource -Destination $stageDir
 
-$dllSource = "target\release\$OpenSslDllName"
-if (Test-Path $dllSource) {
-    Copy-Item $dllSource -Destination $stageDir
-    Write-Host "Staged OpenSSL runtime DLL: $OpenSslDllName"
-} else {
-    Write-Warning "OpenSSL runtime DLL not found at $dllSource."
+if (-not [string]::IsNullOrWhiteSpace($OpenSslDllName)) {
+    $dllSource = "target\release\$OpenSslDllName"
+    if (Test-Path $dllSource) {
+        Copy-Item $dllSource -Destination $stageDir
+        Write-Host "Staged OpenSSL runtime DLL: $OpenSslDllName"
+    } else {
+        Write-Warning "OpenSSL runtime DLL not found at $dllSource."
+    }
 }
 
 # 4. Stage VC++ runtime DLLs for self-contained reliability

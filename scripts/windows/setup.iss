@@ -9,10 +9,6 @@
 #define MyAppURL "https://github.com/BrunoO/clipboard"
 #define MyAppExeName "CipherClipboard.exe"
 #define VCRedistName "vc_redist.x64.exe"
-; Pinned by the release workflow; matches the dylib name in libsqlite3-sys.
-#ifndef OpenSslDllName
-  #define OpenSslDllName "libcrypto-3-x64.dll"
-#endif
 
 #ifndef SourceExeDir
   #if FileExists("..\..\target\x86_64-pc-windows-msvc\release\" + MyAppExeName)
@@ -69,7 +65,6 @@ Source: "{#SourceExeDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversio
 ; Staged by the release workflow. Skipped for local dev builds, which already
 ; have the VC++ runtime from Visual Studio Build Tools.
 Source: "{#SourceExeDir}\{#VCRedistName}"; DestDir: "{tmp}"; Flags: deleteafterinstall skipifsourcedoesntexist
-Source: "{#SourceExeDir}\{#OpenSslDllName}"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\..\assets\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\assets\icon.png"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion

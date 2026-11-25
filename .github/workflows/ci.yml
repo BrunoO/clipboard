@@ -54,10 +54,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxcb1-dev libdbus-1-dev libssl-dev pkg-config
 
-      - name: Install Windows OpenSSL dependencies
+      - name: Configure native Perl for vendored OpenSSL (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\scripts\windows\setup-openssl-ci.ps1
+        run: |
+          $strawberryPerl = "C:\Strawberry\perl\bin\perl.exe"
+          if (Test-Path $strawberryPerl -PathType Leaf) {
+            "OPENSSL_SRC_PERL=$strawberryPerl" >> $env:GITHUB_ENV
+            Write-Host "Using Strawberry Perl for openssl-src: $strawberryPerl"
+          } else {
+            Write-Host "Strawberry Perl not found at $strawberryPerl; using default perl on PATH"
+          }
 
       - name: Set up Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2

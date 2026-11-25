@@ -54,6 +54,6 @@ Distilled from the CipherClipboard security & cross-platform hardening reviews. 
 - **Never silently skip security/quality gates.** Remove `continue-on-error` on platform test jobs, run `cargo clippy --all-targets --all-features -- -D warnings` on **all** target OSes (Linux, macOS, Windows), and fail loudly if `SONAR_TOKEN` is missing on `push` to `main`.
 - **Verify third-party release dependencies end-to-end:**
   - Verify Microsoft Authenticode signatures on downloaded `vc_redist.x64.exe`.
-  - Derive the exact linked OpenSSL runtime DLL name (`libcrypto-*-x64.dll`) from `libcrypto.lib` and assert the compiled `.exe` actually imports the staged DLL.
+  - Verify Windows `CipherClipboard.exe` statically links vendored OpenSSL (`bundled-sqlcipher-vendored-openssl`) without importing an external `libcrypto-*-x64.dll`.
   - Publish SHA-256 checksums (using `--` before globs in shell scripts) and SLSA build provenance attestations (`actions/attest-build-provenance`).
 - **Enforce `cargo-deny`** with `wildcards = "deny"`, `unknown-registry = "deny"`, and `unknown-git = "deny"`, and avoid static secret literals in unit tests (construct test fixtures dynamically so secret scanners don't mask real leaks behind false positives).

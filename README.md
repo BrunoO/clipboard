@@ -114,34 +114,8 @@ sudo dnf install libX11-devel libxcb-devel dbus-devel openssl-devel pkgconf-pkg-
 
 ### 3. Windows
 * Install the **C++ Build Tools** via the Visual Studio Installer (needed for MSVC C compiler for SQLCipher).
-* Install **OpenSSL** (required by the bundled SQLCipher build, which links against `libcrypto`):
-  ```powershell
-  choco install openssl
-  ```
-  Then point the build at the Chocolatey install (CI uses `scripts/windows/setup-openssl-ci.ps1` to derive the same values):
-  ```powershell
-  $env:OPENSSL_DIR = "C:\Program Files\OpenSSL-Win64"
-  $env:OPENSSL_LIB_DIR = "$env:OPENSSL_DIR\lib\VC\x64\MD"
-  $env:OPENSSL_INCLUDE_DIR = "$env:OPENSSL_DIR\include"
-  cargo build
-  ```
-  Use the `MD` import library — Rust's MSVC target links the dynamic CRT. Do not flatten the `MD`/`MT` lib directories into one.
-
-  `bundled-sqlcipher` links `libcrypto` **dynamically** on Windows, so ship the matching `libcrypto-3-x64.dll` next to the executable (the release workflow pins and stages it). `OPENSSL_STATIC=1` is an `openssl-sys` setting and has **no effect** with this feature set — do not remove the DLL line from `scripts/windows/setup.iss`, or the exe will fail at startup with a missing-DLL error.
-
-  (Alternatively, use `winget install -e --id ShiningLight.OpenSSL.Dev`, `vcpkg`, or fetch/build `libcrypto` via CMake:
-  ```powershell
-  # Prebuilt portable ZIP via FetchContent (no Perl/NASM):
-  cmake -S scripts\windows\openssl -B build-openssl
-
-  # Or build only libcrypto from OpenSSL sources via ExternalProject_Add (requires Perl + VS Native Tools):
-  cmake -S scripts\windows\openssl -B build-openssl -DOPENSSL_MODE=source
-  cmake --build build-openssl
-
-  # Use the OPENSSL_DIR and PATH printed by CMake, then run:
-  cargo build
-  ```
-  Pass `-DOPENSSL_ZIP_URL=<url>` (prebuilt) or `-DOPENSSL_SOURCE_URL=<url>` (source) to override the download URL.)
+* Install **Strawberry Perl** (`winget install StrawberryPerl.StrawberryPerl`), which Windows uses to build the vendored OpenSSL (`bundled-sqlcipher-vendored-openssl`) statically into `CipherClipboard.exe` — no external OpenSSL installation or runtime `libcrypto-*.dll` is needed.
+  *(If you also have Git Bash or MSYS2 Perl on `PATH`, set `$env:OPENSSL_SRC_PERL = "C:\Strawberry\perl\bin\perl.exe"` so OpenSSL Configure uses native Windows Perl.)*
 
 ---
 
