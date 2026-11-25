@@ -549,6 +549,10 @@ unsafe fn show_tray_popup_menu(hwnd: HWND, wparam: WPARAM, using_v4: bool) {
         }
     };
 
+    // Preserve the prior non-CipherClipboard foreground window before claiming foreground
+    // for the popup menu, so tray-initiated Show + auto-paste can restore focus.
+    capture_frontmost();
+
     // Claim foreground cleanly without `AttachThreadInput` against `explorer.exe`'s XAML
     // overflow thread or showing/positioning an invisible layered window under the cursor.
     let fg_ok = SetForegroundWindow(hwnd) != 0;
@@ -687,6 +691,7 @@ unsafe extern "system" fn tray_wnd_proc(
                 && (event == NIN_SELECT || event == NIN_KEYSELECT || event == WM_LBUTTONDBLCLK))
                 || (!using_v4 && (event == WM_LBUTTONUP || event == WM_LBUTTONDBLCLK));
             if show_window {
+                capture_frontmost();
                 let cached_hwnd = cached_main_window();
                 log_message(
                     "INFO",
@@ -869,6 +874,10 @@ impl WindowsTray {
         tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
         ctx: eframe::egui::Context,
     ) -> Result<Self, String> {
+        // Seed `MAIN_HWND` on the UI thread while the root viewport HWND already exists,
+        // so the `windows-tray` thread has a warm cache from its very first event.
+        let _ = find_main_window();
+
         let rgba_owned = rgba.to_vec();
         let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<isize, String>>(1);
         let handle = std::thread::Builder::new()
