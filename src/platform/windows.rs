@@ -41,20 +41,20 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_V,
 };
 use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
-    NINF_KEY, NIN_SELECT, NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICON_VERSION_4,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE,
+    NIM_SETVERSION, NINF_KEY, NIN_SELECT, NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICON_VERSION_4,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BringWindowToTop, ChangeWindowMessageFilterEx, CreateIcon, CreatePopupMenu,
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, EnumWindows,
-    GetCursorPos, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindow, MessageBoxW, PeekMessageW, PostMessageW, RegisterClassW, RegisterWindowMessageW,
-    SetForegroundWindow, SetLayeredWindowAttributes, SetWindowPos, ShowWindow, TrackPopupMenuEx,
-    HICON, HMENU, HWND_TOPMOST, LWA_ALPHA, MB_ICONERROR, MB_OK, MF_SEPARATOR, MF_STRING, MSG,
-    MSGFLT_ALLOW, PM_NOREMOVE, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CONTEXTMENU,
-    WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NCDESTROY, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
+    EnumWindows, GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindow, MessageBoxW, PeekMessageW, PostMessageW,
+    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, ShowWindow,
+    TrackPopupMenuEx, TranslateMessage, HICON, HMENU, MB_ICONERROR, MB_OK, MF_SEPARATOR, MF_STRING,
+    MSG, MSGFLT_ALLOW, PM_NOREMOVE, SM_MENUDROPALIGNMENT, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WM_APP,
+    WM_CANCELMODE, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+    WM_NCDESTROY, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 use crate::logging::log_message;
@@ -223,6 +223,7 @@ pub(super) fn is_active() -> bool {
 }
 
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
+const WM_SHOW_TRAY_MENU: u32 = WM_APP + 2;
 const TRAY_ICON_ID: u32 = 1;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 const TRAY_CMD_SHOW: i32 = 1;
@@ -241,6 +242,7 @@ struct TrayState {
 
 static TRAY_STATE: Mutex<Option<TrayState>> = Mutex::new(None);
 static TRAY_ICON_LIVE: AtomicBool = AtomicBool::new(false);
+static TRAY_MENU_QUEUED: AtomicBool = AtomicBool::new(false);
 static TRAY_MENU_OPEN: AtomicBool = AtomicBool::new(false);
 static TRAY_TASKBAR_CREATED_MSG: AtomicU32 = AtomicU32::new(0);
 
@@ -312,10 +314,10 @@ fn create_tray_window() -> Result<HWND, String> {
     let window_title = wide_null("CipherClipboardTrayWindow");
 
     // SAFETY: `GetModuleHandleW(null)` returns this process's HMODULE; `class_name` and
-    // `window_title` live across `RegisterClassW` and `CreateWindowExW`. The window uses
-    // `WS_EX_TOOLWINDOW | WS_EX_LAYERED` (without `WS_EX_NOACTIVATE` or `WS_EX_TRANSPARENT`)
-    // and 0 alpha so it can temporarily become visible/foreground during `TrackPopupMenuEx`
-    // without appearing visually or entering Taskbar/Alt+Tab.
+    // `window_title` live across `RegisterClassW` and `CreateWindowExW`. Uses an unshown
+    // `0x0` `WS_EX_TOOLWINDOW | WS_POPUP` top-level window (never `ShowWindow` /
+    // `WS_EX_LAYERED` / `SetWindowPos`) so it receives `TaskbarCreated` broadcasts and
+    // hosts `TrackPopupMenuEx` without stealing pointer hits or Taskbar/Alt+Tab slots.
     unsafe {
         let hinstance = GetModuleHandleW(std::ptr::null());
         let wc = WNDCLASSW {
@@ -339,14 +341,14 @@ fn create_tray_window() -> Result<HWND, String> {
         }
 
         let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+            WS_EX_TOOLWINDOW,
             class_name.as_ptr(),
             window_title.as_ptr(),
             WS_POPUP,
             0,
             0,
-            1,
-            1,
+            0,
+            0,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,
@@ -358,7 +360,6 @@ fn create_tray_window() -> Result<HWND, String> {
                 GetLastError()
             ));
         }
-        let _ = SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
         Ok(hwnd)
     }
 }
@@ -383,9 +384,9 @@ fn build_notify_icon_data(hwnd: HWND, hicon: HICON, flags: u32) -> NOTIFYICONDAT
 }
 
 /// # Safety
-/// `hwnd` and `hicon` must be live handles owned by this process.
+/// `hwnd` and `hicon` must be live handles owned by this thread.
 unsafe fn register_notify_icon(hwnd: HWND, hicon: HICON) -> (bool, bool) {
-    let nid = build_notify_icon_data(hwnd, hicon, NIF_MESSAGE | NIF_ICON | NIF_TIP);
+    let nid = build_notify_icon_data(hwnd, hicon, NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP);
     if Shell_NotifyIconW(NIM_ADD, &raw const nid) == 0 {
         return (false, false);
     }
@@ -431,45 +432,21 @@ fn build_tray_popup_menu() -> Result<HMENU, String> {
     }
 }
 
-/// # Safety
-/// Must be called on the UI thread owning `hwnd` after `hwnd` is visible (`SWP_SHOWWINDOW`).
-unsafe fn acquire_foreground_for_tray_menu(hwnd: HWND) {
-    if SetForegroundWindow(hwnd) != 0 {
-        return;
-    }
-
-    let cur_thread = GetCurrentThreadId();
-    let fg_hwnd = GetForegroundWindow();
-    let fg_thread = if fg_hwnd.is_null() {
-        0
+fn decode_v4_point(wparam: WPARAM) -> Option<POINT> {
+    let low = u16::try_from(wparam & 0xFFFF).ok()?;
+    let high = u16::try_from((wparam >> 16) & 0xFFFF).ok()?;
+    let x = i32::from(i16::from_ne_bytes(low.to_ne_bytes()));
+    let y = i32::from(i16::from_ne_bytes(high.to_ne_bytes()));
+    if (x == 0 && y == 0) || (x == -1 && y == -1) {
+        None
     } else {
-        GetWindowThreadProcessId(fg_hwnd, std::ptr::null_mut())
-    };
-    let attached = fg_thread != 0
-        && fg_thread != cur_thread
-        && AttachThreadInput(cur_thread, fg_thread, 1) != 0;
-
-    BringWindowToTop(hwnd);
-    let activated = SetForegroundWindow(hwnd) != 0;
-
-    if attached {
-        let _ = AttachThreadInput(cur_thread, fg_thread, 0);
-    }
-
-    if !activated {
-        log_message(
-            "WARN",
-            &format!(
-                "SetForegroundWindow failed for tray menu (attached={attached}, err={})",
-                GetLastError()
-            ),
-        );
+        Some(POINT { x, y })
     }
 }
 
 /// # Safety
-/// Must run on the UI thread owning `hwnd` synchronously from tray input handling.
-unsafe fn show_tray_popup_menu(hwnd: HWND) {
+/// Must run on the `windows-tray` thread owning `hwnd` outside `WM_TRAY_CALLBACK`.
+unsafe fn show_tray_popup_menu(hwnd: HWND, wparam: WPARAM, using_v4: bool) {
     if TRAY_MENU_OPEN
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -490,15 +467,17 @@ unsafe fn show_tray_popup_menu(hwnd: HWND) {
 
     let mut pt = POINT { x: 0, y: 0 };
     if GetCursorPos(&raw mut pt) == 0 {
-        log_message(
-            "WARN",
-            &format!("GetCursorPos failed for tray menu (err={})", GetLastError()),
-        );
-        return;
+        let cursor_err = GetLastError();
+        if let Some(v4_pt) = using_v4.then(|| decode_v4_point(wparam)).flatten() {
+            pt = v4_pt;
+        } else {
+            log_message(
+                "WARN",
+                &format!("GetCursorPos failed for tray menu (err={cursor_err})"),
+            );
+            return;
+        }
     }
-
-    // Preserve the prior non-CipherClipboard foreground window before claiming focus.
-    capture_frontmost();
 
     let hmenu = match build_tray_popup_menu() {
         Ok(hmenu) => hmenu,
@@ -508,24 +487,46 @@ unsafe fn show_tray_popup_menu(hwnd: HWND) {
         }
     };
 
-    // Place the 0-alpha 1x1 layered owner window at the click point, topmost (above Windows 11
-    // taskbar / overflow flyout), and visible so `SetForegroundWindow` and outside clicks work.
-    let _ = SetWindowPos(hwnd, HWND_TOPMOST, pt.x, pt.y, 1, 1, SWP_SHOWWINDOW);
-    acquire_foreground_for_tray_menu(hwnd);
+    // Claim foreground cleanly without `AttachThreadInput` against `explorer.exe`'s XAML
+    // overflow thread or showing/positioning an invisible layered window under the cursor.
+    let fg_ok = SetForegroundWindow(hwnd) != 0;
+    if !fg_ok {
+        log_message(
+            "WARN",
+            &format!(
+                "SetForegroundWindow returned 0 for tray menu (err={})",
+                GetLastError()
+            ),
+        );
+    }
+
+    let align_flag = if GetSystemMetrics(SM_MENUDROPALIGNMENT) != 0 {
+        TPM_RIGHTALIGN
+    } else {
+        TPM_LEFTALIGN
+    };
 
     let selected = TrackPopupMenuEx(
         hmenu,
-        TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+        align_flag | TPM_BOTTOMALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
         pt.x,
         pt.y,
         hwnd,
         std::ptr::null(),
     );
+    let menu_err = if selected == 0 { GetLastError() } else { 0 };
 
     let _ = DestroyMenu(hmenu);
-    let _ = ShowWindow(hwnd, SW_HIDE);
     // Microsoft KB135788: force task-switch completion so subsequent tray clicks behave cleanly.
     let _ = PostMessageW(hwnd, WM_NULL, 0, 0);
+
+    log_message(
+        "INFO",
+        &format!(
+            "Tray popup menu closed (fg_ok={fg_ok}, using_v4={using_v4}, x={}, y={}, selected={selected}, err={menu_err})",
+            pt.x, pt.y
+        ),
+    );
 
     let action = match selected {
         TRAY_CMD_SHOW => Some(crate::tray::TrayAction::Show),
@@ -540,7 +541,7 @@ unsafe fn show_tray_popup_menu(hwnd: HWND) {
 }
 
 /// # Safety
-/// Invoked by Win32 message dispatch for `WindowsTray` helper windows.
+/// Invoked by Win32 message dispatch on the `windows-tray` thread for `WindowsTray` helper windows.
 unsafe extern "system" fn tray_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -585,34 +586,196 @@ unsafe extern "system" fn tray_wnd_proc(
             let open_menu =
                 (using_v4 && event == WM_CONTEXTMENU) || (!using_v4 && event == WM_RBUTTONUP);
             if open_menu {
-                show_tray_popup_menu(hwnd);
+                // Defer `TrackPopupMenuEx` via `PostMessageW` so `WM_TRAY_CALLBACK` returns 0
+                // immediately to `explorer.exe` (preventing Windows 11 overflow flyout deadlocks).
+                if !TRAY_MENU_OPEN.load(Ordering::Acquire)
+                    && TRAY_MENU_QUEUED
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                    && PostMessageW(
+                        hwnd,
+                        WM_SHOW_TRAY_MENU,
+                        wparam,
+                        if using_v4 { 1 } else { 0 },
+                    ) == 0
+                {
+                    TRAY_MENU_QUEUED.store(false, Ordering::Release);
+                    log_message(
+                        "WARN",
+                        &format!(
+                            "PostMessageW(WM_SHOW_TRAY_MENU) failed (err={})",
+                            GetLastError()
+                        ),
+                    );
+                }
                 return 0;
             }
 
-            let show_window = (using_v4 && (event == NIN_SELECT || event == NIN_KEYSELECT))
+            let show_window = (using_v4
+                && (event == NIN_SELECT || event == NIN_KEYSELECT || event == WM_LBUTTONDBLCLK))
                 || (!using_v4 && (event == WM_LBUTTONUP || event == WM_LBUTTONDBLCLK));
             if show_window {
-                capture_frontmost();
                 let _ = tray_tx.send(crate::tray::TrayAction::Show);
                 ctx.request_repaint();
                 return 0;
             }
             0
         }
+        WM_SHOW_TRAY_MENU => {
+            TRAY_MENU_QUEUED.store(false, Ordering::Release);
+            show_tray_popup_menu(hwnd, wparam, lparam != 0);
+            0
+        }
+        WM_CLOSE => {
+            let _ = DestroyWindow(hwnd);
+            0
+        }
+        WM_DESTROY => {
+            TRAY_ICON_LIVE.store(false, Ordering::Release);
+            let nid = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
+            let _ = Shell_NotifyIconW(NIM_DELETE, &raw const nid);
+            PostQuitMessage(0);
+            0
+        }
         WM_NCDESTROY => {
             TRAY_ICON_LIVE.store(false, Ordering::Release);
             TRAY_MENU_OPEN.store(false, Ordering::Release);
+            TRAY_MENU_QUEUED.store(false, Ordering::Release);
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
-/// Native Win32 notification-area icon and context-menu host (`NOTIFYICON_VERSION_4`).
+fn run_tray_thread(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
+    ctx: eframe::egui::Context,
+    init_tx: &std::sync::mpsc::SyncSender<Result<isize, String>>,
+) {
+    let hicon = match create_tray_hicon(rgba, width, height) {
+        Ok(hicon) => hicon,
+        Err(err) => {
+            let _ = init_tx.send(Err(err));
+            return;
+        }
+    };
+
+    let hwnd = match create_tray_window() {
+        Ok(hwnd) => hwnd,
+        Err(err) => {
+            // SAFETY: `hicon` was created on this thread and is unused after failure.
+            unsafe {
+                let _ = DestroyIcon(hicon);
+            }
+            let _ = init_tx.send(Err(err));
+            return;
+        }
+    };
+
+    let taskbar_created_name = wide_null("TaskbarCreated");
+    // SAFETY: `taskbar_created_name` is null-terminated; `hwnd` is owned by this thread.
+    unsafe {
+        let taskbar_msg = RegisterWindowMessageW(taskbar_created_name.as_ptr());
+        if taskbar_msg != 0 {
+            TRAY_TASKBAR_CREATED_MSG.store(taskbar_msg, Ordering::Relaxed);
+            let _ =
+                ChangeWindowMessageFilterEx(hwnd, taskbar_msg, MSGFLT_ALLOW, std::ptr::null_mut());
+        }
+        let _ =
+            ChangeWindowMessageFilterEx(hwnd, WM_TRAY_CALLBACK, MSGFLT_ALLOW, std::ptr::null_mut());
+    }
+
+    *TRAY_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(TrayState {
+        tray_tx,
+        ctx,
+        hicon: hicon as isize,
+        using_v4: false,
+    });
+
+    let mut registered = false;
+    let mut using_v4 = false;
+    for attempt in 0..5 {
+        // SAFETY: `hwnd` and `hicon` are valid handles created on this thread.
+        let (ok, v4) = unsafe { register_notify_icon(hwnd, hicon) };
+        if ok {
+            registered = true;
+            using_v4 = v4;
+            break;
+        }
+        if attempt < 4 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    if !registered {
+        *TRAY_STATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        TRAY_ICON_LIVE.store(false, Ordering::Release);
+        // SAFETY: Cleans up thread-owned `hwnd` and `hicon` before signaling initialization error.
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+            let _ = DestroyIcon(hicon);
+        }
+        let _ = init_tx.send(Err(
+            "Shell_NotifyIconW(NIM_ADD) failed (Windows shell not ready)".to_string(),
+        ));
+        return;
+    }
+
+    if let Some(state) = TRAY_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
+        state.using_v4 = using_v4;
+    }
+    TRAY_ICON_LIVE.store(true, Ordering::Release);
+    log_message(
+        "INFO",
+        &format!("Windows tray icon registered on dedicated thread (using_v4={using_v4})"),
+    );
+
+    let _ = init_tx.send(Ok(hwnd as isize));
+
+    // SAFETY: Standard Win32 message pump for the tray helper window owned by this thread.
+    unsafe {
+        let mut msg = MSG::default();
+        while GetMessageW(&raw mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            let _ = TranslateMessage(&raw const msg);
+            let _ = DispatchMessageW(&raw const msg);
+        }
+    }
+
+    TRAY_ICON_LIVE.store(false, Ordering::Release);
+    TRAY_MENU_OPEN.store(false, Ordering::Release);
+    TRAY_MENU_QUEUED.store(false, Ordering::Release);
+    *TRAY_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+
+    // SAFETY: Ensures notification icon, helper HWND, and HICON are cleaned up on the owning thread.
+    unsafe {
+        let nid = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
+        let _ = Shell_NotifyIconW(NIM_DELETE, &raw const nid);
+        if IsWindow(hwnd) != 0 {
+            let _ = DestroyWindow(hwnd);
+        }
+        let _ = DestroyIcon(hicon);
+    }
+}
+
+/// Native Win32 notification-area icon and context-menu host (`NOTIFYICON_VERSION_4`)
+/// running on its own dedicated `windows-tray` message-pump thread.
 #[derive(Debug)]
 pub(crate) struct WindowsTray {
     hwnd: isize,
-    hicon: isize,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl WindowsTray {
@@ -623,71 +786,36 @@ impl WindowsTray {
         tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
         ctx: eframe::egui::Context,
     ) -> Result<Self, String> {
-        let hicon = create_tray_hicon(rgba, width, height)?;
-        let hwnd = match create_tray_window() {
-            Ok(hwnd) => hwnd,
-            Err(err) => {
-                // SAFETY: `hicon` was created above and is unused after failure.
-                unsafe {
-                    let _ = DestroyIcon(hicon);
+        let rgba_owned = rgba.to_vec();
+        let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<isize, String>>(1);
+        let handle = std::thread::Builder::new()
+            .name("windows-tray".to_string())
+            .spawn(move || {
+                run_tray_thread(&rgba_owned, width, height, tray_tx, ctx, &init_tx);
+            })
+            .map_err(|e| format!("Failed to spawn windows-tray thread: {e}"))?;
+
+        match init_rx.recv() {
+            Ok(Ok(hwnd)) => Ok(Self {
+                hwnd,
+                thread: Some(handle),
+            }),
+            Ok(Err(err)) => {
+                if handle.join().is_err() {
+                    log_message("ERROR", "windows-tray thread panicked during init failure");
                 }
-                return Err(err);
+                Err(err)
             }
-        };
-
-        let taskbar_created_name = wide_null("TaskbarCreated");
-        // SAFETY: `taskbar_created_name` is null-terminated; `hwnd` is a valid window owned by this thread.
-        unsafe {
-            let taskbar_msg = RegisterWindowMessageW(taskbar_created_name.as_ptr());
-            if taskbar_msg != 0 {
-                TRAY_TASKBAR_CREATED_MSG.store(taskbar_msg, Ordering::Relaxed);
-                let _ = ChangeWindowMessageFilterEx(
-                    hwnd,
-                    taskbar_msg,
-                    MSGFLT_ALLOW,
-                    std::ptr::null_mut(),
-                );
+            Err(_) => {
+                if handle.join().is_err() {
+                    log_message(
+                        "ERROR",
+                        "windows-tray thread panicked before startup completed",
+                    );
+                }
+                Err("Windows tray thread exited unexpectedly during initialization".to_string())
             }
         }
-
-        let mut registered = false;
-        let mut using_v4 = false;
-        for attempt in 0..5 {
-            // SAFETY: `hwnd` and `hicon` are valid handles created above.
-            let (ok, v4) = unsafe { register_notify_icon(hwnd, hicon) };
-            if ok {
-                registered = true;
-                using_v4 = v4;
-                break;
-            }
-            if attempt < 4 {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        }
-
-        if !registered {
-            // SAFETY: Clean up `hwnd` and `hicon` before returning initialization failure.
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-                let _ = DestroyIcon(hicon);
-            }
-            return Err("Shell_NotifyIconW(NIM_ADD) failed (Windows shell not ready)".to_string());
-        }
-
-        TRAY_ICON_LIVE.store(true, Ordering::Release);
-        *TRAY_STATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(TrayState {
-            tray_tx,
-            ctx,
-            hicon: hicon as isize,
-            using_v4,
-        });
-
-        Ok(Self {
-            hwnd: hwnd as isize,
-            hicon: hicon as isize,
-        })
     }
 
     pub(crate) fn is_live(&self) -> bool {
@@ -702,29 +830,32 @@ impl WindowsTray {
 impl Drop for WindowsTray {
     fn drop(&mut self) {
         TRAY_ICON_LIVE.store(false, Ordering::Release);
-        *TRAY_STATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 
         if self.hwnd != 0 {
-            // SAFETY: Removes the shell notification icon and destroys the owned helper HWND.
+            let hwnd = self.hwnd as HWND;
+            // SAFETY: `hwnd` is owned by `windows-tray`; cancel any active popup menu modal
+            // loop and post `WM_CLOSE` so `GetMessageW` exits cleanly for `join()`.
             unsafe {
-                let hwnd = self.hwnd as HWND;
-                let nid = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
-                let _ = Shell_NotifyIconW(NIM_DELETE, &raw const nid);
-                if IsWindow(hwnd) != 0 {
-                    let _ = DestroyWindow(hwnd);
+                let _ = PostMessageW(hwnd, WM_CANCELMODE, 0, 0);
+                if PostMessageW(hwnd, WM_CLOSE, 0, 0) == 0 {
+                    let nid = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
+                    let _ = Shell_NotifyIconW(NIM_DELETE, &raw const nid);
                 }
             }
             self.hwnd = 0;
         }
-        if self.hicon != 0 {
-            // SAFETY: Frees the `HICON` created by `CreateIcon` in `WindowsTray::new`.
-            unsafe {
-                let _ = DestroyIcon(self.hicon as HICON);
+
+        if let Some(handle) = self.thread.take() {
+            if handle.join().is_err() {
+                log_message("ERROR", "windows-tray thread panicked during shutdown");
             }
-            self.hicon = 0;
         }
+
+        TRAY_MENU_OPEN.store(false, Ordering::Release);
+        TRAY_MENU_QUEUED.store(false, Ordering::Release);
+        *TRAY_STATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
@@ -1592,10 +1723,28 @@ pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_tray_popup_menu, create_tray_hicon, create_tray_window, DestroyIcon, DestroyMenu,
-        DestroyWindow, IsWindow, WindowsTray, TRAY_ICON_LIVE, TRAY_STATE,
+        build_tray_popup_menu, create_tray_hicon, create_tray_window, decode_v4_point, DestroyIcon,
+        DestroyMenu, DestroyWindow, IsWindow, WindowsTray, TRAY_ICON_LIVE, TRAY_MENU_OPEN,
+        TRAY_MENU_QUEUED, TRAY_STATE,
     };
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn test_decode_v4_point_handles_signed_coordinates_and_sentinels() {
+        assert!(decode_v4_point(0).is_none());
+        let all_neg_one = (usize::from(u16::MAX) << 16) | usize::from(u16::MAX);
+        assert!(decode_v4_point(all_neg_one).is_none());
+
+        let positive = (1080usize << 16) | 1920usize;
+        let pt = decode_v4_point(positive).expect("positive packed coords should decode");
+        assert_eq!((pt.x, pt.y), (1920, 1080));
+
+        let neg_x = u16::from_ne_bytes((-200i16).to_ne_bytes());
+        let neg_y = u16::from_ne_bytes((-50i16).to_ne_bytes());
+        let multi_mon = (usize::from(neg_y) << 16) | usize::from(neg_x);
+        let pt = decode_v4_point(multi_mon).expect("negative multi-monitor coords should decode");
+        assert_eq!((pt.x, pt.y), (-200, -50));
+    }
 
     #[test]
     fn test_windows_tray_primitives_and_cleanup() {
@@ -1632,6 +1781,8 @@ mod tests {
             assert!(tray.is_live());
             drop(tray);
             assert!(!TRAY_ICON_LIVE.load(Ordering::Acquire));
+            assert!(!TRAY_MENU_OPEN.load(Ordering::Acquire));
+            assert!(!TRAY_MENU_QUEUED.load(Ordering::Acquire));
             assert!(TRAY_STATE
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
