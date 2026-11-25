@@ -714,56 +714,63 @@ fn signal_reopen_event(pid: u32) -> bool {
     }
 }
 
+struct InstanceSearchCtx {
+    expected_pid: Option<u32>,
+    found: HWND,
+    found_pid: u32,
+}
+
+// SAFETY: `EnumWindows` invokes this callback synchronously on the calling thread, so `lparam`
+// is non-null, correctly aligned, and uniquely borrows the caller's live stack-local
+// `InstanceSearchCtx` for the duration of the call; no callback state is retained or shared
+// across threads. The title buffer is indexed only by the length `GetWindowTextW` reports.
+unsafe extern "system" fn enum_instance_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let ctx = &mut *(lparam as *mut InstanceSearchCtx);
+    let mut pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, &raw mut pid);
+    if let Some(expected) = ctx.expected_pid {
+        if pid != expected {
+            return 1;
+        }
+    }
+    let mut buf = [0u16; 64];
+    let len = GetWindowTextW(
+        hwnd,
+        buf.as_mut_ptr(),
+        i32::try_from(buf.len()).unwrap_or(0),
+    );
+    if let Ok(len_usize) = usize::try_from(len) {
+        if len_usize > 0 {
+            let title = String::from_utf16_lossy(&buf[..len_usize]);
+            if title == "CipherClipboard" {
+                ctx.found = hwnd;
+                ctx.found_pid = pid;
+                return 0;
+            }
+        }
+    }
+    1
+}
+
 pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
-    let mut signaled = false;
-    if let Some(pid) = expected_pid {
-        signaled = signal_reopen_event(pid);
-    }
+    let signaled = expected_pid.is_some_and(signal_reopen_event);
 
-    struct SearchCtx {
-        expected_pid: Option<u32>,
-        found: HWND,
-        found_pid: u32,
-    }
-
-    // SAFETY: `EnumWindows` invokes this callback synchronously on the calling thread, so `lparam` is non-null, correctly aligned, and uniquely borrows the caller's live stack-local `SearchCtx` for the duration of the call; no callback state is retained or shared across threads. The title buffer is indexed only by the length `GetWindowTextW` reports.
-    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let ctx = &mut *(lparam as *mut SearchCtx);
-        let mut pid: u32 = 0;
-        GetWindowThreadProcessId(hwnd, &raw mut pid);
-        if let Some(expected) = ctx.expected_pid {
-            if pid != expected {
-                return 1;
-            }
-        }
-        let mut buf = [0u16; 64];
-        let len = GetWindowTextW(
-            hwnd,
-            buf.as_mut_ptr(),
-            i32::try_from(buf.len()).unwrap_or(0),
-        );
-        if let Ok(len_usize) = usize::try_from(len) {
-            if len_usize > 0 {
-                let title = String::from_utf16_lossy(&buf[..len_usize]);
-                if title == "CipherClipboard" {
-                    ctx.found = hwnd;
-                    ctx.found_pid = pid;
-                    return 0;
-                }
-            }
-        }
-        1
-    }
-
-    let mut ctx = SearchCtx {
+    let mut ctx = InstanceSearchCtx {
         expected_pid,
         found: std::ptr::null_mut(),
         found_pid: 0,
     };
-    // SAFETY: `enum_proc` is a valid callback whose `lparam` uniquely borrows this stack-local `ctx` for the synchronous `EnumWindows` call; `addr_of_mut!` is used to form the raw pointer without creating an aliasing reference. Stale HWNDs are passed only to APIs that fail safely.
+    // SAFETY: `enum_instance_window_proc` is a valid callback whose `lparam` uniquely borrows
+    // this stack-local `ctx` for the synchronous `EnumWindows` call; `addr_of_mut!` forms the raw
+    // pointer without creating an aliasing reference. Stale HWNDs fail safely in User32 calls.
     unsafe {
-        EnumWindows(Some(enum_proc), std::ptr::addr_of_mut!(ctx) as LPARAM);
-        if !ctx.found.is_null() {
+        EnumWindows(
+            Some(enum_instance_window_proc),
+            std::ptr::addr_of_mut!(ctx) as LPARAM,
+        );
+        if ctx.found.is_null() {
+            signaled
+        } else {
             if !signaled && ctx.found_pid != 0 {
                 let _ = signal_reopen_event(ctx.found_pid);
             }
@@ -776,8 +783,6 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
             BringWindowToTop(ctx.found);
             SetForegroundWindow(ctx.found);
             true
-        } else {
-            signaled
         }
     }
 }

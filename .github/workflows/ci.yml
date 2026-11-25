@@ -152,7 +152,8 @@ jobs:
           }
           if (Test-Path $logFile) { Get-Content $logFile }
           if (Test-Path $errFile) { Get-Content $errFile }
-          $appLog = Join-Path $smokeHome "CipherClipboard\app.log"
+          $appDataDir = [Environment]::GetFolderPath('LocalApplicationData')
+          $appLog = Join-Path $appDataDir "cipherclipboard\app.log"
           if (Test-Path $appLog) {
             Write-Host "--- app.log ---"
             Get-Content $appLog
