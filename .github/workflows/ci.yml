@@ -54,7 +54,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxcb1-dev libdbus-1-dev libssl-dev pkg-config
 
-      - name: Configure native Perl for vendored OpenSSL (Windows)
+      - name: Configure native Perl and linker flags for vendored OpenSSL (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -65,6 +65,10 @@ jobs:
           } else {
             Write-Host "Strawberry Perl not found at $strawberryPerl; using default perl on PATH"
           }
+          # Vendored OpenSSL (openssl-src) triggers MSVC LNK4099 ("PDB 'ossl_static.pdb'
+          # was not found"), which Cargo's CARGO_BUILD_WARNINGS=deny turns into a fatal
+          # linker_messages error.
+          "RUSTFLAGS=-A linker-messages" >> $env:GITHUB_ENV
 
       - name: Set up Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2
