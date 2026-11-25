@@ -592,12 +592,7 @@ unsafe extern "system" fn tray_wnd_proc(
                     && TRAY_MENU_QUEUED
                         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                         .is_ok()
-                    && PostMessageW(
-                        hwnd,
-                        WM_SHOW_TRAY_MENU,
-                        wparam,
-                        if using_v4 { 1 } else { 0 },
-                    ) == 0
+                    && PostMessageW(hwnd, WM_SHOW_TRAY_MENU, wparam, isize::from(using_v4)) == 0
                 {
                     TRAY_MENU_QUEUED.store(false, Ordering::Release);
                     log_message(
@@ -1735,7 +1730,7 @@ mod tests {
         let all_neg_one = (usize::from(u16::MAX) << 16) | usize::from(u16::MAX);
         assert!(decode_v4_point(all_neg_one).is_none());
 
-        let positive = (1080usize << 16) | 1920usize;
+        let positive = (0x0438_usize << 16) | 0x0780_usize;
         let pt = decode_v4_point(positive).expect("positive packed coords should decode");
         assert_eq!((pt.x, pt.y), (1920, 1080));
 
