@@ -40,14 +40,21 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MAPVK_VSC_TO_VK, VK_CONTROL,
     VK_V,
 };
+use windows_sys::Win32::UI::Shell::{
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
+    NINF_KEY, NIN_SELECT, NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICON_VERSION_4,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-    DestroyWindow, EnumWindows, GetCursorPos, GetForegroundWindow, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindow, MessageBoxW, PeekMessageW, PostMessageW,
-    RegisterClassW, SetForegroundWindow, ShowWindow, TrackPopupMenuEx, CW_USEDEFAULT, MB_ICONERROR,
-    MB_OK, MF_SEPARATOR, MF_STRING, MSG, PM_NOREMOVE, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_NCDESTROY, WM_NULL,
-    WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+    AppendMenuW, BringWindowToTop, ChangeWindowMessageFilterEx, CreateIcon, CreatePopupMenu,
+    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, EnumWindows,
+    GetCursorPos, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindow, MessageBoxW, PeekMessageW, PostMessageW, RegisterClassW, RegisterWindowMessageW,
+    SetForegroundWindow, SetLayeredWindowAttributes, SetWindowPos, ShowWindow, TrackPopupMenuEx,
+    HICON, HMENU, HWND_TOPMOST, LWA_ALPHA, MB_ICONERROR, MB_OK, MF_SEPARATOR, MF_STRING, MSG,
+    MSGFLT_ALLOW, PM_NOREMOVE, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CONTEXTMENU,
+    WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NCDESTROY, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 use crate::logging::log_message;
@@ -215,7 +222,9 @@ pub(super) fn is_active() -> bool {
     }
 }
 
-const WM_SHOW_TRAY_MENU: u32 = WM_APP + 1;
+const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
+const TRAY_ICON_ID: u32 = 1;
+const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 const TRAY_CMD_SHOW: i32 = 1;
 const TRAY_CMD_SETTINGS: i32 = 2;
 const TRAY_CMD_QUIT: i32 = 3;
@@ -223,13 +232,17 @@ const TRAY_CMD_SHOW_USIZE: usize = 1;
 const TRAY_CMD_SETTINGS_USIZE: usize = 2;
 const TRAY_CMD_QUIT_USIZE: usize = 3;
 
-struct TrayMenuContext {
+struct TrayState {
     tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
     ctx: eframe::egui::Context,
+    hicon: isize,
+    using_v4: bool,
 }
 
-static TRAY_MENU_CONTEXT: Mutex<Option<TrayMenuContext>> = Mutex::new(None);
+static TRAY_STATE: Mutex<Option<TrayState>> = Mutex::new(None);
+static TRAY_ICON_LIVE: AtomicBool = AtomicBool::new(false);
 static TRAY_MENU_OPEN: AtomicBool = AtomicBool::new(false);
+static TRAY_TASKBAR_CREATED_MSG: AtomicU32 = AtomicU32::new(0);
 
 struct MenuOpenGuard;
 
@@ -246,84 +259,188 @@ fn wide_null(text: &str) -> Vec<u16> {
         .collect()
 }
 
+fn create_tray_hicon(rgba: &[u8], width: u32, height: u32) -> Result<HICON, String> {
+    let w = i32::try_from(width).map_err(|_| "Tray icon width overflow".to_string())?;
+    let h = i32::try_from(height).map_err(|_| "Tray icon height overflow".to_string())?;
+    let uw = usize::try_from(width).map_err(|_| "Tray icon width overflow".to_string())?;
+    let uh = usize::try_from(height).map_err(|_| "Tray icon height overflow".to_string())?;
+    let expected_len = uw
+        .checked_mul(uh)
+        .and_then(|px| px.checked_mul(4))
+        .ok_or_else(|| "Tray icon buffer size overflow".to_string())?;
+    if rgba.len() != expected_len {
+        return Err(format!(
+            "Tray icon RGBA buffer mismatch: expected {expected_len}, got {}",
+            rgba.len()
+        ));
+    }
+
+    let mut bgra = Vec::with_capacity(expected_len);
+    for px in rgba.chunks_exact(4) {
+        bgra.push(px[2]); // B
+        bgra.push(px[1]); // G
+        bgra.push(px[0]); // R
+        bgra.push(px[3]); // A
+    }
+
+    // 1bpp AND mask, word-aligned rows, zeroed so Windows uses the 32-bpp alpha channel.
+    let row_bytes = uw.div_ceil(16) * 2;
+    let and_len = row_bytes
+        .checked_mul(uh)
+        .ok_or_else(|| "Tray icon mask size overflow".to_string())?;
+    let and_mask = vec![0u8; and_len];
+
+    // SAFETY: `and_mask` and `bgra` are live buffers sized for `(w, h)` at 32bpp.
+    let hicon = unsafe {
+        CreateIcon(
+            std::ptr::null_mut(),
+            w,
+            h,
+            1,
+            32,
+            and_mask.as_ptr(),
+            bgra.as_ptr(),
+        )
+    };
+    if hicon.is_null() {
+        // SAFETY: `GetLastError` reads the calling thread's last Win32 error code.
+        let err = unsafe { GetLastError() };
+        return Err(format!("CreateIcon failed for tray icon (err={err})"));
+    }
+    Ok(hicon)
+}
+
+fn create_tray_window() -> Result<HWND, String> {
+    let class_name = wide_null("CipherClipboardTrayWindow");
+    let window_title = wide_null("CipherClipboardTrayWindow");
+
+    // SAFETY: `GetModuleHandleW(null)` returns this process's HMODULE; `class_name` and
+    // `window_title` live across `RegisterClassW` and `CreateWindowExW`. The window uses
+    // `WS_EX_TOOLWINDOW | WS_EX_LAYERED` (without `WS_EX_NOACTIVATE` or `WS_EX_TRANSPARENT`)
+    // and 0 alpha so it can temporarily become visible/foreground during `TrackPopupMenuEx`
+    // without appearing visually or entering Taskbar/Alt+Tab.
+    unsafe {
+        let hinstance = GetModuleHandleW(std::ptr::null());
+        let wc = WNDCLASSW {
+            style: 0,
+            lpfnWndProc: Some(tray_wnd_proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: hinstance,
+            hIcon: std::ptr::null_mut(),
+            hCursor: std::ptr::null_mut(),
+            hbrBackground: std::ptr::null_mut(),
+            lpszMenuName: std::ptr::null(),
+            lpszClassName: class_name.as_ptr(),
+        };
+        let atom = RegisterClassW(&raw const wc);
+        if atom == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
+            return Err(format!(
+                "RegisterClassW failed for tray window (err={})",
+                GetLastError()
+            ));
+        }
+
+        let hwnd = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+            class_name.as_ptr(),
+            window_title.as_ptr(),
+            WS_POPUP,
+            0,
+            0,
+            1,
+            1,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            hinstance,
+            std::ptr::null(),
+        );
+        if hwnd.is_null() {
+            return Err(format!(
+                "CreateWindowExW failed for tray window (err={})",
+                GetLastError()
+            ));
+        }
+        let _ = SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
+        Ok(hwnd)
+    }
+}
+
+fn build_notify_icon_data(hwnd: HWND, hicon: HICON, flags: u32) -> NOTIFYICONDATAW {
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: u32::try_from(std::mem::size_of::<NOTIFYICONDATAW>()).unwrap_or(0),
+        hWnd: hwnd,
+        uID: TRAY_ICON_ID,
+        uFlags: flags,
+        uCallbackMessage: WM_TRAY_CALLBACK,
+        hIcon: hicon,
+        ..Default::default()
+    };
+    if (flags & NIF_TIP) != 0 {
+        let tip = wide_null("CipherClipboard");
+        let max_len = nid.szTip.len().saturating_sub(1);
+        let copy_len = tip.len().min(max_len);
+        nid.szTip[..copy_len].copy_from_slice(&tip[..copy_len]);
+    }
+    nid
+}
+
 /// # Safety
-/// Invoked by Win32 message dispatch for `TrayMenuHost` windows.
-unsafe extern "system" fn tray_menu_wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match msg {
-        WM_SHOW_TRAY_MENU => {
-            show_tray_popup_menu(hwnd);
-            0
+/// `hwnd` and `hicon` must be live handles owned by this process.
+unsafe fn register_notify_icon(hwnd: HWND, hicon: HICON) -> (bool, bool) {
+    let nid = build_notify_icon_data(hwnd, hicon, NIF_MESSAGE | NIF_ICON | NIF_TIP);
+    if Shell_NotifyIconW(NIM_ADD, &raw const nid) == 0 {
+        return (false, false);
+    }
+    let mut nid_version = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
+    nid_version.Anonymous = NOTIFYICONDATAW_0 {
+        uVersion: NOTIFYICON_VERSION_4,
+    };
+    let using_v4 = Shell_NotifyIconW(NIM_SETVERSION, &raw const nid_version) != 0;
+    (true, using_v4)
+}
+
+fn build_tray_popup_menu() -> Result<HMENU, String> {
+    // SAFETY: Creates a popup HMENU and populates it with wide null-terminated labels;
+    // destroys and frees the HMENU if any `AppendMenuW` call fails.
+    unsafe {
+        let hmenu = CreatePopupMenu();
+        if hmenu.is_null() {
+            return Err(format!("CreatePopupMenu failed (err={})", GetLastError()));
         }
-        WM_NCDESTROY => {
-            TRAY_MENU_OPEN.store(false, Ordering::Release);
-            DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        let show_label = wide_null("Show CipherClipboard");
+        let settings_label = wide_null("Settings...");
+        let quit_label = wide_null("Quit CipherClipboard");
+
+        let populated = AppendMenuW(hmenu, MF_STRING, TRAY_CMD_SHOW_USIZE, show_label.as_ptr())
+            != 0
+            && AppendMenuW(
+                hmenu,
+                MF_STRING,
+                TRAY_CMD_SETTINGS_USIZE,
+                settings_label.as_ptr(),
+            ) != 0
+            && AppendMenuW(hmenu, MF_SEPARATOR, 0, std::ptr::null()) != 0
+            && AppendMenuW(hmenu, MF_STRING, TRAY_CMD_QUIT_USIZE, quit_label.as_ptr()) != 0;
+
+        if populated {
+            Ok(hmenu)
+        } else {
+            let err = GetLastError();
+            let _ = DestroyMenu(hmenu);
+            Err(format!("AppendMenuW failed for tray menu (err={err})"))
         }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
 /// # Safety
-/// Must run on the UI thread owning `hwnd` from top-level `WM_SHOW_TRAY_MENU` dispatch.
-unsafe fn show_tray_popup_menu(hwnd: HWND) {
-    if TRAY_MENU_OPEN
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-    let _open_guard = MenuOpenGuard;
-
-    // Clone outside `TrackPopupMenuEx` so the mutex is never held across a modal menu loop.
-    let Some((tray_tx, ctx)) = TRAY_MENU_CONTEXT
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .map(|state| (state.tray_tx.clone(), state.ctx.clone()))
-    else {
-        return;
-    };
-
-    let mut pt = POINT { x: 0, y: 0 };
-    if GetCursorPos(&raw mut pt) == 0 {
+/// Must be called on the UI thread owning `hwnd` after `hwnd` is visible (`SWP_SHOWWINDOW`).
+unsafe fn acquire_foreground_for_tray_menu(hwnd: HWND) {
+    if SetForegroundWindow(hwnd) != 0 {
         return;
     }
 
-    // Preserve the prior non-CipherClipboard foreground window before we claim
-    // foreground ownership on the menu host window.
-    capture_frontmost();
-
-    let hmenu = CreatePopupMenu();
-    if hmenu.is_null() {
-        return;
-    }
-
-    let show_label = wide_null("Show CipherClipboard");
-    let settings_label = wide_null("Settings...");
-    let quit_label = wide_null("Quit CipherClipboard");
-
-    let populated = AppendMenuW(hmenu, MF_STRING, TRAY_CMD_SHOW_USIZE, show_label.as_ptr()) != 0
-        && AppendMenuW(
-            hmenu,
-            MF_STRING,
-            TRAY_CMD_SETTINGS_USIZE,
-            settings_label.as_ptr(),
-        ) != 0
-        && AppendMenuW(hmenu, MF_SEPARATOR, 0, std::ptr::null()) != 0
-        && AppendMenuW(hmenu, MF_STRING, TRAY_CMD_QUIT_USIZE, quit_label.as_ptr()) != 0;
-
-    if !populated {
-        let _ = DestroyMenu(hmenu);
-        return;
-    }
-
-    // Acquire foreground on our activatable `WS_EX_TOOLWINDOW` host window so
-    // outside clicks dismiss the menu reliably (Microsoft KB135788). Detach
-    // immediately before entering the modal menu loop.
     let cur_thread = GetCurrentThreadId();
     let fg_hwnd = GetForegroundWindow();
     let fg_thread = if fg_hwnd.is_null() {
@@ -336,11 +453,68 @@ unsafe fn show_tray_popup_menu(hwnd: HWND) {
         && AttachThreadInput(cur_thread, fg_thread, 1) != 0;
 
     BringWindowToTop(hwnd);
-    let _ = SetForegroundWindow(hwnd);
+    let activated = SetForegroundWindow(hwnd) != 0;
 
     if attached {
         let _ = AttachThreadInput(cur_thread, fg_thread, 0);
     }
+
+    if !activated {
+        log_message(
+            "WARN",
+            &format!(
+                "SetForegroundWindow failed for tray menu (attached={attached}, err={})",
+                GetLastError()
+            ),
+        );
+    }
+}
+
+/// # Safety
+/// Must run on the UI thread owning `hwnd` synchronously from tray input handling.
+unsafe fn show_tray_popup_menu(hwnd: HWND) {
+    if TRAY_MENU_OPEN
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let _open_guard = MenuOpenGuard;
+
+    // Clone outside `TrackPopupMenuEx` so the mutex is never held across the modal menu loop.
+    let Some((tray_tx, ctx)) = TRAY_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .map(|state| (state.tray_tx.clone(), state.ctx.clone()))
+    else {
+        return;
+    };
+
+    let mut pt = POINT { x: 0, y: 0 };
+    if GetCursorPos(&raw mut pt) == 0 {
+        log_message(
+            "WARN",
+            &format!("GetCursorPos failed for tray menu (err={})", GetLastError()),
+        );
+        return;
+    }
+
+    // Preserve the prior non-CipherClipboard foreground window before claiming focus.
+    capture_frontmost();
+
+    let hmenu = match build_tray_popup_menu() {
+        Ok(hmenu) => hmenu,
+        Err(err) => {
+            log_message("WARN", &err);
+            return;
+        }
+    };
+
+    // Place the 0-alpha 1x1 layered owner window at the click point, topmost (above Windows 11
+    // taskbar / overflow flyout), and visible so `SetForegroundWindow` and outside clicks work.
+    let _ = SetWindowPos(hwnd, HWND_TOPMOST, pt.x, pt.y, 1, 1, SWP_SHOWWINDOW);
+    acquire_foreground_for_tray_menu(hwnd);
 
     let selected = TrackPopupMenuEx(
         hmenu,
@@ -352,7 +526,8 @@ unsafe fn show_tray_popup_menu(hwnd: HWND) {
     );
 
     let _ = DestroyMenu(hmenu);
-    // Microsoft KB135788: force task-switch completion so subsequent clicks dismiss cleanly.
+    let _ = ShowWindow(hwnd, SW_HIDE);
+    // Microsoft KB135788: force task-switch completion so subsequent tray clicks behave cleanly.
     let _ = PostMessageW(hwnd, WM_NULL, 0, 0);
 
     let action = match selected {
@@ -367,108 +542,191 @@ unsafe fn show_tray_popup_menu(hwnd: HWND) {
     }
 }
 
-/// Dedicated activatable Win32 owner window for deferred `TrackPopupMenuEx`
-/// popup menus, avoiding `tray-icon`'s `WS_EX_NOACTIVATE` shell callback window.
-#[derive(Debug)]
-pub(crate) struct TrayMenuHost {
-    hwnd: isize,
+/// # Safety
+/// Invoked by Win32 message dispatch for `WindowsTray` helper windows.
+unsafe extern "system" fn tray_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let taskbar_msg = TRAY_TASKBAR_CREATED_MSG.load(Ordering::Relaxed);
+    if taskbar_msg != 0 && msg == taskbar_msg {
+        let hicon = TRAY_STATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map_or(0, |s| s.hicon);
+        if hicon != 0 {
+            let del_nid = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
+            let _ = Shell_NotifyIconW(NIM_DELETE, &raw const del_nid);
+            let (live, using_v4) = register_notify_icon(hwnd, hicon as HICON);
+            TRAY_ICON_LIVE.store(live, Ordering::Release);
+            if let Some(state) = TRAY_STATE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_mut()
+            {
+                state.using_v4 = using_v4;
+            }
+        }
+        return 0;
+    }
+
+    match msg {
+        WM_TRAY_CALLBACK => {
+            let event = u32::try_from(lparam & 0xFFFF).unwrap_or(0);
+            let snapshot = TRAY_STATE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .map(|s| (s.using_v4, s.tray_tx.clone(), s.ctx.clone()));
+            let Some((using_v4, tray_tx, ctx)) = snapshot else {
+                return 0;
+            };
+
+            let open_menu =
+                (using_v4 && event == WM_CONTEXTMENU) || (!using_v4 && event == WM_RBUTTONUP);
+            if open_menu {
+                show_tray_popup_menu(hwnd);
+                return 0;
+            }
+
+            let show_window = (using_v4 && (event == NIN_SELECT || event == NIN_KEYSELECT))
+                || (!using_v4 && (event == WM_LBUTTONUP || event == WM_LBUTTONDBLCLK));
+            if show_window {
+                capture_frontmost();
+                let _ = tray_tx.send(crate::tray::TrayAction::Show);
+                ctx.request_repaint();
+                return 0;
+            }
+            0
+        }
+        WM_NCDESTROY => {
+            TRAY_ICON_LIVE.store(false, Ordering::Release);
+            TRAY_MENU_OPEN.store(false, Ordering::Release);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
 }
 
-impl TrayMenuHost {
+/// Native Win32 notification-area icon and context-menu host (`NOTIFYICON_VERSION_4`).
+#[derive(Debug)]
+pub(crate) struct WindowsTray {
+    hwnd: isize,
+    hicon: isize,
+}
+
+impl WindowsTray {
     pub(crate) fn new(
+        rgba: &[u8],
+        width: u32,
+        height: u32,
         tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
         ctx: eframe::egui::Context,
     ) -> Result<Self, String> {
-        let class_name = wide_null("CipherClipboardTrayMenuWindow");
-        let window_title = wide_null("CipherClipboardTrayMenu");
-
-        // SAFETY: `GetModuleHandleW(null)` yields this process's HMODULE; `class_name`
-        // and `window_title` live across `RegisterClassW` and `CreateWindowExW`. The
-        // helper window stays unshown (`!WS_VISIBLE`) without `WS_EX_NOACTIVATE`.
-        let hwnd = unsafe {
-            let hinstance = GetModuleHandleW(std::ptr::null());
-            let wc = WNDCLASSW {
-                style: 0,
-                lpfnWndProc: Some(tray_menu_wnd_proc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: hinstance,
-                hIcon: std::ptr::null_mut(),
-                hCursor: std::ptr::null_mut(),
-                hbrBackground: std::ptr::null_mut(),
-                lpszMenuName: std::ptr::null(),
-                lpszClassName: class_name.as_ptr(),
-            };
-            let atom = RegisterClassW(&raw const wc);
-            if atom == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
-                return Err(format!(
-                    "RegisterClassW failed for tray menu host (err={})",
-                    GetLastError()
-                ));
+        let hicon = create_tray_hicon(rgba, width, height)?;
+        let hwnd = match create_tray_window() {
+            Ok(hwnd) => hwnd,
+            Err(err) => {
+                // SAFETY: `hicon` was created above and is unused after failure.
+                unsafe {
+                    let _ = DestroyIcon(hicon);
+                }
+                return Err(err);
             }
-
-            let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW,
-                class_name.as_ptr(),
-                window_title.as_ptr(),
-                WS_POPUP,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                0,
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                hinstance,
-                std::ptr::null(),
-            );
-            if hwnd.is_null() {
-                return Err(format!(
-                    "CreateWindowExW failed for tray menu host (err={})",
-                    GetLastError()
-                ));
-            }
-            hwnd
         };
 
-        *TRAY_MENU_CONTEXT
+        let taskbar_created_name = wide_null("TaskbarCreated");
+        // SAFETY: `taskbar_created_name` is null-terminated; `hwnd` is a valid window owned by this thread.
+        unsafe {
+            let taskbar_msg = RegisterWindowMessageW(taskbar_created_name.as_ptr());
+            if taskbar_msg != 0 {
+                TRAY_TASKBAR_CREATED_MSG.store(taskbar_msg, Ordering::Relaxed);
+                let _ = ChangeWindowMessageFilterEx(
+                    hwnd,
+                    taskbar_msg,
+                    MSGFLT_ALLOW,
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+
+        let mut registered = false;
+        let mut using_v4 = false;
+        for attempt in 0..5 {
+            // SAFETY: `hwnd` and `hicon` are valid handles created above.
+            let (ok, v4) = unsafe { register_notify_icon(hwnd, hicon) };
+            if ok {
+                registered = true;
+                using_v4 = v4;
+                break;
+            }
+            if attempt < 4 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+
+        if !registered {
+            // SAFETY: Clean up `hwnd` and `hicon` before returning initialization failure.
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+                let _ = DestroyIcon(hicon);
+            }
+            return Err("Shell_NotifyIconW(NIM_ADD) failed (Windows shell not ready)".to_string());
+        }
+
+        TRAY_ICON_LIVE.store(true, Ordering::Release);
+        *TRAY_STATE
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(TrayMenuContext { tray_tx, ctx });
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(TrayState {
+            tray_tx,
+            ctx,
+            hicon: hicon as isize,
+            using_v4,
+        });
 
         Ok(Self {
             hwnd: hwnd as isize,
+            hicon: hicon as isize,
         })
     }
 
-    pub(crate) fn request_show_menu(&self) {
-        if self.hwnd == 0 {
-            return;
+    pub(crate) fn is_live(&self) -> bool {
+        if self.hwnd == 0 || !TRAY_ICON_LIVE.load(Ordering::Acquire) {
+            return false;
         }
-        // SAFETY: Validates `self.hwnd` via `IsWindow` before posting `WM_SHOW_TRAY_MENU`
-        // so popup tracking runs outside the tray shell notification callback.
-        unsafe {
-            let hwnd = self.hwnd as HWND;
-            if IsWindow(hwnd) != 0 {
-                let _ = PostMessageW(hwnd, WM_SHOW_TRAY_MENU, 0, 0);
-            }
-        }
+        // SAFETY: `IsWindow` safely validates whether `self.hwnd` is still an active HWND.
+        unsafe { IsWindow(self.hwnd as HWND) != 0 }
     }
 }
 
-impl Drop for TrayMenuHost {
+impl Drop for WindowsTray {
     fn drop(&mut self) {
-        *TRAY_MENU_CONTEXT
+        TRAY_ICON_LIVE.store(false, Ordering::Release);
+        *TRAY_STATE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+
         if self.hwnd != 0 {
-            // SAFETY: Destroys the owned helper window created by `TrayMenuHost::new`.
+            // SAFETY: Removes the shell notification icon and destroys the owned helper HWND.
             unsafe {
                 let hwnd = self.hwnd as HWND;
+                let nid = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
+                let _ = Shell_NotifyIconW(NIM_DELETE, &raw const nid);
                 if IsWindow(hwnd) != 0 {
                     let _ = DestroyWindow(hwnd);
                 }
             }
             self.hwnd = 0;
+        }
+        if self.hicon != 0 {
+            // SAFETY: Frees the `HICON` created by `CreateIcon` in `WindowsTray::new`.
+            unsafe {
+                let _ = DestroyIcon(self.hicon as HICON);
+            }
+            self.hicon = 0;
         }
     }
 }
@@ -1336,29 +1594,51 @@ pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> 
 
 #[cfg(test)]
 mod tests {
-    use super::{IsWindow, TrayMenuHost, HWND, TRAY_MENU_CONTEXT};
+    use super::{
+        build_tray_popup_menu, create_tray_hicon, create_tray_window, DestroyIcon, DestroyMenu,
+        DestroyWindow, IsWindow, WindowsTray, TRAY_ICON_LIVE, TRAY_STATE,
+    };
+    use std::sync::atomic::Ordering;
 
     #[test]
-    fn test_tray_menu_host_lifecycle() {
+    fn test_windows_tray_primitives_and_cleanup() {
+        let invalid = create_tray_hicon(&[0u8; 4], 16, 16);
+        assert!(invalid.is_err());
+
+        let rgba = vec![255u8; 16 * 16 * 4];
+        let hicon = create_tray_hicon(&rgba, 16, 16).expect("32bpp tray icon should build");
+        assert!(!hicon.is_null());
+
+        let hwnd = create_tray_window().expect("tray helper HWND should build");
+        assert!(!hwnd.is_null());
+        // SAFETY: `hwnd` was created by `create_tray_window` and is validated before destruction.
+        unsafe {
+            assert_ne!(IsWindow(hwnd), 0);
+        }
+
+        let hmenu = build_tray_popup_menu().expect("tray popup HMENU should build");
+        assert!(!hmenu.is_null());
+
+        // SAFETY: Cleans up the Win32 resources created in this test.
+        unsafe {
+            assert_ne!(DestroyMenu(hmenu), 0);
+            assert_ne!(DestroyWindow(hwnd), 0);
+            assert_eq!(IsWindow(hwnd), 0);
+            assert_ne!(DestroyIcon(hicon), 0);
+        }
+
+        // On headless CI runners Explorer may not host a notification area, so `Shell_NotifyIconW`
+        // can cleanly return an error; if it succeeds, dropping `WindowsTray` must clean up.
         let (tx, _rx) = std::sync::mpsc::channel();
         let ctx = eframe::egui::Context::default();
-        let host = TrayMenuHost::new(tx, ctx).expect("TrayMenuHost should create helper HWND");
-        assert_ne!(host.hwnd, 0);
-        // SAFETY: `host.hwnd` was just returned from `CreateWindowExW` and is validated with `IsWindow`.
-        unsafe {
-            assert_ne!(IsWindow(host.hwnd as HWND), 0);
-        }
-        host.request_show_menu();
-        let hwnd = host.hwnd as HWND;
-        drop(host);
-
-        assert!(TRAY_MENU_CONTEXT
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_none());
-        // SAFETY: `IsWindow` safely returns 0 after `DestroyWindow`.
-        unsafe {
-            assert_eq!(IsWindow(hwnd), 0);
+        if let Ok(tray) = WindowsTray::new(&rgba, 16, 16, tx, ctx) {
+            assert!(tray.is_live());
+            drop(tray);
+            assert!(!TRAY_ICON_LIVE.load(Ordering::Acquire));
+            assert!(TRAY_STATE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none());
         }
     }
 }

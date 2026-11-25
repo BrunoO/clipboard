@@ -56,9 +56,7 @@ impl QuoteHotkeyFallback {
 /// Platform-backed system tray icon handle (implemented on Windows, no-op elsewhere).
 pub(crate) struct SystemTrayBackend {
     #[cfg(target_os = "windows")]
-    tray_icon: tray_icon::TrayIcon,
-    #[cfg(target_os = "windows")]
-    _menu_host: std::sync::Arc<windows::TrayMenuHost>,
+    tray: windows::WindowsTray,
 }
 
 impl std::fmt::Debug for SystemTrayBackend {
@@ -100,96 +98,23 @@ impl SystemTrayBackend {
         tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
         ctx: eframe::egui::Context,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        use crate::tray::TrayAction;
-        use std::sync::Arc;
-        use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-
         let (rgba, width, height) = crate::tray::load_tray_icon_rgba()?;
-        let icon = Icon::from_rgba(rgba, width, height)?;
-
-        let menu_host = Arc::new(
-            windows::TrayMenuHost::new(tray_tx.clone(), ctx.clone())
-                .map_err(std::io::Error::other)?,
-        );
-
-        let tray_icon = TrayIconBuilder::new()
-            .with_tooltip("CipherClipboard")
-            .with_icon(icon)
-            .build()?;
-
-        // `build()` ignores Shell_NotifyIconW(NIM_ADD) failures and only retries
-        // on TaskbarCreated. Without this check a "successful" tray init can hide
-        // the window with no icon and no taskbar button left to restore it.
-        // Allow a brief window for the shell to publish the icon rect.
-        let mut icon_live = false;
-        for _ in 0..5 {
-            if tray_icon.rect().is_some() {
-                icon_live = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        if !icon_live {
-            return Err("Windows did not accept the tray icon (shell not ready)".into());
-        }
-
-        let menu_host_click = Arc::clone(&menu_host);
-        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| match event {
-            TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            }
-            | TrayIconEvent::DoubleClick {
-                button: MouseButton::Left,
-                ..
-            } => {
-                // Capture whatever app is foreground right now before we restore
-                // CipherClipboard, so subsequent paste/restore targets it.
-                capture_active_window();
-                // Always send Show (not Toggle): clicking the tray icon while the
-                // window is behind another app must bring it to the front.
-                let _ = tray_tx.send(TrayAction::Show);
-                ctx.request_repaint();
-            }
-            TrayIconEvent::Click {
-                button: MouseButton::Right,
-                button_state: MouseButtonState::Up,
-                ..
-            } => {
-                // Defer popup menu tracking to an activatable helper HWND outside the
-                // tray shell callback proc so Windows does not trap the menu open.
-                menu_host_click.request_show_menu();
-            }
-            _ => {}
-        }));
-
-        Ok(Self {
-            tray_icon,
-            _menu_host: menu_host,
-        })
+        let tray = windows::WindowsTray::new(&rgba, width, height, tray_tx, ctx)
+            .map_err(std::io::Error::other)?;
+        Ok(Self { tray })
     }
 
     /// True only while the shell still has a registered notification-area icon.
     /// Rechecked when hiding in case Explorer restarted or the icon was removed.
     #[cfg(target_os = "windows")]
     pub(crate) fn is_live(&self) -> bool {
-        self.tray_icon.rect().is_some()
+        self.tray.is_live()
     }
 
     #[cfg(not(target_os = "windows"))]
     #[allow(dead_code, clippy::unused_self)]
     pub(crate) fn is_live(&self) -> bool {
         false
-    }
-}
-
-#[cfg(target_os = "windows")]
-impl Drop for SystemTrayBackend {
-    fn drop(&mut self) {
-        use tray_icon::TrayIconEvent;
-        // This process-global handler holds cloned channels/contexts and the menu host handle.
-        TrayIconEvent::set_event_handler::<fn(tray_icon::TrayIconEvent)>(None);
     }
 }
 
