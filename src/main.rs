@@ -257,19 +257,13 @@ fn spawn_smoke_quit(tray_tx: &std::sync::mpsc::Sender<tray::TrayAction>, ctx: &e
         else {
             return;
         };
-        crate::logging::log_message("INFO", &format!("smoke-quit armed ({delay_ms}ms)"));
         let tx = tray_tx.clone();
         let ctx = ctx.clone();
         let _ = std::thread::Builder::new()
             .name("smoke-quit".into())
             .spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                let sent = tx.send(tray::TrayAction::Quit).is_ok();
-                crate::logging::log_message(
-                    "INFO",
-                    &format!("smoke-quit fired (sent={sent}), requesting repaint"),
-                );
-                if sent {
+                if tx.send(tray::TrayAction::Quit).is_ok() {
                     ctx.request_repaint();
                 }
             });

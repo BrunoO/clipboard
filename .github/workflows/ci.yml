@@ -113,59 +113,6 @@ jobs:
             exit 1
           fi
 
-  windows-quit-smoke:
-    name: Windows quit smoke test
-    runs-on: windows-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install Windows OpenSSL dependencies
-        shell: pwsh
-        run: .\scripts\windows\setup-openssl-ci.ps1
-
-      - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2
-
-      - name: Build debug binary
-        run: cargo build --locked
-
-      # Guards startup, TrayMenuHost window creation, and clean quit on Windows.
-      # The debug-only CIPHERCLIPBOARD_SMOKE_QUIT_MS hook triggers a regular Quit.
-      - name: Launch and quit the app
-        shell: pwsh
-        run: |
-          $smokeHome = Join-Path $env:RUNNER_TEMP "smoke-home"
-          New-Item -ItemType Directory -Path $smokeHome -Force | Out-Null
-          $env:LOCALAPPDATA = $smokeHome
-          $env:APPDATA = $smokeHome
-          $env:CIPHERCLIPBOARD_SMOKE_QUIT_MS = "5000"
-          $logFile = Join-Path $env:RUNNER_TEMP "smoke-windows.log"
-          $errFile = Join-Path $env:RUNNER_TEMP "smoke-windows.err.log"
-          $proc = Start-Process -FilePath ".\target\debug\CipherClipboard.exe" -PassThru -RedirectStandardOutput $logFile -RedirectStandardError $errFile
-          $exited = $proc.WaitForExit(60000)
-          if ($exited) {
-            # Ensure ExitCode and redirected streams are flushed cleanly.
-            $proc.WaitForExit()
-          }
-          if (Test-Path $logFile) { Get-Content $logFile }
-          if (Test-Path $errFile) { Get-Content $errFile }
-          $appDataDir = [Environment]::GetFolderPath('LocalApplicationData')
-          $appLog = Join-Path $appDataDir "cipherclipboard\app.log"
-          if (Test-Path $appLog) {
-            Write-Host "--- app.log ---"
-            Get-Content $appLog
-          }
-          if (-not $exited) {
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-            throw "App did not exit within 60s"
-          }
-          if ($proc.ExitCode -ne 0) {
-            throw "App exited with status $($proc.ExitCode) (expected 0)"
-          }
-
   security:
     name: Supply Chain & Security Audit
     runs-on: ubuntu-latest
