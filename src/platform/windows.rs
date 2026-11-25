@@ -135,12 +135,15 @@ static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
 
 #[must_use]
 const fn should_query_same_thread_window_title(
-    pid: u32,
-    current_pid: u32,
-    tid: u32,
-    current_tid: u32,
+    window_pid: u32,
+    expected_pid: u32,
+    window_thread_id: u32,
+    expected_thread_id: u32,
 ) -> bool {
-    pid != 0 && pid == current_pid && tid != 0 && tid == current_tid
+    window_pid != 0
+        && window_pid == expected_pid
+        && window_thread_id != 0
+        && window_thread_id == expected_thread_id
 }
 
 #[must_use]
@@ -1818,9 +1821,10 @@ pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_tray_popup_menu, create_tray_hicon, create_tray_window, decode_v4_point, DestroyIcon,
-        DestroyMenu, DestroyWindow, IsWindow, WindowsTray, TRAY_ICON_LIVE, TRAY_MENU_OPEN,
-        TRAY_MENU_QUEUED, TRAY_STATE,
+        build_tray_popup_menu, cached_main_window, create_tray_hicon, create_tray_window,
+        decode_v4_point, should_query_external_instance_window,
+        should_query_same_thread_window_title, DestroyIcon, DestroyMenu, DestroyWindow, IsWindow,
+        WindowsTray, MAIN_HWND, TRAY_ICON_LIVE, TRAY_MENU_OPEN, TRAY_MENU_QUEUED, TRAY_STATE,
     };
     use std::sync::atomic::Ordering;
 
