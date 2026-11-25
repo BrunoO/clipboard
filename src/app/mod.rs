@@ -1180,18 +1180,18 @@ impl ClipboardApp {
             if self.is_quitting {
                 return;
             }
+            crate::logging::log_message(
+                "INFO",
+                "CloseRequested intercepted; canceling close and hiding window",
+            );
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.hide_window(ctx, false, false);
         }
     }
 
     fn handle_tray_events(&mut self, ctx: &egui::Context) {
-        let mut latest_action = None;
         while let Ok(action) = self.services.tray_rx.try_recv() {
             crate::logging::log_message("INFO", &format!("tray event received: {action:?}"));
-            latest_action = Some(action);
-        }
-        if let Some(action) = latest_action {
             match action {
                 TrayAction::Show => {
                     self.show_window(ctx);
@@ -1202,6 +1202,7 @@ impl ClipboardApp {
                 }
                 TrayAction::Quit => {
                     self.quit(ctx);
+                    break;
                 }
             }
         }
@@ -1865,6 +1866,36 @@ fn clipboard_clear_is_due(now: Instant, deadline: Instant) -> bool {
     now >= deadline
 }
 
+fn log_viewport_state_transitions(window_state: &WindowFocusState, ctx: &egui::Context) {
+    static LAST_VIEWPORT_LOG_BITS: std::sync::atomic::AtomicU8 =
+        std::sync::atomic::AtomicU8::new(u8::MAX);
+
+    let (vp_visible, vp_minimized, vp_focused) = ctx.input(|i| {
+        let vp = i.viewport();
+        (vp.visible(), vp.minimized, vp.focused)
+    });
+    let bits = u8::from(window_state.is_visible)
+        | (u8::from(vp_visible.unwrap_or(true)) << 1)
+        | (u8::from(vp_minimized.unwrap_or(false)) << 2)
+        | (u8::from(vp_focused.unwrap_or(false)) << 3)
+        | (u8::from(window_state.was_inactive_since_hidden) << 4);
+
+    let prev = LAST_VIEWPORT_LOG_BITS.swap(bits, std::sync::atomic::Ordering::AcqRel);
+    if prev != bits {
+        crate::logging::log_message(
+            "INFO",
+            &format!(
+                "Viewport state changed: app_visible={}, vp_visible={:?}, minimized={:?}, focused={:?}, was_inactive={}",
+                window_state.is_visible,
+                vp_visible,
+                vp_minimized,
+                vp_focused,
+                window_state.was_inactive_since_hidden,
+            ),
+        );
+    }
+}
+
 impl eframe::App for ClipboardApp {
     /// On macOS, exit right after cleanup to dodge an `AppKit` Touch Bar observer crash.
     fn on_exit(&mut self) {
@@ -1878,13 +1909,33 @@ impl eframe::App for ClipboardApp {
     /// all wake-up, tray, hotkey, activation/reopen, monitor, and auto-clear handlers
     /// MUST live in `logic()`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        static FIRST_LOGIC_STARTED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        static FIRST_LOGIC_COMPLETED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+
+        if !FIRST_LOGIC_STARTED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            crate::logging::log_message("INFO", "First ClipboardApp::logic() pass started");
+        }
+
         self.handle_tray_events(ctx);
         self.handle_window_close_request(ctx);
+        let before_hotkey_visible = self.window_state.is_visible;
         self.handle_hotkey_toggle(ctx);
+        if self.window_state.is_visible != before_hotkey_visible {
+            crate::logging::log_message(
+                "INFO",
+                &format!(
+                    "Hotkey toggled visibility: {before_hotkey_visible} -> {}",
+                    self.window_state.is_visible
+                ),
+            );
+        }
         self.handle_app_activation(ctx);
         self.handle_monitor_updates();
         self.handle_clipboard_auto_clear();
         self.handle_ocr_results(ctx);
+        log_viewport_state_transitions(&self.window_state, ctx);
 
         if let Some((_, deadline)) = &self.pending_clipboard_clear {
             ctx.request_repaint_after(deadline.saturating_duration_since(Instant::now()));
@@ -1897,9 +1948,20 @@ impl eframe::App for ClipboardApp {
         if !self.window_state.is_visible && !self.window_state.was_inactive_since_hidden {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+
+        if !FIRST_LOGIC_COMPLETED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            crate::logging::log_message("INFO", "First ClipboardApp::logic() pass completed");
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        static FIRST_UI_LOGGED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+
+        if !FIRST_UI_LOGGED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            crate::logging::log_message("INFO", "First ClipboardApp::ui() pass");
+        }
+
         let ctx = ui.ctx().clone();
         let is_dark = self.is_dark(&ctx);
         if self.current_is_dark != Some(is_dark) {
@@ -2628,5 +2690,76 @@ mod tests {
             true,
             true
         ));
+    }
+
+    #[test]
+    fn test_handle_tray_events_processes_queued_actions_sequentially() {
+        let ctx = egui::Context::default();
+        let (shutdown_tx, _shutdown_rx) = std::sync::mpsc::channel();
+        let (_notify_tx, notify_rx) = std::sync::mpsc::channel();
+        let (_hotkey_tx, hotkey_rx) = std::sync::mpsc::channel();
+        let (tray_tx, tray_rx) = std::sync::mpsc::channel();
+        let (ocr_tx, ocr_rx) = std::sync::mpsc::channel();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("tray_seq_test.db");
+        let key = format!("{:016x}", 1_u64).repeat(4);
+        let db = crate::db::Database::open(&db_path, &key).unwrap();
+        let mut app = ClipboardApp {
+            db,
+            key_storage_mode: crate::crypto::KeyStorageMode::OsKeyring,
+            search_query: String::new(),
+            content_filter: super::ContentFilter::All,
+            items: Vec::new(),
+            filter_counts: super::FilterCounts::default(),
+            clipboard_writer: None,
+            toast: None,
+            pending_toast: None,
+            last_query_cached: String::new(),
+            services: AppServices {
+                notify_rx,
+                hotkey_rx,
+                hotkey_service: None,
+                tray_rx,
+                tray_service: None,
+                monitor_shutdown_tx: shutdown_tx,
+                monitor_handle: None,
+                ocr_rx,
+                ocr_tx,
+            },
+            texture_cache: super::ImageTextureCache::new(),
+            window_state: WindowFocusState {
+                is_visible: false,
+                ..WindowFocusState::default()
+            },
+            selected_index: 0,
+            focus_search_input: false,
+            settings: crate::settings::AppSettings::default(),
+            active_view: super::ActiveView::History,
+            password_gen: crate::password::PasswordGeneratorState::default(),
+            revealed_secrets: std::collections::HashSet::new(),
+            pending_clipboard_clear: None,
+            dialogs: super::DialogState::default(),
+            scroll_to_selected: false,
+            current_is_dark: None,
+            title_bar_dark_mode: None,
+            is_quitting: false,
+            copied_item_pulse: None,
+        };
+
+        // Enqueue OpenSettings followed by Show: both must execute so OpenSettings is not dropped.
+        tray_tx.send(crate::tray::TrayAction::OpenSettings).unwrap();
+        tray_tx.send(crate::tray::TrayAction::Show).unwrap();
+        app.handle_tray_events(&ctx);
+        assert!(app.window_state.is_visible);
+        assert!(matches!(app.active_view, super::ActiveView::Settings));
+        assert!(!app.is_quitting);
+
+        // Enqueue Quit followed by Show: Quit stops draining and exits cleanly.
+        app.window_state.is_visible = false;
+        tray_tx.send(crate::tray::TrayAction::Quit).unwrap();
+        tray_tx.send(crate::tray::TrayAction::Show).unwrap();
+        app.handle_tray_events(&ctx);
+        assert!(app.is_quitting);
+        assert!(!app.window_state.is_visible);
     }
 }

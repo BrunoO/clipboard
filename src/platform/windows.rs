@@ -2,7 +2,7 @@
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
@@ -14,7 +14,6 @@ use windows_sys::Win32::Foundation::{
     LPARAM, LRESULT, POINT, WAIT_OBJECT_0, WPARAM,
 };
 use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
-use windows_sys::Win32::Graphics::Gdi::InvalidateRect;
 use windows_sys::Win32::Security::Cryptography::{
     CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
 };
@@ -46,16 +45,17 @@ use windows_sys::Win32::UI::Shell::{
     NIM_SETVERSION, NINF_KEY, NIN_SELECT, NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICON_VERSION_4,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, BringWindowToTop, ChangeWindowMessageFilterEx, CreateIcon, CreatePopupMenu,
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
-    EnumWindows, GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindow, MessageBoxW, PeekMessageW, PostMessageW,
-    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, ShowWindow,
-    ShowWindowAsync, TrackPopupMenuEx, TranslateMessage, HICON, HMENU, MB_ICONERROR, MB_OK,
-    MF_SEPARATOR, MF_STRING, MSG, MSGFLT_ALLOW, PM_NOREMOVE, SM_MENUDROPALIGNMENT, SW_RESTORE,
-    SW_SHOW, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN,
-    TPM_RIGHTBUTTON, WM_APP, WM_CANCELMODE, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK,
-    WM_LBUTTONUP, WM_NCDESTROY, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+    AllowSetForegroundWindow, AppendMenuW, BringWindowToTop, ChangeWindowMessageFilterEx,
+    CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
+    DestroyWindow, DispatchMessageW, EnumWindows, GetCursorPos, GetForegroundWindow, GetMessageW,
+    GetSystemMetrics, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, MessageBoxW,
+    PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
+    SetForegroundWindow, ShowWindow, TrackPopupMenuEx, TranslateMessage, HICON, HMENU,
+    MB_ICONERROR, MB_OK, MF_SEPARATOR, MF_STRING, MSG, MSGFLT_ALLOW, PM_NOREMOVE,
+    SM_MENUDROPALIGNMENT, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY,
+    TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_CANCELMODE, WM_CLOSE,
+    WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NCDESTROY, WM_NULL,
+    WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 use crate::logging::log_message;
@@ -131,12 +131,63 @@ unsafe fn target_keyboard_layout() -> HKL {
     }
 }
 
+static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
+
+#[must_use]
+const fn should_query_same_thread_window_title(
+    pid: u32,
+    current_pid: u32,
+    tid: u32,
+    current_tid: u32,
+) -> bool {
+    pid != 0 && pid == current_pid && tid != 0 && tid == current_tid
+}
+
+#[must_use]
+const fn should_query_external_instance_window(
+    pid: u32,
+    current_pid: u32,
+    expected_pid: Option<u32>,
+) -> bool {
+    if pid == 0 || pid == current_pid {
+        return false;
+    }
+    match expected_pid {
+        Some(expected) => pid == expected,
+        None => true,
+    }
+}
+
+fn cached_main_window() -> Option<HWND> {
+    let raw = MAIN_HWND.load(Ordering::Acquire);
+    if raw == 0 {
+        return None;
+    }
+    let hwnd = raw as HWND;
+    // SAFETY: `IsWindow` queries User32 handle validity without sending any window message.
+    if unsafe { IsWindow(hwnd) != 0 } {
+        Some(hwnd)
+    } else {
+        let _ = MAIN_HWND.compare_exchange(raw, 0, Ordering::AcqRel, Ordering::Acquire);
+        None
+    }
+}
+
 fn find_main_window() -> Option<HWND> {
-    // SAFETY: `EnumWindows` invokes this synchronously with a valid HWND; `lparam` points to the caller's local `target_hwnd`, which stays alive for the whole enumeration.
+    struct MainWindowSearch {
+        current_pid: u32,
+        current_tid: u32,
+        found: HWND,
+    }
+
+    // SAFETY: `EnumWindows` invokes this synchronously on the calling thread; `lparam` points
+    // to the caller's live stack `MainWindowSearch`. Filtering `tid == current_tid` ensures
+    // `GetWindowTextW` never issues a blocking intra-process cross-thread `WM_GETTEXT`.
     unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam as *mut MainWindowSearch);
         let mut pid: u32 = 0;
-        GetWindowThreadProcessId(hwnd, &raw mut pid);
-        if pid == GetCurrentProcessId() {
+        let tid = GetWindowThreadProcessId(hwnd, &raw mut pid);
+        if should_query_same_thread_window_title(pid, ctx.current_pid, tid, ctx.current_tid) {
             let mut buf = [0u16; 64];
             let len = GetWindowTextW(
                 hwnd,
@@ -147,10 +198,7 @@ fn find_main_window() -> Option<HWND> {
                 if len_usize > 0 {
                     let title = String::from_utf16_lossy(&buf[..len_usize]);
                     if title == "CipherClipboard" {
-                        let out = lparam as *mut HWND;
-                        if !out.is_null() {
-                            *out = hwnd;
-                        }
+                        ctx.found = hwnd;
                         return 0; // stop enumeration
                     }
                 }
@@ -159,18 +207,28 @@ fn find_main_window() -> Option<HWND> {
         1
     }
 
-    let mut target_hwnd: HWND = std::ptr::null_mut();
-    // SAFETY: `enum_proc` is a valid `extern "system"` callback and `target_hwnd` is a live local for the synchronous `EnumWindows` call.
-    unsafe {
-        EnumWindows(
-            Some(enum_proc),
-            std::ptr::addr_of_mut!(target_hwnd) as LPARAM,
-        );
+    if let Some(hwnd) = cached_main_window() {
+        return Some(hwnd);
     }
-    if target_hwnd.is_null() {
+
+    // SAFETY: `GetCurrentProcessId` / `GetCurrentThreadId` are always safe; `enum_proc` is a valid
+    // `extern "system"` callback and `search` stays alive on the stack for the synchronous call.
+    let mut search = unsafe {
+        MainWindowSearch {
+            current_pid: GetCurrentProcessId(),
+            current_tid: GetCurrentThreadId(),
+            found: std::ptr::null_mut(),
+        }
+    };
+    // SAFETY: `search` is live and uniquely borrowed for the duration of `EnumWindows`.
+    unsafe {
+        EnumWindows(Some(enum_proc), std::ptr::addr_of_mut!(search) as LPARAM);
+    }
+    if search.found.is_null() {
         None
     } else {
-        Some(target_hwnd)
+        MAIN_HWND.store(search.found as isize, Ordering::Release);
+        Some(search.found)
     }
 }
 
@@ -536,52 +594,22 @@ unsafe fn show_tray_popup_menu(hwnd: HWND, wparam: WPARAM, using_v4: bool) {
         _ => None,
     };
     if let Some(action) = action {
+        let cached_hwnd = cached_main_window();
+        log_message(
+            "INFO",
+            &format!(
+                "Tray action queued for UI thread: {action:?} (main_hwnd_cached={})",
+                cached_hwnd.is_some()
+            ),
+        );
         let _ = tray_tx.send(action);
         ctx.request_repaint();
-        wake_main_window_for_tray_action(action);
-    }
-}
-
-/// Wakes the main `winit`/`eframe` window directly at the Win32 level in addition
-/// to `ctx.request_repaint()`, ensuring an invisible/sleeping root viewport processes
-/// `tray_rx` immediately even if `egui`'s `repaint_delay` coalescing suppresses the
-/// `UserEvent::RequestRepaint` callback.
-///
-/// # Safety
-/// Safe to invoke from the `windows-tray` background thread; uses only `EnumWindows`
-/// and non-blocking cross-thread `ShowWindowAsync` / `InvalidateRect` / `PostMessageW`.
-unsafe fn wake_main_window_for_tray_action(action: crate::tray::TrayAction) {
-    let Some(main_hwnd) = find_main_window() else {
-        log_message(
-            "WARN",
-            &format!("Tray wakeup failed for {action:?}: main window not found"),
-        );
-        return;
-    };
-
-    match action {
-        crate::tray::TrayAction::Show | crate::tray::TrayAction::OpenSettings => {
-            let show_cmd = if IsIconic(main_hwnd) != 0 {
-                SW_RESTORE
-            } else {
-                SW_SHOW
-            };
-            let shown = ShowWindowAsync(main_hwnd, show_cmd) != 0;
-            let invalidated = InvalidateRect(main_hwnd, std::ptr::null(), 0) != 0;
-            let pinged = PostMessageW(main_hwnd, WM_APP, 0, 0) != 0;
-            log_message(
-                "INFO",
-                &format!(
-                    "Tray woke main window for {action:?} (shown={shown}, invalidated={invalidated}, pinged={pinged})"
-                ),
-            );
-        }
-        crate::tray::TrayAction::Quit => {
-            let posted = PostMessageW(main_hwnd, WM_CLOSE, 0, 0) != 0;
-            log_message(
-                "INFO",
-                &format!("Tray posted WM_CLOSE for Quit (posted={posted})"),
-            );
+        if let Some(main_hwnd) = cached_hwnd {
+            // SAFETY: Non-blocking `PostMessageW(WM_APP)` wakes `winit`'s message wait
+            // without touching `ShowWindow` or synchronous `SendMessageW`.
+            unsafe {
+                let _ = PostMessageW(main_hwnd, WM_APP, 0, 0);
+            }
         }
     }
 }
@@ -656,9 +684,19 @@ unsafe extern "system" fn tray_wnd_proc(
                 && (event == NIN_SELECT || event == NIN_KEYSELECT || event == WM_LBUTTONDBLCLK))
                 || (!using_v4 && (event == WM_LBUTTONUP || event == WM_LBUTTONDBLCLK));
             if show_window {
+                let cached_hwnd = cached_main_window();
+                log_message(
+                    "INFO",
+                    &format!(
+                        "Tray left-click queued Show for UI thread (main_hwnd_cached={})",
+                        cached_hwnd.is_some()
+                    ),
+                );
                 let _ = tray_tx.send(crate::tray::TrayAction::Show);
                 ctx.request_repaint();
-                wake_main_window_for_tray_action(crate::tray::TrayAction::Show);
+                if let Some(main_hwnd) = cached_hwnd {
+                    let _ = PostMessageW(main_hwnd, WM_APP, 0, 0);
+                }
                 return 0;
             }
             0
@@ -1143,6 +1181,7 @@ fn signal_reopen_event(pid: u32) -> bool {
 }
 
 struct InstanceSearchCtx {
+    current_pid: u32,
     expected_pid: Option<u32>,
     found: HWND,
     found_pid: u32,
@@ -1156,10 +1195,8 @@ unsafe extern "system" fn enum_instance_window_proc(hwnd: HWND, lparam: LPARAM) 
     let ctx = &mut *(lparam as *mut InstanceSearchCtx);
     let mut pid: u32 = 0;
     GetWindowThreadProcessId(hwnd, &raw mut pid);
-    if let Some(expected) = ctx.expected_pid {
-        if pid != expected {
-            return 1;
-        }
+    if !should_query_external_instance_window(pid, ctx.current_pid, ctx.expected_pid) {
+        return 1;
     }
     let mut buf = [0u16; 64];
     let len = GetWindowTextW(
@@ -1181,9 +1218,22 @@ unsafe extern "system" fn enum_instance_window_proc(hwnd: HWND, lparam: LPARAM) 
 }
 
 pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
-    let signaled = expected_pid.is_some_and(signal_reopen_event);
+    if let Some(pid) = expected_pid {
+        // Grant the primary process permission to focus itself when it handles the reopen
+        // signal via `eframe::ViewportCommand`, without mutating its Win32 show state externally.
+        // SAFETY: `AllowSetForegroundWindow` safely accepts any PID.
+        unsafe {
+            let _ = AllowSetForegroundWindow(pid);
+        }
+        if signal_reopen_event(pid) {
+            return true;
+        }
+    }
 
+    // SAFETY: `GetCurrentProcessId` is always safe to call.
+    let current_pid = unsafe { GetCurrentProcessId() };
     let mut ctx = InstanceSearchCtx {
+        current_pid,
         expected_pid,
         found: std::ptr::null_mut(),
         found_pid: 0,
@@ -1197,12 +1247,15 @@ pub(crate) fn activate_existing_instance(expected_pid: Option<u32>) -> bool {
             std::ptr::addr_of_mut!(ctx) as LPARAM,
         );
         if ctx.found.is_null() {
-            signaled
+            false
         } else {
-            if !signaled && ctx.found_pid != 0 {
-                let _ = signal_reopen_event(ctx.found_pid);
+            if ctx.found_pid != 0 {
+                let _ = AllowSetForegroundWindow(ctx.found_pid);
+                if signal_reopen_event(ctx.found_pid) {
+                    return true;
+                }
             }
-            // SW_RESTORE on a maximized/snapped window would un-maximize it.
+            // Fallback only when reopen IPC could not be signaled.
             if IsIconic(ctx.found) != 0 {
                 ShowWindow(ctx.found, SW_RESTORE);
             } else {
@@ -1829,6 +1882,27 @@ mod tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_none());
+        }
+    }
+
+    #[test]
+    fn test_window_query_thread_and_process_guards() {
+        assert!(should_query_same_thread_window_title(100, 100, 200, 200));
+        assert!(!should_query_same_thread_window_title(100, 100, 201, 200));
+        assert!(!should_query_same_thread_window_title(101, 100, 200, 200));
+        assert!(!should_query_same_thread_window_title(0, 100, 200, 200));
+        assert!(!should_query_same_thread_window_title(100, 100, 0, 200));
+
+        assert!(!should_query_external_instance_window(100, 100, None));
+        assert!(!should_query_external_instance_window(100, 100, Some(100)));
+        assert!(should_query_external_instance_window(200, 100, None));
+        assert!(should_query_external_instance_window(200, 100, Some(200)));
+        assert!(!should_query_external_instance_window(201, 100, Some(200)));
+        assert!(!should_query_external_instance_window(0, 100, None));
+
+        // Unpopulated cache starts empty.
+        if MAIN_HWND.load(Ordering::Acquire) == 0 {
+            assert!(cached_main_window().is_none());
         }
     }
 }

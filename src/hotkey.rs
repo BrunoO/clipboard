@@ -110,6 +110,10 @@ impl HotkeyService {
                             lock.contains(&event.id)
                         };
                         if matches && event.state == HotKeyState::Pressed {
+                            crate::logging::log_message(
+                                "INFO",
+                                "Global hotkey pressed; queued wakeup for UI thread",
+                            );
                             crate::platform::capture_active_window();
                             // Best-effort coalesced wakeup; a full or closed channel needs no action.
                             let _ = hotkey_tx.try_send(());
