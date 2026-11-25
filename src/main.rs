@@ -107,7 +107,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(move |cc| {
             setup_egui_context(&cc.egui_ctx, settings.theme);
 
-            // Initialize OS activation & reopen observers (macOS Dock click / Cmd+Tab)
+            // Register root viewport native handle and OS activation / reopen observers
+            platform::register_main_window(cc);
             platform::set_repaint_context(&cc.egui_ctx);
             platform::setup_reopen_observer();
             spawn_smoke_quit(&tray_tx, &cc.egui_ctx); // CI quit smoke test (debug only)

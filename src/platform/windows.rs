@@ -1,10 +1,12 @@
 #![allow(unsafe_code)]
 
+use std::cell::Cell;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
 use windows::Media::Ocr::OcrEngine;
 use windows::Storage::Streams::DataWriter;
@@ -48,14 +50,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, BringWindowToTop, ChangeWindowMessageFilterEx,
     CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
     DestroyWindow, DispatchMessageW, EnumWindows, GetCursorPos, GetForegroundWindow, GetMessageW,
-    GetSystemMetrics, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, MessageBoxW,
-    PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
-    SetForegroundWindow, ShowWindow, TrackPopupMenuEx, TranslateMessage, HICON, HMENU,
-    MB_ICONERROR, MB_OK, MF_SEPARATOR, MF_STRING, MSG, MSGFLT_ALLOW, PM_NOREMOVE,
-    SM_MENUDROPALIGNMENT, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY,
-    TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_CANCELMODE, WM_CLOSE,
-    WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NCDESTROY, WM_NULL,
-    WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+    GetSystemMetrics, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindow, MessageBoxW, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW,
+    RegisterWindowMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TrackPopupMenuEx,
+    TranslateMessage, GWLP_USERDATA, HICON, HMENU, MB_ICONERROR, MB_OK, MF_SEPARATOR, MF_STRING,
+    MSG, MSGFLT_ALLOW, PM_NOREMOVE, SM_MENUDROPALIGNMENT, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WM_APP,
+    WM_CANCELMODE, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+    WM_NCDESTROY, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 use crate::logging::log_message;
@@ -132,6 +134,20 @@ unsafe fn target_keyboard_layout() -> HKL {
 }
 
 static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
+
+fn store_main_window(raw_hwnd: isize) {
+    if raw_hwnd != 0 {
+        MAIN_HWND.store(raw_hwnd, Ordering::Release);
+    }
+}
+
+pub(super) fn register_main_window(cc: &eframe::CreationContext<'_>) {
+    if let Ok(handle) = cc.window_handle() {
+        if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+            store_main_window(win32.hwnd.get());
+        }
+    }
+}
 
 #[must_use]
 const fn should_query_same_thread_window_title(
@@ -295,25 +311,36 @@ const TRAY_CMD_SHOW_USIZE: usize = 1;
 const TRAY_CMD_SETTINGS_USIZE: usize = 2;
 const TRAY_CMD_QUIT_USIZE: usize = 3;
 
-struct TrayState {
+struct TrayWindowState {
     tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
     ctx: eframe::egui::Context,
-    hicon: isize,
-    using_v4: bool,
+    hicon: HICON,
+    taskbar_created_msg: u32,
+    using_v4: Cell<bool>,
+    menu_queued: Cell<bool>,
+    menu_open: Cell<bool>,
+    icon_live: Arc<AtomicBool>,
 }
 
-static TRAY_STATE: Mutex<Option<TrayState>> = Mutex::new(None);
-static TRAY_ICON_LIVE: AtomicBool = AtomicBool::new(false);
-static TRAY_MENU_QUEUED: AtomicBool = AtomicBool::new(false);
-static TRAY_MENU_OPEN: AtomicBool = AtomicBool::new(false);
-static TRAY_TASKBAR_CREATED_MSG: AtomicU32 = AtomicU32::new(0);
+struct CellBoolGuard<'a>(&'a Cell<bool>);
 
-struct MenuOpenGuard;
-
-impl Drop for MenuOpenGuard {
+impl Drop for CellBoolGuard<'_> {
     fn drop(&mut self) {
-        TRAY_MENU_OPEN.store(false, Ordering::Release);
+        self.0.set(false);
     }
+}
+
+/// Reads the per-window [`TrayWindowState`] pointer from `GWLP_USERDATA`.
+///
+/// # Safety
+/// Must only be called on the `windows-tray` thread for a `WindowsTray` helper HWND whose
+/// `GWLP_USERDATA` points to a live `TrayWindowState` owned by `run_tray_thread`.
+unsafe fn tray_window_state<'a>(hwnd: HWND) -> Option<&'a TrayWindowState> {
+    let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if raw == 0 {
+        return None;
+    }
+    (raw as *const TrayWindowState).as_ref()
 }
 
 fn wide_null(text: &str) -> Vec<u16> {
@@ -508,24 +535,16 @@ fn decode_v4_point(wparam: WPARAM) -> Option<POINT> {
 
 /// # Safety
 /// Must run on the `windows-tray` thread owning `hwnd` outside `WM_TRAY_CALLBACK`.
-unsafe fn show_tray_popup_menu(hwnd: HWND, wparam: WPARAM, using_v4: bool) {
-    if TRAY_MENU_OPEN
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
+unsafe fn show_tray_popup_menu(
+    hwnd: HWND,
+    state: &TrayWindowState,
+    wparam: WPARAM,
+    using_v4: bool,
+) {
+    if state.menu_open.replace(true) {
         return;
     }
-    let _open_guard = MenuOpenGuard;
-
-    // Clone outside `TrackPopupMenuEx` so the mutex is never held across the modal menu loop.
-    let Some((tray_tx, ctx)) = TRAY_STATE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .map(|state| (state.tray_tx.clone(), state.ctx.clone()))
-    else {
-        return;
-    };
+    let _open_guard = CellBoolGuard(&state.menu_open);
 
     let mut pt = POINT { x: 0, y: 0 };
     if GetCursorPos(&raw mut pt) == 0 {
@@ -609,8 +628,8 @@ unsafe fn show_tray_popup_menu(hwnd: HWND, wparam: WPARAM, using_v4: bool) {
                 cached_hwnd.is_some()
             ),
         );
-        let _ = tray_tx.send(action);
-        ctx.request_repaint();
+        let _ = state.tray_tx.send(action);
+        state.ctx.request_repaint();
         if let Some(main_hwnd) = cached_hwnd {
             // SAFETY: Non-blocking `PostMessageW(WM_APP)` wakes `winit`'s message wait
             // without touching `ShowWindow` or synchronous `SendMessageW`.
@@ -629,53 +648,38 @@ unsafe extern "system" fn tray_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    let taskbar_msg = TRAY_TASKBAR_CREATED_MSG.load(Ordering::Relaxed);
-    if taskbar_msg != 0 && msg == taskbar_msg {
-        let hicon = TRAY_STATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map_or(0, |s| s.hicon);
-        if hicon != 0 {
-            let del_nid = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
-            let _ = Shell_NotifyIconW(NIM_DELETE, &raw const del_nid);
-            let (live, using_v4) = register_notify_icon(hwnd, hicon as HICON);
-            TRAY_ICON_LIVE.store(live, Ordering::Release);
-            if let Some(state) = TRAY_STATE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_mut()
-            {
-                state.using_v4 = using_v4;
+    let state = tray_window_state(hwnd);
+    if let Some(state) = state {
+        if state.taskbar_created_msg != 0 && msg == state.taskbar_created_msg {
+            if !state.hicon.is_null() {
+                let del_nid = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
+                let _ = Shell_NotifyIconW(NIM_DELETE, &raw const del_nid);
+                let (live, using_v4) = register_notify_icon(hwnd, state.hicon);
+                state.icon_live.store(live, Ordering::Release);
+                state.using_v4.set(using_v4);
             }
+            return 0;
         }
-        return 0;
     }
 
     match msg {
         WM_TRAY_CALLBACK => {
-            let event = u32::try_from(lparam & 0xFFFF).unwrap_or(0);
-            let snapshot = TRAY_STATE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-                .map(|s| (s.using_v4, s.tray_tx.clone(), s.ctx.clone()));
-            let Some((using_v4, tray_tx, ctx)) = snapshot else {
+            let Some(state) = state else {
                 return 0;
             };
+            let event = u32::try_from(lparam & 0xFFFF).unwrap_or(0);
+            let using_v4 = state.using_v4.get();
 
             let open_menu =
                 (using_v4 && event == WM_CONTEXTMENU) || (!using_v4 && event == WM_RBUTTONUP);
             if open_menu {
                 // Defer `TrackPopupMenuEx` via `PostMessageW` so `WM_TRAY_CALLBACK` returns 0
                 // immediately to `explorer.exe` (preventing Windows 11 overflow flyout deadlocks).
-                if !TRAY_MENU_OPEN.load(Ordering::Acquire)
-                    && TRAY_MENU_QUEUED
-                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
+                if !state.menu_open.get()
+                    && !state.menu_queued.replace(true)
                     && PostMessageW(hwnd, WM_SHOW_TRAY_MENU, wparam, isize::from(using_v4)) == 0
                 {
-                    TRAY_MENU_QUEUED.store(false, Ordering::Release);
+                    state.menu_queued.set(false);
                     log_message(
                         "WARN",
                         &format!(
@@ -700,8 +704,8 @@ unsafe extern "system" fn tray_wnd_proc(
                         cached_hwnd.is_some()
                     ),
                 );
-                let _ = tray_tx.send(crate::tray::TrayAction::Show);
-                ctx.request_repaint();
+                let _ = state.tray_tx.send(crate::tray::TrayAction::Show);
+                state.ctx.request_repaint();
                 if let Some(main_hwnd) = cached_hwnd {
                     let _ = PostMessageW(main_hwnd, WM_APP, 0, 0);
                 }
@@ -710,8 +714,10 @@ unsafe extern "system" fn tray_wnd_proc(
             0
         }
         WM_SHOW_TRAY_MENU => {
-            TRAY_MENU_QUEUED.store(false, Ordering::Release);
-            show_tray_popup_menu(hwnd, wparam, lparam != 0);
+            if let Some(state) = state {
+                state.menu_queued.set(false);
+                show_tray_popup_menu(hwnd, state, wparam, lparam != 0);
+            }
             0
         }
         WM_CLOSE => {
@@ -719,21 +725,25 @@ unsafe extern "system" fn tray_wnd_proc(
             0
         }
         WM_DESTROY => {
-            TRAY_ICON_LIVE.store(false, Ordering::Release);
+            if let Some(state) = state {
+                state.icon_live.store(false, Ordering::Release);
+            }
             let nid = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
             let _ = Shell_NotifyIconW(NIM_DELETE, &raw const nid);
             PostQuitMessage(0);
             0
         }
         WM_NCDESTROY => {
-            TRAY_ICON_LIVE.store(false, Ordering::Release);
-            TRAY_MENU_OPEN.store(false, Ordering::Release);
-            TRAY_MENU_QUEUED.store(false, Ordering::Release);
+            // Detach `GWLP_USERDATA` before the window finishes tearing down; `run_tray_thread`
+            // owns and drops the `Box<TrayWindowState>` once `DestroyWindow` returns.
+            let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
+
+type TrayInitResult = Result<(isize, Arc<AtomicBool>), String>;
 
 fn run_tray_thread(
     rgba: &[u8],
@@ -741,7 +751,7 @@ fn run_tray_thread(
     height: u32,
     tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
     ctx: eframe::egui::Context,
-    init_tx: &std::sync::mpsc::SyncSender<Result<isize, String>>,
+    init_tx: &std::sync::mpsc::SyncSender<TrayInitResult>,
 ) {
     let hicon = match create_tray_hicon(rgba, width, height) {
         Ok(hicon) => hicon,
@@ -765,25 +775,37 @@ fn run_tray_thread(
 
     let taskbar_created_name = wide_null("TaskbarCreated");
     // SAFETY: `taskbar_created_name` is null-terminated; `hwnd` is owned by this thread.
-    unsafe {
+    let taskbar_created_msg = unsafe {
         let taskbar_msg = RegisterWindowMessageW(taskbar_created_name.as_ptr());
         if taskbar_msg != 0 {
-            TRAY_TASKBAR_CREATED_MSG.store(taskbar_msg, Ordering::Relaxed);
             let _ =
                 ChangeWindowMessageFilterEx(hwnd, taskbar_msg, MSGFLT_ALLOW, std::ptr::null_mut());
         }
         let _ =
             ChangeWindowMessageFilterEx(hwnd, WM_TRAY_CALLBACK, MSGFLT_ALLOW, std::ptr::null_mut());
-    }
+        taskbar_msg
+    };
 
-    *TRAY_STATE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(TrayState {
+    let icon_live = Arc::new(AtomicBool::new(false));
+    let state = Box::new(TrayWindowState {
         tray_tx,
         ctx,
-        hicon: hicon as isize,
-        using_v4: false,
+        hicon,
+        taskbar_created_msg,
+        using_v4: Cell::new(false),
+        menu_queued: Cell::new(false),
+        menu_open: Cell::new(false),
+        icon_live: Arc::clone(&icon_live),
     });
+    // SAFETY: `state` stays pinned at a stable heap address on this stack frame until after
+    // `DestroyWindow(hwnd)` finishes (which detaches `GWLP_USERDATA` in `WM_NCDESTROY`).
+    unsafe {
+        let _ = SetWindowLongPtrW(
+            hwnd,
+            GWLP_USERDATA,
+            std::ptr::from_ref(state.as_ref()) as isize,
+        );
+    }
 
     let mut registered = false;
     let mut using_v4 = false;
@@ -801,35 +823,27 @@ fn run_tray_thread(
     }
 
     if !registered {
-        *TRAY_STATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        TRAY_ICON_LIVE.store(false, Ordering::Release);
-        // SAFETY: Cleans up thread-owned `hwnd` and `hicon` before signaling initialization error.
+        state.icon_live.store(false, Ordering::Release);
+        // SAFETY: Cleans up thread-owned `hwnd` and `hicon` before dropping `state`.
         unsafe {
             let _ = DestroyWindow(hwnd);
             let _ = DestroyIcon(hicon);
         }
+        drop(state);
         let _ = init_tx.send(Err(
             "Shell_NotifyIconW(NIM_ADD) failed (Windows shell not ready)".to_string(),
         ));
         return;
     }
 
-    if let Some(state) = TRAY_STATE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_mut()
-    {
-        state.using_v4 = using_v4;
-    }
-    TRAY_ICON_LIVE.store(true, Ordering::Release);
+    state.using_v4.set(using_v4);
+    state.icon_live.store(true, Ordering::Release);
     log_message(
         "INFO",
         &format!("Windows tray icon registered on dedicated thread (using_v4={using_v4})"),
     );
 
-    let _ = init_tx.send(Ok(hwnd as isize));
+    let _ = init_tx.send(Ok((hwnd as isize, icon_live)));
 
     // SAFETY: Standard Win32 message pump for the tray helper window owned by this thread.
     unsafe {
@@ -840,14 +854,10 @@ fn run_tray_thread(
         }
     }
 
-    TRAY_ICON_LIVE.store(false, Ordering::Release);
-    TRAY_MENU_OPEN.store(false, Ordering::Release);
-    TRAY_MENU_QUEUED.store(false, Ordering::Release);
-    *TRAY_STATE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    state.icon_live.store(false, Ordering::Release);
 
-    // SAFETY: Ensures notification icon, helper HWND, and HICON are cleaned up on the owning thread.
+    // SAFETY: Ensures notification icon, helper HWND, and HICON are cleaned up on the owning
+    // thread before `state` is dropped.
     unsafe {
         let nid = build_notify_icon_data(hwnd, std::ptr::null_mut(), 0);
         let _ = Shell_NotifyIconW(NIM_DELETE, &raw const nid);
@@ -856,6 +866,7 @@ fn run_tray_thread(
         }
         let _ = DestroyIcon(hicon);
     }
+    drop(state);
 }
 
 /// Native Win32 notification-area icon and context-menu host (`NOTIFYICON_VERSION_4`)
@@ -863,6 +874,7 @@ fn run_tray_thread(
 #[derive(Debug)]
 pub(crate) struct WindowsTray {
     hwnd: isize,
+    icon_live: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -874,12 +886,13 @@ impl WindowsTray {
         tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
         ctx: eframe::egui::Context,
     ) -> Result<Self, String> {
-        // Seed `MAIN_HWND` on the UI thread while the root viewport HWND already exists,
-        // so the `windows-tray` thread has a warm cache from its very first event.
-        let _ = find_main_window();
+        // Fallback seed if `register_main_window` was not called before tray init (e.g. unit tests).
+        if cached_main_window().is_none() {
+            let _ = find_main_window();
+        }
 
         let rgba_owned = rgba.to_vec();
-        let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<isize, String>>(1);
+        let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<TrayInitResult>(1);
         let handle = std::thread::Builder::new()
             .name("windows-tray".to_string())
             .spawn(move || {
@@ -888,8 +901,9 @@ impl WindowsTray {
             .map_err(|e| format!("Failed to spawn windows-tray thread: {e}"))?;
 
         match init_rx.recv() {
-            Ok(Ok(hwnd)) => Ok(Self {
+            Ok(Ok((hwnd, icon_live))) => Ok(Self {
                 hwnd,
+                icon_live,
                 thread: Some(handle),
             }),
             Ok(Err(err)) => {
@@ -911,7 +925,7 @@ impl WindowsTray {
     }
 
     pub(crate) fn is_live(&self) -> bool {
-        if self.hwnd == 0 || !TRAY_ICON_LIVE.load(Ordering::Acquire) {
+        if self.hwnd == 0 || !self.icon_live.load(Ordering::Acquire) {
             return false;
         }
         // SAFETY: `IsWindow` safely validates whether `self.hwnd` is still an active HWND.
@@ -921,7 +935,7 @@ impl WindowsTray {
 
 impl Drop for WindowsTray {
     fn drop(&mut self) {
-        TRAY_ICON_LIVE.store(false, Ordering::Release);
+        self.icon_live.store(false, Ordering::Release);
 
         if self.hwnd != 0 {
             let hwnd = self.hwnd as HWND;
@@ -942,12 +956,6 @@ impl Drop for WindowsTray {
                 log_message("ERROR", "windows-tray thread panicked during shutdown");
             }
         }
-
-        TRAY_MENU_OPEN.store(false, Ordering::Release);
-        TRAY_MENU_QUEUED.store(false, Ordering::Release);
-        *TRAY_STATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
@@ -1832,10 +1840,11 @@ mod tests {
     use super::{
         build_tray_popup_menu, cached_main_window, create_tray_hicon, create_tray_window,
         decode_v4_point, should_query_external_instance_window,
-        should_query_same_thread_window_title, DestroyIcon, DestroyMenu, DestroyWindow, IsWindow,
-        WindowsTray, MAIN_HWND, TRAY_ICON_LIVE, TRAY_MENU_OPEN, TRAY_MENU_QUEUED, TRAY_STATE,
+        should_query_same_thread_window_title, store_main_window, DestroyIcon, DestroyMenu,
+        DestroyWindow, IsWindow, WindowsTray, MAIN_HWND,
     };
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
 
     #[test]
     fn test_decode_v4_point_handles_signed_coordinates_and_sentinels() {
@@ -1886,15 +1895,10 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let ctx = eframe::egui::Context::default();
         if let Ok(tray) = WindowsTray::new(&rgba, 16, 16, tx, ctx) {
+            let live_flag = Arc::clone(&tray.icon_live);
             assert!(tray.is_live());
             drop(tray);
-            assert!(!TRAY_ICON_LIVE.load(Ordering::Acquire));
-            assert!(!TRAY_MENU_OPEN.load(Ordering::Acquire));
-            assert!(!TRAY_MENU_QUEUED.load(Ordering::Acquire));
-            assert!(TRAY_STATE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_none());
+            assert!(!live_flag.load(Ordering::Acquire));
         }
     }
 
@@ -1913,8 +1917,11 @@ mod tests {
         assert!(!should_query_external_instance_window(201, 100, Some(200)));
         assert!(!should_query_external_instance_window(0, 100, None));
 
-        // Unpopulated cache starts empty.
-        if MAIN_HWND.load(Ordering::Acquire) == 0 {
+        // Storing 0 must never overwrite the cached HWND; unpopulated cache starts empty.
+        let before = MAIN_HWND.load(Ordering::Acquire);
+        store_main_window(0);
+        assert_eq!(MAIN_HWND.load(Ordering::Acquire), before);
+        if before == 0 {
             assert!(cached_main_window().is_none());
         }
     }

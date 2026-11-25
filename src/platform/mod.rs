@@ -128,6 +128,16 @@ pub(crate) fn set_repaint_context(ctx: &eframe::egui::Context) {
     let _ = ctx;
 }
 
+/// Registers the root viewport's native window handle from `eframe::CreationContext`
+/// so platform helpers (e.g. Windows tray wakeup and activation checks) never need to
+/// rediscover the main window by title enumeration.
+pub(crate) fn register_main_window(cc: &eframe::CreationContext<'_>) {
+    #[cfg(target_os = "windows")]
+    windows::register_main_window(cc);
+    #[cfg(not(target_os = "windows"))]
+    let _ = cc;
+}
+
 /// Returns true if the application currently has OS focus/activation.
 #[cfg(test)]
 #[must_use]

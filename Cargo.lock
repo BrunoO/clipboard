@@ -737,6 +737,7 @@ dependencies = [
  "keyring",
  "objc",
  "rand 0.10.4",
+ "raw-window-handle",
  "rusqlite",
  "serde",
  "serde_json",
