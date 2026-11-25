@@ -276,11 +276,8 @@ fn create_tray_hicon(rgba: &[u8], width: u32, height: u32) -> Result<HICON, Stri
     }
 
     let mut bgra = Vec::with_capacity(expected_len);
-    for px in rgba.chunks_exact(4) {
-        bgra.push(px[2]); // B
-        bgra.push(px[1]); // G
-        bgra.push(px[0]); // R
-        bgra.push(px[3]); // A
+    for &[r, g, b, a] in rgba.as_chunks::<4>().0 {
+        bgra.extend_from_slice(&[b, g, r, a]);
     }
 
     // 1bpp AND mask, word-aligned rows, zeroed so Windows uses the 32-bpp alpha channel.
