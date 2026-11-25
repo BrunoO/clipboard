@@ -10,7 +10,8 @@ use windows::Media::Ocr::OcrEngine;
 use windows::Storage::Streams::DataWriter;
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GlobalFree, LocalFree, HANDLE, HWND, LPARAM, WAIT_OBJECT_0,
+    CloseHandle, GetLastError, GlobalFree, LocalFree, ERROR_CLASS_ALREADY_EXISTS, HANDLE, HWND,
+    LPARAM, LRESULT, POINT, WAIT_OBJECT_0, WPARAM,
 };
 use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows_sys::Win32::Security::Cryptography::{
@@ -24,6 +25,7 @@ use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
     OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
 };
@@ -39,9 +41,13 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_V,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
-    IsIconic, IsWindow, MessageBoxW, PeekMessageW, SetForegroundWindow, ShowWindow, MB_ICONERROR,
-    MB_OK, MSG, PM_NOREMOVE, SW_RESTORE, SW_SHOW,
+    AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+    DestroyWindow, EnumWindows, GetCursorPos, GetForegroundWindow, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindow, MessageBoxW, PeekMessageW, PostMessageW,
+    RegisterClassW, SetForegroundWindow, ShowWindow, TrackPopupMenuEx, CW_USEDEFAULT, MB_ICONERROR,
+    MB_OK, MF_SEPARATOR, MF_STRING, MSG, PM_NOREMOVE, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_NCDESTROY, WM_NULL,
+    WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 use crate::logging::log_message;
@@ -196,15 +202,274 @@ pub(super) fn order_front_main_window() {
 }
 
 pub(super) fn is_active() -> bool {
-    // SAFETY: `GetForegroundWindow` may be null and is checked; the PID out-pointer references a live local.
+    // SAFETY: `GetForegroundWindow` is null-checked and compared against the main
+    // `CipherClipboard` HWND from `find_main_window`, so hidden helper windows
+    // (`tray-icon`, hotkey, tray menu host) owned by our process do not trigger
+    // unintended focus-reopen wakes.
     unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.is_null() {
+        let fg = GetForegroundWindow();
+        if fg.is_null() {
             return false;
         }
-        let mut pid: u32 = 0;
-        GetWindowThreadProcessId(hwnd, &raw mut pid);
-        pid == GetCurrentProcessId()
+        find_main_window().is_some_and(|main_hwnd| fg == main_hwnd)
+    }
+}
+
+const WM_SHOW_TRAY_MENU: u32 = WM_APP + 1;
+const TRAY_CMD_SHOW: i32 = 1;
+const TRAY_CMD_SETTINGS: i32 = 2;
+const TRAY_CMD_QUIT: i32 = 3;
+const TRAY_CMD_SHOW_USIZE: usize = 1;
+const TRAY_CMD_SETTINGS_USIZE: usize = 2;
+const TRAY_CMD_QUIT_USIZE: usize = 3;
+
+struct TrayMenuContext {
+    tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
+    ctx: eframe::egui::Context,
+}
+
+static TRAY_MENU_CONTEXT: Mutex<Option<TrayMenuContext>> = Mutex::new(None);
+static TRAY_MENU_OPEN: AtomicBool = AtomicBool::new(false);
+
+struct MenuOpenGuard;
+
+impl Drop for MenuOpenGuard {
+    fn drop(&mut self) {
+        TRAY_MENU_OPEN.store(false, Ordering::Release);
+    }
+}
+
+fn wide_null(text: &str) -> Vec<u16> {
+    OsStr::new(text)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+/// # Safety
+/// Invoked by Win32 message dispatch for `TrayMenuHost` windows.
+unsafe extern "system" fn tray_menu_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_SHOW_TRAY_MENU => {
+            show_tray_popup_menu(hwnd);
+            0
+        }
+        WM_NCDESTROY => {
+            TRAY_MENU_OPEN.store(false, Ordering::Release);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// # Safety
+/// Must run on the UI thread owning `hwnd` from top-level `WM_SHOW_TRAY_MENU` dispatch.
+unsafe fn show_tray_popup_menu(hwnd: HWND) {
+    if TRAY_MENU_OPEN
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let _open_guard = MenuOpenGuard;
+
+    // Clone outside `TrackPopupMenuEx` so the mutex is never held across a modal menu loop.
+    let Some((tray_tx, ctx)) = TRAY_MENU_CONTEXT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .map(|state| (state.tray_tx.clone(), state.ctx.clone()))
+    else {
+        return;
+    };
+
+    let mut pt = POINT { x: 0, y: 0 };
+    if GetCursorPos(&raw mut pt) == 0 {
+        return;
+    }
+
+    // Preserve the prior non-CipherClipboard foreground window before we claim
+    // foreground ownership on the menu host window.
+    capture_frontmost();
+
+    let hmenu = CreatePopupMenu();
+    if hmenu.is_null() {
+        return;
+    }
+
+    let show_label = wide_null("Show CipherClipboard");
+    let settings_label = wide_null("Settings...");
+    let quit_label = wide_null("Quit CipherClipboard");
+
+    let populated = AppendMenuW(hmenu, MF_STRING, TRAY_CMD_SHOW_USIZE, show_label.as_ptr()) != 0
+        && AppendMenuW(
+            hmenu,
+            MF_STRING,
+            TRAY_CMD_SETTINGS_USIZE,
+            settings_label.as_ptr(),
+        ) != 0
+        && AppendMenuW(hmenu, MF_SEPARATOR, 0, std::ptr::null()) != 0
+        && AppendMenuW(hmenu, MF_STRING, TRAY_CMD_QUIT_USIZE, quit_label.as_ptr()) != 0;
+
+    if !populated {
+        let _ = DestroyMenu(hmenu);
+        return;
+    }
+
+    // Acquire foreground on our activatable `WS_EX_TOOLWINDOW` host window so
+    // outside clicks dismiss the menu reliably (Microsoft KB135788). Detach
+    // immediately before entering the modal menu loop.
+    let cur_thread = GetCurrentThreadId();
+    let fg_hwnd = GetForegroundWindow();
+    let fg_thread = if fg_hwnd.is_null() {
+        0
+    } else {
+        GetWindowThreadProcessId(fg_hwnd, std::ptr::null_mut())
+    };
+    let attached = fg_thread != 0
+        && fg_thread != cur_thread
+        && AttachThreadInput(cur_thread, fg_thread, 1) != 0;
+
+    BringWindowToTop(hwnd);
+    let _ = SetForegroundWindow(hwnd);
+
+    if attached {
+        let _ = AttachThreadInput(cur_thread, fg_thread, 0);
+    }
+
+    let selected = TrackPopupMenuEx(
+        hmenu,
+        TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+        pt.x,
+        pt.y,
+        hwnd,
+        std::ptr::null(),
+    );
+
+    let _ = DestroyMenu(hmenu);
+    // Microsoft KB135788: force task-switch completion so subsequent clicks dismiss cleanly.
+    let _ = PostMessageW(hwnd, WM_NULL, 0, 0);
+
+    let action = match selected {
+        TRAY_CMD_SHOW => Some(crate::tray::TrayAction::Show),
+        TRAY_CMD_SETTINGS => Some(crate::tray::TrayAction::OpenSettings),
+        TRAY_CMD_QUIT => Some(crate::tray::TrayAction::Quit),
+        _ => None,
+    };
+    if let Some(action) = action {
+        let _ = tray_tx.send(action);
+        ctx.request_repaint();
+    }
+}
+
+/// Dedicated activatable Win32 owner window for deferred `TrackPopupMenuEx`
+/// popup menus, avoiding `tray-icon`'s `WS_EX_NOACTIVATE` shell callback window.
+#[derive(Debug)]
+pub(crate) struct TrayMenuHost {
+    hwnd: isize,
+}
+
+impl TrayMenuHost {
+    pub(crate) fn new(
+        tray_tx: std::sync::mpsc::Sender<crate::tray::TrayAction>,
+        ctx: eframe::egui::Context,
+    ) -> Result<Self, String> {
+        let class_name = wide_null("CipherClipboardTrayMenuWindow");
+        let window_title = wide_null("CipherClipboardTrayMenu");
+
+        // SAFETY: `GetModuleHandleW(null)` yields this process's HMODULE; `class_name`
+        // and `window_title` live across `RegisterClassW` and `CreateWindowExW`. The
+        // helper window stays unshown (`!WS_VISIBLE`) without `WS_EX_NOACTIVATE`.
+        let hwnd = unsafe {
+            let hinstance = GetModuleHandleW(std::ptr::null());
+            let wc = WNDCLASSW {
+                style: 0,
+                lpfnWndProc: Some(tray_menu_wnd_proc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: hinstance,
+                hIcon: std::ptr::null_mut(),
+                hCursor: std::ptr::null_mut(),
+                hbrBackground: std::ptr::null_mut(),
+                lpszMenuName: std::ptr::null(),
+                lpszClassName: class_name.as_ptr(),
+            };
+            let atom = RegisterClassW(&raw const wc);
+            if atom == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
+                return Err(format!(
+                    "RegisterClassW failed for tray menu host (err={})",
+                    GetLastError()
+                ));
+            }
+
+            let hwnd = CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                class_name.as_ptr(),
+                window_title.as_ptr(),
+                WS_POPUP,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                0,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                hinstance,
+                std::ptr::null(),
+            );
+            if hwnd.is_null() {
+                return Err(format!(
+                    "CreateWindowExW failed for tray menu host (err={})",
+                    GetLastError()
+                ));
+            }
+            hwnd
+        };
+
+        *TRAY_MENU_CONTEXT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(TrayMenuContext { tray_tx, ctx });
+
+        Ok(Self {
+            hwnd: hwnd as isize,
+        })
+    }
+
+    pub(crate) fn request_show_menu(&self) {
+        if self.hwnd == 0 {
+            return;
+        }
+        // SAFETY: Validates `self.hwnd` via `IsWindow` before posting `WM_SHOW_TRAY_MENU`
+        // so popup tracking runs outside the tray shell notification callback.
+        unsafe {
+            let hwnd = self.hwnd as HWND;
+            if IsWindow(hwnd) != 0 {
+                let _ = PostMessageW(hwnd, WM_SHOW_TRAY_MENU, 0, 0);
+            }
+        }
+    }
+}
+
+impl Drop for TrayMenuHost {
+    fn drop(&mut self) {
+        *TRAY_MENU_CONTEXT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        if self.hwnd != 0 {
+            // SAFETY: Destroys the owned helper window created by `TrayMenuHost::new`.
+            unsafe {
+                let hwnd = self.hwnd as HWND;
+                if IsWindow(hwnd) != 0 {
+                    let _ = DestroyWindow(hwnd);
+                }
+            }
+            self.hwnd = 0;
+        }
     }
 }
 
@@ -1062,4 +1327,33 @@ pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> 
         .to_string();
 
     Ok(text.replace("\r\n", "\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IsWindow, TrayMenuHost, HWND, TRAY_MENU_CONTEXT};
+
+    #[test]
+    fn test_tray_menu_host_lifecycle() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let ctx = eframe::egui::Context::default();
+        let host = TrayMenuHost::new(tx, ctx).expect("TrayMenuHost should create helper HWND");
+        assert_ne!(host.hwnd, 0);
+        // SAFETY: `host.hwnd` was just returned from `CreateWindowExW` and is validated with `IsWindow`.
+        unsafe {
+            assert_ne!(IsWindow(host.hwnd as HWND), 0);
+        }
+        host.request_show_menu();
+        let hwnd = host.hwnd as HWND;
+        drop(host);
+
+        assert!(TRAY_MENU_CONTEXT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none());
+        // SAFETY: `IsWindow` safely returns 0 after `DestroyWindow`.
+        unsafe {
+            assert_eq!(IsWindow(hwnd), 0);
+        }
+    }
 }

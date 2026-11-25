@@ -57,6 +57,8 @@ impl QuoteHotkeyFallback {
 pub(crate) struct SystemTrayBackend {
     #[cfg(target_os = "windows")]
     tray_icon: tray_icon::TrayIcon,
+    #[cfg(target_os = "windows")]
+    _menu_host: std::sync::Arc<windows::TrayMenuHost>,
 }
 
 impl std::fmt::Debug for SystemTrayBackend {
@@ -99,25 +101,20 @@ impl SystemTrayBackend {
         ctx: eframe::egui::Context,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         use crate::tray::TrayAction;
-        use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+        use std::sync::Arc;
         use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
         let (rgba, width, height) = crate::tray::load_tray_icon_rgba()?;
         let icon = Icon::from_rgba(rgba, width, height)?;
 
-        let menu = Menu::new();
-        let show_item = MenuItem::new("Show CipherClipboard", true, None);
-        let settings_item = MenuItem::new("Settings...", true, None);
-        let separator = PredefinedMenuItem::separator();
-        let quit_item = MenuItem::new("Quit CipherClipboard", true, None);
-
-        menu.append_items(&[&show_item, &settings_item, &separator, &quit_item])?;
+        let menu_host = Arc::new(
+            windows::TrayMenuHost::new(tray_tx.clone(), ctx.clone())
+                .map_err(std::io::Error::other)?,
+        );
 
         let tray_icon = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
             .with_tooltip("CipherClipboard")
             .with_icon(icon)
-            .with_menu_on_left_click(false)
             .build()?;
 
         // `build()` ignores Shell_NotifyIconW(NIM_ADD) failures and only retries
@@ -136,10 +133,9 @@ impl SystemTrayBackend {
             return Err("Windows did not accept the tray icon (shell not ready)".into());
         }
 
-        let tx_click = tray_tx.clone();
-        let ctx_click = ctx.clone();
-        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
-            if let TrayIconEvent::Click {
+        let menu_host_click = Arc::clone(&menu_host);
+        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| match event {
+            TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
@@ -147,38 +143,31 @@ impl SystemTrayBackend {
             | TrayIconEvent::DoubleClick {
                 button: MouseButton::Left,
                 ..
-            } = event
-            {
+            } => {
                 // Capture whatever app is foreground right now before we restore
                 // CipherClipboard, so subsequent paste/restore targets it.
                 capture_active_window();
                 // Always send Show (not Toggle): clicking the tray icon while the
-                // window is behind another app must bring it to the front. The
-                // callback runs on tray-icon's helper thread, which does not own
-                // the winit window and cannot set it foreground reliably.
-                let _ = tx_click.send(TrayAction::Show);
-                ctx_click.request_repaint();
-            }
-        }));
-
-        let show_id = show_item.id().clone();
-        let settings_id = settings_item.id().clone();
-        let quit_id = quit_item.id().clone();
-        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-            if event.id == show_id {
-                capture_active_window();
+                // window is behind another app must bring it to the front.
                 let _ = tray_tx.send(TrayAction::Show);
                 ctx.request_repaint();
-            } else if event.id == settings_id {
-                let _ = tray_tx.send(TrayAction::OpenSettings);
-                ctx.request_repaint();
-            } else if event.id == quit_id {
-                let _ = tray_tx.send(TrayAction::Quit);
-                ctx.request_repaint();
             }
+            TrayIconEvent::Click {
+                button: MouseButton::Right,
+                button_state: MouseButtonState::Up,
+                ..
+            } => {
+                // Defer popup menu tracking to an activatable helper HWND outside the
+                // tray shell callback proc so Windows does not trap the menu open.
+                menu_host_click.request_show_menu();
+            }
+            _ => {}
         }));
 
-        Ok(Self { tray_icon })
+        Ok(Self {
+            tray_icon,
+            _menu_host: menu_host,
+        })
     }
 
     /// True only while the shell still has a registered notification-area icon.
@@ -198,11 +187,9 @@ impl SystemTrayBackend {
 #[cfg(target_os = "windows")]
 impl Drop for SystemTrayBackend {
     fn drop(&mut self) {
-        use tray_icon::menu::MenuEvent;
         use tray_icon::TrayIconEvent;
-        // These handlers are process-global and hold cloned channels/contexts.
+        // This process-global handler holds cloned channels/contexts and the menu host handle.
         TrayIconEvent::set_event_handler::<fn(tray_icon::TrayIconEvent)>(None);
-        MenuEvent::set_event_handler::<fn(MenuEvent)>(None);
     }
 }
 
@@ -448,10 +435,11 @@ pub(crate) const fn default_hide_on_blur() -> bool {
     !cfg!(target_os = "windows")
 }
 
-/// Returns the platform default for `minimize_to_taskbar` (`false` by default).
+/// Returns the platform default for `minimize_to_taskbar` (`true` on Windows so
+/// the app remains reachable via Taskbar & Alt+Tab by default, `false` elsewhere).
 #[must_use]
 pub(crate) const fn default_minimize_to_taskbar() -> bool {
-    false
+    cfg!(target_os = "windows")
 }
 
 /// Returns true if the current platform supports minimizing to the taskbar/Alt+Tab on dismiss.

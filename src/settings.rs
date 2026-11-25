@@ -796,10 +796,11 @@ mod tests {
 
     #[test]
     fn test_minimize_to_taskbar_serialization_and_legacy_fallback() {
+        let expected_default = crate::platform::default_minimize_to_taskbar();
         let default_settings = AppSettings::default();
-        assert!(!default_settings.minimize_to_taskbar);
+        assert_eq!(default_settings.minimize_to_taskbar, expected_default);
 
-        // Legacy JSON without minimize_to_taskbar must deserialize cleanly to false
+        // Legacy JSON without minimize_to_taskbar must deserialize to the platform default.
         let legacy_json = r#"{
             "hotkey": "Universal",
             "hide_on_copy": true,
@@ -808,7 +809,7 @@ mod tests {
         }"#;
         let parsed: AppSettings =
             serde_json::from_str(legacy_json).expect("Legacy JSON should deserialize");
-        assert!(!parsed.minimize_to_taskbar);
+        assert_eq!(parsed.minimize_to_taskbar, expected_default);
 
         // JSON with explicit minimize_to_taskbar: true
         let modern_json = r#"{
@@ -820,5 +821,16 @@ mod tests {
         let parsed_modern: AppSettings =
             serde_json::from_str(modern_json).expect("Modern JSON should deserialize");
         assert!(parsed_modern.minimize_to_taskbar);
+
+        // JSON with explicit minimize_to_taskbar: false
+        let tray_only_json = r#"{
+            "hotkey": "Universal",
+            "hide_on_copy": true,
+            "max_history": 100,
+            "minimize_to_taskbar": false
+        }"#;
+        let parsed_tray_only: AppSettings =
+            serde_json::from_str(tray_only_json).expect("Tray-only JSON should deserialize");
+        assert!(!parsed_tray_only.minimize_to_taskbar);
     }
 }

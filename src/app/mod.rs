@@ -217,6 +217,28 @@ pub(crate) const fn should_hide_on_blur(
         && is_outside
 }
 
+/// Pure decision helper for whether a hidden/minimized window should reopen on focus/activation.
+#[allow(clippy::fn_params_excessive_bools)]
+#[must_use]
+pub(crate) fn should_reopen_on_focus(
+    was_inactive_since_hidden: bool,
+    elapsed_since_hide: Option<Duration>,
+    is_active: bool,
+    is_focused: bool,
+    is_minimized: bool,
+) -> bool {
+    if !was_inactive_since_hidden || !(is_active || is_focused) {
+        return false;
+    }
+    // Once the OS has completed the hide/minimize transition (`was_inactive_since_hidden`),
+    // an explicit focus of the non-minimized main window (e.g. Taskbar or Alt+Tab restore)
+    // must wake `show_window` immediately so the frame never renders blank.
+    if is_focused && !is_minimized {
+        return true;
+    }
+    elapsed_since_hide.is_none_or(|d| d >= Duration::from_millis(350))
+}
+
 /// Holds inter-thread communication channels and background services.
 pub(crate) struct AppServices {
     pub(crate) notify_rx: Receiver<()>,
@@ -1127,18 +1149,20 @@ impl ClipboardApp {
                 }
             }
         } else {
+            let is_minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
             if !is_active && !is_focused {
                 self.window_state.was_inactive_since_hidden = true;
             }
 
-            let allow_focus_reopen = self.window_state.was_inactive_since_hidden
-                && self
-                    .window_state
-                    .last_hide_instant
-                    .is_none_or(|t| t.elapsed() >= Duration::from_millis(350));
-
+            let elapsed_since_hide = self.window_state.last_hide_instant.map(|t| t.elapsed());
             // Reveal window if the app regained activation/focus after being hidden and inactive.
-            if allow_focus_reopen && (is_active || is_focused) {
+            if should_reopen_on_focus(
+                self.window_state.was_inactive_since_hidden,
+                elapsed_since_hide,
+                is_active,
+                is_focused,
+                is_minimized,
+            ) {
                 self.show_window(ctx);
             }
         }
@@ -2524,5 +2548,62 @@ mod tests {
 
         // All conditions met: hides cleanly
         assert!(should_hide_on_blur(true, true, false, false, false, true));
+    }
+
+    #[test]
+    fn test_should_reopen_on_focus_guardrails() {
+        use super::should_reopen_on_focus;
+
+        // Has not yet observed inactivity after hide: MUST NOT reopen (even if focused)
+        assert!(!should_reopen_on_focus(
+            false,
+            Some(Duration::from_millis(10)),
+            false,
+            true,
+            false
+        ));
+
+        // Still inactive and unfocused: MUST NOT reopen
+        assert!(!should_reopen_on_focus(
+            true,
+            Some(Duration::from_millis(500)),
+            false,
+            false,
+            false
+        ));
+
+        // Explicit OS focus on non-minimized window reopens immediately even <350ms
+        assert!(should_reopen_on_focus(
+            true,
+            Some(Duration::from_millis(80)),
+            false,
+            true,
+            false
+        ));
+
+        // Activation-only (without viewport focus) still respects 350ms cooldown
+        assert!(!should_reopen_on_focus(
+            true,
+            Some(Duration::from_millis(80)),
+            true,
+            false,
+            false
+        ));
+        assert!(should_reopen_on_focus(
+            true,
+            Some(Duration::from_millis(400)),
+            true,
+            false,
+            false
+        ));
+
+        // Focused while still reporting minimized respects cooldown
+        assert!(!should_reopen_on_focus(
+            true,
+            Some(Duration::from_millis(80)),
+            true,
+            true,
+            true
+        ));
     }
 }
