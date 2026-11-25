@@ -14,6 +14,7 @@ use windows_sys::Win32::Foundation::{
     LPARAM, LRESULT, POINT, WAIT_OBJECT_0, WPARAM,
 };
 use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+use windows_sys::Win32::Graphics::Gdi::InvalidateRect;
 use windows_sys::Win32::Security::Cryptography::{
     CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
 };
@@ -50,11 +51,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowTextW,
     GetWindowThreadProcessId, IsIconic, IsWindow, MessageBoxW, PeekMessageW, PostMessageW,
     PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, ShowWindow,
-    TrackPopupMenuEx, TranslateMessage, HICON, HMENU, MB_ICONERROR, MB_OK, MF_SEPARATOR, MF_STRING,
-    MSG, MSGFLT_ALLOW, PM_NOREMOVE, SM_MENUDROPALIGNMENT, SW_RESTORE, SW_SHOW, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WM_APP,
-    WM_CANCELMODE, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
-    WM_NCDESTROY, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+    ShowWindowAsync, TrackPopupMenuEx, TranslateMessage, HICON, HMENU, MB_ICONERROR, MB_OK,
+    MF_SEPARATOR, MF_STRING, MSG, MSGFLT_ALLOW, PM_NOREMOVE, SM_MENUDROPALIGNMENT, SW_RESTORE,
+    SW_SHOW, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN,
+    TPM_RIGHTBUTTON, WM_APP, WM_CANCELMODE, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK,
+    WM_LBUTTONUP, WM_NCDESTROY, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 use crate::logging::log_message;
@@ -537,6 +538,51 @@ unsafe fn show_tray_popup_menu(hwnd: HWND, wparam: WPARAM, using_v4: bool) {
     if let Some(action) = action {
         let _ = tray_tx.send(action);
         ctx.request_repaint();
+        wake_main_window_for_tray_action(action);
+    }
+}
+
+/// Wakes the main `winit`/`eframe` window directly at the Win32 level in addition
+/// to `ctx.request_repaint()`, ensuring an invisible/sleeping root viewport processes
+/// `tray_rx` immediately even if `egui`'s `repaint_delay` coalescing suppresses the
+/// `UserEvent::RequestRepaint` callback.
+///
+/// # Safety
+/// Safe to invoke from the `windows-tray` background thread; uses only `EnumWindows`
+/// and non-blocking cross-thread `ShowWindowAsync` / `InvalidateRect` / `PostMessageW`.
+unsafe fn wake_main_window_for_tray_action(action: crate::tray::TrayAction) {
+    let Some(main_hwnd) = find_main_window() else {
+        log_message(
+            "WARN",
+            &format!("Tray wakeup failed for {action:?}: main window not found"),
+        );
+        return;
+    };
+
+    match action {
+        crate::tray::TrayAction::Show | crate::tray::TrayAction::OpenSettings => {
+            let show_cmd = if IsIconic(main_hwnd) != 0 {
+                SW_RESTORE
+            } else {
+                SW_SHOW
+            };
+            let shown = ShowWindowAsync(main_hwnd, show_cmd) != 0;
+            let invalidated = InvalidateRect(main_hwnd, std::ptr::null(), 0) != 0;
+            let pinged = PostMessageW(main_hwnd, WM_APP, 0, 0) != 0;
+            log_message(
+                "INFO",
+                &format!(
+                    "Tray woke main window for {action:?} (shown={shown}, invalidated={invalidated}, pinged={pinged})"
+                ),
+            );
+        }
+        crate::tray::TrayAction::Quit => {
+            let posted = PostMessageW(main_hwnd, WM_CLOSE, 0, 0) != 0;
+            log_message(
+                "INFO",
+                &format!("Tray posted WM_CLOSE for Quit (posted={posted})"),
+            );
+        }
     }
 }
 
@@ -612,6 +658,7 @@ unsafe extern "system" fn tray_wnd_proc(
             if show_window {
                 let _ = tray_tx.send(crate::tray::TrayAction::Show);
                 ctx.request_repaint();
+                wake_main_window_for_tray_action(crate::tray::TrayAction::Show);
                 return 0;
             }
             0

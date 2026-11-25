@@ -530,6 +530,13 @@ impl ClipboardApp {
             .tray_service
             .as_ref()
             .is_some_and(TrayService::is_live);
+        crate::logging::log_message(
+            "INFO",
+            &format!(
+                "hide_window called (minimize_to_taskbar={}, has_live_tray={has_live_tray})",
+                self.settings.minimize_to_taskbar
+            ),
+        );
         platform::hide_window_viewport(ctx, has_live_tray, self.settings.minimize_to_taskbar);
 
         let mut auto_paste = auto_paste;
@@ -1871,8 +1878,8 @@ impl eframe::App for ClipboardApp {
     /// all wake-up, tray, hotkey, activation/reopen, monitor, and auto-clear handlers
     /// MUST live in `logic()`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.handle_window_close_request(ctx);
         self.handle_tray_events(ctx);
+        self.handle_window_close_request(ctx);
         self.handle_hotkey_toggle(ctx);
         self.handle_app_activation(ctx);
         self.handle_monitor_updates();
@@ -2282,10 +2289,26 @@ mod tests {
         assert!(app.window_state.is_visible);
         assert_eq!(app.active_view, super::ActiveView::Settings);
 
-        // Verify TrayAction::Quit sets is_quitting
+        // Verify TrayAction::Quit sets is_quitting and wins over a simultaneous Close event
         tray_tx.send(super::TrayAction::Quit).unwrap();
-        app.handle_tray_events(&ctx);
+        let mut raw_input = egui::RawInput::default();
+        raw_input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let logic_output = ctx.run_logic(&raw_input, |logic_ctx| {
+            app.handle_tray_events(logic_ctx);
+            app.handle_window_close_request(logic_ctx);
+        });
         assert!(app.is_quitting);
+        let root_cmds = logic_output
+            .viewport_commands
+            .get(&egui::ViewportId::ROOT)
+            .map_or(&[][..], Vec::as_slice);
+        assert!(root_cmds.contains(&egui::ViewportCommand::Close));
+        assert!(!root_cmds.contains(&egui::ViewportCommand::CancelClose));
     }
 
     #[test]
