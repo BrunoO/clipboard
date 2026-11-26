@@ -19,7 +19,7 @@ pub(super) enum ItemAction {
     OpenBrowser(String),
     ToggleSecret(i64, bool),
     ToggleRevealSecret(i64),
-    TogglePin(i64),
+    ToggleVault(i64),
     EditAnnotation(i64),
     Delete(i64),
     ShowWarning(String),
@@ -73,9 +73,9 @@ impl ClipboardApp {
                             "HEX, RGB, HSL, and CSS color codes will render as interactive enameled swatches.",
                         ),
                         ContentFilter::Vault => (
-                            icons::PUSH_PIN,
+                            icons::VAULT,
                             "Your Vault is Empty",
-                            "Pin important entries or save secrets here to keep them organized and protected.",
+                            "Move important entries or save secrets here to keep them organized and protected.",
                         ),
                         ContentFilter::Image => (
                             icons::IMAGE,
@@ -301,18 +301,18 @@ impl ClipboardApp {
                     self.revealed_secrets.insert(id);
                 }
             }
-            ItemAction::TogglePin(id) => match self.db.toggle_item_pinned(id) {
-                Ok(pinned) => {
+            ItemAction::ToggleVault(id) => match self.db.toggle_item_in_vault(id) {
+                Ok(in_vault) => {
                     self.refresh_items();
-                    let msg = if pinned {
-                        format!("{} Pinned to Vault.", icons::PUSH_PIN)
+                    let msg = if in_vault {
+                        format!("{} Moved to Vault.", icons::VAULT)
                     } else {
-                        format!("{} Unpinned from Vault.", icons::PUSH_PIN)
+                        format!("{} Removed from Vault.", icons::VAULT)
                     };
                     self.show_toast(&msg);
                 }
                 Err(error) => {
-                    self.report_db_write_failure("toggle pin", &error);
+                    self.report_db_write_failure("update vault", &error);
                 }
             },
             ItemAction::EditAnnotation(id) => {
@@ -598,13 +598,13 @@ impl ClipboardApp {
         let mut action = ItemAction::None;
 
         ui.horizontal(|ui| {
-            if item.is_pinned {
+            if item.in_vault {
                 ui.label(
-                    egui::RichText::new(icons::PUSH_PIN)
+                    egui::RichText::new(icons::VAULT)
                         .size(12.0)
                         .color(crate::theme::warning_color(is_dark)),
                 )
-                .on_hover_text("Pinned to Vault");
+                .on_hover_text("In Vault");
             }
 
             if let Some(label) = item.label.as_deref() {
@@ -700,20 +700,23 @@ impl ClipboardApp {
             action = ItemAction::EditAnnotation(item.id);
         }
 
-        let pin_tip = if item.is_pinned {
-            "Unpin from Vault"
+        let vault_tip = if item.in_vault {
+            "Remove from Vault"
         } else {
-            "Pin to Vault"
+            "Move to Vault"
         };
-        let pin_text = if item.is_pinned {
-            icons::button_icon(icons::PUSH_PIN)
+        let vault_text = if item.in_vault {
+            icons::button_icon(icons::VAULT)
                 .color(crate::theme::warning_color(ui.visuals().dark_mode))
         } else {
-            icons::button_icon(icons::PUSH_PIN)
+            icons::button_icon(icons::VAULT)
         };
-        let pin_btn = ui.small_button(pin_text);
-        if pin_btn.on_hover_text(pin_tip).clicked() {
-            action = ItemAction::TogglePin(item.id);
+        if ui
+            .small_button(vault_text)
+            .on_hover_text(vault_tip)
+            .clicked()
+        {
+            action = ItemAction::ToggleVault(item.id);
         }
 
         if ui
@@ -1020,14 +1023,14 @@ impl ClipboardApp {
             }
         }
 
-        let pin_label = if item.is_pinned {
-            format!("{} Unpin from Vault", icons::PUSH_PIN)
+        let vault_label = if item.in_vault {
+            format!("{} Remove from Vault", icons::VAULT)
         } else {
-            format!("{} Pin to Vault", icons::PUSH_PIN)
+            format!("{} Move to Vault", icons::VAULT)
         };
-        if ui.button(pin_label).clicked() {
+        if ui.button(vault_label).clicked() {
             ui.close();
-            action = ItemAction::TogglePin(item.id);
+            action = ItemAction::ToggleVault(item.id);
         }
 
         if ui

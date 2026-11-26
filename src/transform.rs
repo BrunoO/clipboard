@@ -1457,7 +1457,7 @@ mod tests {
             embedded_colors: vec![],
             label: None,
             notes: None,
-            is_pinned: false,
+            in_vault: false,
         };
 
         assert!(TextTransform::JsonPrettify.applies_to(&json_item));
@@ -1482,7 +1482,7 @@ mod tests {
             embedded_colors: vec![],
             label: None,
             notes: None,
-            is_pinned: false,
+            in_vault: false,
         };
         assert!(!has_strippable_formatting(&clean_item));
 
@@ -1496,7 +1496,7 @@ mod tests {
             embedded_colors: vec![],
             label: None,
             notes: None,
-            is_pinned: false,
+            in_vault: false,
         };
         assert!(has_strippable_formatting(&ansi_item));
 
@@ -1510,7 +1510,7 @@ mod tests {
             embedded_colors: vec![],
             label: None,
             notes: None,
-            is_pinned: false,
+            in_vault: false,
         };
         assert!(has_strippable_formatting(&html_item));
 
@@ -1524,7 +1524,7 @@ mod tests {
             embedded_colors: vec![],
             label: None,
             notes: None,
-            is_pinned: false,
+            in_vault: false,
         };
         assert!(!has_strippable_formatting(&image_item));
     }

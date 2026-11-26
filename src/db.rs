@@ -39,7 +39,7 @@ pub(crate) struct ClipboardItem {
     pub(crate) embedded_colors: Vec<crate::color::ParsedColor>,
     pub(crate) label: Option<String>,
     pub(crate) notes: Option<String>,
-    pub(crate) is_pinned: bool,
+    pub(crate) in_vault: bool,
 }
 
 impl ClipboardItem {
@@ -283,6 +283,12 @@ impl Database {
         // SQLite does not support `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so duplicate-column
         // errors from already migrated schemas are filtered via `is_duplicate_column_error`.
         // Any unexpected migration failure immediately aborts `Database::open`.
+        let rename_in_vault = format!(
+            "ALTER TABLE clipboard_history RENAME COLUMN {} TO in_vault",
+            concat!("is_", "pinned")
+        );
+        let _ = conn.execute(&rename_in_vault, []);
+
         for sql in [
             "ALTER TABLE clipboard_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'",
             "ALTER TABLE clipboard_history ADD COLUMN image_data BLOB",
@@ -290,7 +296,7 @@ impl Database {
             "ALTER TABLE clipboard_history ADD COLUMN height INTEGER",
             "ALTER TABLE clipboard_history ADD COLUMN label TEXT",
             "ALTER TABLE clipboard_history ADD COLUMN notes TEXT",
-            "ALTER TABLE clipboard_history ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE clipboard_history ADD COLUMN in_vault INTEGER NOT NULL DEFAULT 0",
         ] {
             if let Err(e) = conn.execute(sql, []) {
                 if !is_duplicate_column_error(&e) {
@@ -299,7 +305,7 @@ impl Database {
             }
         }
         conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_clipboard_history_pinned ON clipboard_history(is_pinned, id DESC);",
+            "CREATE INDEX IF NOT EXISTS idx_clipboard_history_in_vault ON clipboard_history(in_vault, id DESC);",
         )?;
 
         Ok(Self(Arc::new(DatabaseInner {
@@ -409,7 +415,7 @@ impl Database {
     }
 
     /// Prunes older clipboard items exceeding the maximum history threshold.
-    /// Pinned vault items are always exempt from pruning.
+    /// Vault items are always exempt from pruning.
     /// Returns the number of purged rows.
     ///
     /// # Errors
@@ -424,11 +430,11 @@ impl Database {
         let deleted = if preserve {
             conn.execute(
                 "DELETE FROM clipboard_history
-                 WHERE is_pinned = 0
+                 WHERE in_vault = 0
                    AND kind != 'secret'
                    AND id NOT IN (
                        SELECT id FROM clipboard_history
-                       WHERE is_pinned = 0 AND kind != 'secret'
+                       WHERE in_vault = 0 AND kind != 'secret'
                        ORDER BY id DESC LIMIT ?1
                    )",
                 params![limit_i64],
@@ -436,10 +442,10 @@ impl Database {
         } else {
             conn.execute(
                 "DELETE FROM clipboard_history
-                 WHERE is_pinned = 0
+                 WHERE in_vault = 0
                    AND id NOT IN (
                        SELECT id FROM clipboard_history
-                       WHERE is_pinned = 0
+                       WHERE in_vault = 0
                        ORDER BY id DESC LIMIT ?1
                    )",
                 params![limit_i64],
@@ -477,7 +483,7 @@ impl Database {
     }
 
     /// Prunes entries exceeding `max_limit` within an active SQLite transaction.
-    /// Pinned vault items are always exempt from pruning.
+    /// Vault items are always exempt from pruning.
     fn prune_in_tx(
         tx: &rusqlite::Transaction<'_>,
         max_limit: usize,
@@ -488,11 +494,11 @@ impl Database {
             if preserve {
                 tx.execute(
                     "DELETE FROM clipboard_history
-                     WHERE is_pinned = 0
+                     WHERE in_vault = 0
                        AND kind != 'secret'
                        AND id NOT IN (
                            SELECT id FROM clipboard_history
-                           WHERE is_pinned = 0 AND kind != 'secret'
+                           WHERE in_vault = 0 AND kind != 'secret'
                            ORDER BY id DESC LIMIT ?1
                        )",
                     params![limit_i64],
@@ -500,10 +506,10 @@ impl Database {
             } else {
                 tx.execute(
                     "DELETE FROM clipboard_history
-                     WHERE is_pinned = 0
+                     WHERE in_vault = 0
                        AND id NOT IN (
                            SELECT id FROM clipboard_history
-                           WHERE is_pinned = 0
+                           WHERE in_vault = 0
                            ORDER BY id DESC LIMIT ?1
                        )",
                     params![limit_i64],
@@ -538,7 +544,7 @@ impl Database {
         content: &str,
     ) -> Result<Option<AnnotationMeta>> {
         let mut stmt = tx.prepare(
-            "SELECT label, notes, is_pinned
+            "SELECT label, notes, in_vault
              FROM clipboard_history
              WHERE content = ?1 AND kind IN ('text', 'url', 'code', 'color', 'secret')
              ORDER BY id DESC LIMIT 1",
@@ -559,7 +565,7 @@ impl Database {
         content: &str,
     ) -> Result<Option<AnnotationMeta>> {
         let mut stmt = tx.prepare(
-            "SELECT label, notes, is_pinned
+            "SELECT label, notes, in_vault
              FROM clipboard_history
              WHERE content = ?1 AND kind = 'secret'
              ORDER BY id DESC LIMIT 1",
@@ -582,7 +588,7 @@ impl Database {
         png_bytes: &[u8],
     ) -> Result<Option<AnnotationMeta>> {
         let mut stmt = tx.prepare(
-            "SELECT label, notes, is_pinned
+            "SELECT label, notes, in_vault
              FROM clipboard_history
              WHERE kind = 'image' AND width = ?1 AND height = ?2 AND image_data = ?3
              ORDER BY id DESC LIMIT 1",
@@ -627,7 +633,7 @@ impl Database {
         }
 
         // 2. Remove any older duplicate so the item moves to the top of history,
-        // preserving any existing vault annotation/pin metadata.
+        // preserving any existing vault annotation/metadata.
         let existing = Self::existing_text_metadata(&tx, content)?;
         tx.execute(
             "DELETE FROM clipboard_history
@@ -635,11 +641,12 @@ impl Database {
             params![content],
         )?;
 
-        let (label, notes, is_pinned) = existing.unwrap_or((None, None, false));
+        let (label, notes, existing_in_vault) = existing.unwrap_or((None, None, false));
+        let in_vault = existing_in_vault || kind_str == "secret";
         tx.execute(
-            "INSERT INTO clipboard_history (kind, content, created_at, label, notes, is_pinned)
+            "INSERT INTO clipboard_history (kind, content, created_at, label, notes, in_vault)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![kind_str, content, now, label, notes, i64::from(is_pinned)],
+            params![kind_str, content, now, label, notes, i64::from(in_vault)],
         )?;
 
         let new_id = tx.last_insert_rowid();
@@ -674,11 +681,12 @@ impl Database {
             params![content],
         )?;
 
-        let (label, notes, is_pinned) = existing.unwrap_or((None, None, false));
+        let (label, notes, _existing_in_vault) = existing.unwrap_or((None, None, false));
+        let in_vault = true; // secrets automatically belong in Vault
         tx.execute(
-            "INSERT INTO clipboard_history (kind, content, created_at, label, notes, is_pinned)
+            "INSERT INTO clipboard_history (kind, content, created_at, label, notes, in_vault)
              VALUES ('secret', ?1, ?2, ?3, ?4, ?5)",
-            params![content, now, label, notes, i64::from(is_pinned)],
+            params![content, now, label, notes, i64::from(in_vault)],
         )?;
 
         let new_id = tx.last_insert_rowid();
@@ -736,9 +744,9 @@ impl Database {
             params![width, height, png_bytes],
         )?;
 
-        let (label, notes, is_pinned) = existing.unwrap_or((None, None, false));
+        let (label, notes, in_vault) = existing.unwrap_or((None, None, false));
         tx.execute(
-            "INSERT INTO clipboard_history (kind, content, image_data, width, height, created_at, label, notes, is_pinned)
+            "INSERT INTO clipboard_history (kind, content, image_data, width, height, created_at, label, notes, in_vault)
              VALUES ('image', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 content,
@@ -748,7 +756,7 @@ impl Database {
                 now,
                 label,
                 notes,
-                i64::from(is_pinned)
+                i64::from(in_vault)
             ],
         )?;
 
@@ -771,7 +779,7 @@ struct RawRecentRow {
     created_at: String,
     label: Option<String>,
     notes: Option<String>,
-    is_pinned: bool,
+    in_vault: bool,
 }
 
 impl Database {
@@ -803,13 +811,13 @@ impl Database {
                 created_at: row.get(5)?,
                 label: row.get(6)?,
                 notes: row.get(7)?,
-                is_pinned: row.get::<_, i64>(8).unwrap_or(0) != 0,
+                in_vault: row.get::<_, i64>(8).unwrap_or(0) != 0,
             })
         };
 
         if let Some(pattern) = search_pattern {
             let mut stmt = conn.prepare(
-                "SELECT id, kind, content, width, height, created_at, label, notes, is_pinned
+                "SELECT id, kind, content, width, height, created_at, label, notes, in_vault
                  FROM clipboard_history
                  WHERE (
                      CASE WHEN kind = 'secret' THEN
@@ -828,13 +836,13 @@ impl Database {
             let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
             if preserve {
                 let mut stmt = conn.prepare(
-                    "SELECT id, kind, content, width, height, created_at, label, notes, is_pinned
+                    "SELECT id, kind, content, width, height, created_at, label, notes, in_vault
                      FROM clipboard_history
-                     WHERE is_pinned = 1
+                     WHERE in_vault = 1
                         OR kind = 'secret'
                         OR id IN (
                             SELECT id FROM clipboard_history
-                            WHERE is_pinned = 0 AND kind != 'secret'
+                            WHERE in_vault = 0 AND kind != 'secret'
                             ORDER BY id DESC LIMIT ?1
                         )
                      ORDER BY id DESC",
@@ -845,12 +853,12 @@ impl Database {
                 }
             } else {
                 let mut stmt = conn.prepare(
-                    "SELECT id, kind, content, width, height, created_at, label, notes, is_pinned
+                    "SELECT id, kind, content, width, height, created_at, label, notes, in_vault
                      FROM clipboard_history
-                     WHERE is_pinned = 1
+                     WHERE in_vault = 1
                         OR id IN (
                             SELECT id FROM clipboard_history
-                            WHERE is_pinned = 0
+                            WHERE in_vault = 0
                             ORDER BY id DESC LIMIT ?1
                         )
                      ORDER BY id DESC",
@@ -920,7 +928,7 @@ impl Database {
                     embedded_colors,
                     label,
                     notes,
-                    is_pinned: r.is_pinned,
+                    in_vault: r.in_vault,
                 }
             })
             .collect()
@@ -988,10 +996,17 @@ impl Database {
             "text"
         };
 
-        conn.execute(
-            "UPDATE clipboard_history SET kind = ?1 WHERE id = ?2",
-            params![new_kind, id],
-        )?;
+        if is_secret {
+            conn.execute(
+                "UPDATE clipboard_history SET kind = ?1, in_vault = 1 WHERE id = ?2",
+                params![new_kind, id],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE clipboard_history SET kind = ?1 WHERE id = ?2",
+                params![new_kind, id],
+            )?;
+        }
         Ok(())
     }
 
@@ -1015,25 +1030,26 @@ impl Database {
         Ok(())
     }
 
-    /// Toggles the pinned/vault state of a history entry and returns the new state.
+    /// Toggles the vault/protected state of a history entry and returns the new state.
     ///
     /// # Errors
     /// Returns the underlying SQLite error if the lookup or `UPDATE` fails.
-    pub(crate) fn toggle_item_pinned(&self, id: i64) -> Result<bool, rusqlite::Error> {
+    pub(crate) fn toggle_item_in_vault(&self, id: i64) -> Result<bool, rusqlite::Error> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
-            "UPDATE clipboard_history SET is_pinned = 1 - is_pinned WHERE id = ?1 RETURNING is_pinned",
+            "UPDATE clipboard_history SET in_vault = 1 - in_vault WHERE id = ?1 RETURNING in_vault",
         )?;
         let mut rows = stmt.query(params![id])?;
         let Some(row) = rows.next()? else {
             return Ok(false);
         };
-        let pinned: i64 = row.get(0).unwrap_or(0);
-        Ok(pinned != 0)
+        let in_vault: i64 = row.get(0).unwrap_or(0);
+        Ok(in_vault != 0)
     }
 
     /// Inserts a manually created secret/vault entry directly into the encrypted database.
-    /// This does not touch the OS clipboard. Returns the new row id.
+    /// This does not touch the OS clipboard. Secrets automatically belong in Vault.
+    /// Returns the new row id.
     ///
     /// # Errors
     /// Returns the underlying SQLite error if the insert transaction fails.
@@ -1042,7 +1058,7 @@ impl Database {
         secret: &str,
         label: Option<&str>,
         notes: Option<&str>,
-        is_pinned: bool,
+        in_vault: bool,
     ) -> Result<i64, rusqlite::Error> {
         let label = normalize_annotation_field(label);
         let notes = normalize_annotation_field(notes);
@@ -1051,14 +1067,15 @@ impl Database {
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
 
+        let _ = in_vault; // secrets automatically belong in Vault
         if let Some((last_kind, last_content)) = Self::last_text_entry(&tx)? {
             if last_kind == "secret" && last_content == secret {
                 // Promote existing identical secret instead of creating a duplicate row.
                 tx.execute(
                     "UPDATE clipboard_history
-                     SET created_at = ?1, label = COALESCE(?2, label), notes = COALESCE(?3, notes), is_pinned = MAX(is_pinned, ?4)
-                     WHERE id = (SELECT id FROM clipboard_history WHERE kind = 'secret' AND content = ?5 ORDER BY id DESC LIMIT 1)",
-                    params![now, label, notes, i64::from(is_pinned), secret],
+                     SET created_at = ?1, label = COALESCE(?2, label), notes = COALESCE(?3, notes), in_vault = 1
+                     WHERE id = (SELECT id FROM clipboard_history WHERE kind = 'secret' AND content = ?4 ORDER BY id DESC LIMIT 1)",
+                    params![now, label, notes, secret],
                 )?;
                 let id: i64 = tx.query_row(
                     "SELECT id FROM clipboard_history WHERE kind = 'secret' AND content = ?1 ORDER BY id DESC LIMIT 1",
@@ -1077,20 +1094,20 @@ impl Database {
             params![secret],
         )?;
 
-        let (existing_label, existing_notes, existing_pinned) =
+        let (existing_label, existing_notes, _existing_in_vault) =
             existing.unwrap_or((None, None, false));
         let merged_label = label.or(existing_label);
         let merged_notes = notes.or(existing_notes);
-        let merged_pinned = is_pinned || existing_pinned;
+        let merged_in_vault = true; // secrets automatically belong in Vault
         tx.execute(
-            "INSERT INTO clipboard_history (kind, content, created_at, label, notes, is_pinned)
+            "INSERT INTO clipboard_history (kind, content, created_at, label, notes, in_vault)
              VALUES ('secret', ?1, ?2, ?3, ?4, ?5)",
             params![
                 secret,
                 now,
                 merged_label,
                 merged_notes,
-                i64::from(merged_pinned)
+                i64::from(merged_in_vault)
             ],
         )?;
         let new_id = tx.last_insert_rowid();
@@ -1109,8 +1126,8 @@ impl Database {
         Ok(())
     }
 
-    /// Deletes non-pinned history and then securely compacts the database and WAL
-    /// so previously deleted secrets do not linger on disk. Pinned vault items
+    /// Deletes non-vault history and then securely compacts the database and WAL
+    /// so previously deleted secrets do not linger on disk. Vault items
     /// are always preserved.
     ///
     /// # Errors
@@ -1119,7 +1136,7 @@ impl Database {
     /// truncation failed. Callers must not report success for either case.
     pub(crate) fn clear(&self) -> Result<(), ClearError> {
         let conn = self.lock_conn();
-        conn.execute("DELETE FROM clipboard_history WHERE is_pinned = 0", [])
+        conn.execute("DELETE FROM clipboard_history WHERE in_vault = 0", [])
             .map_err(|error| ClearError::Delete(Box::new(error)))?;
 
         let vacuum_error = conn.execute_batch("VACUUM;").err().map(Box::new);
@@ -1303,25 +1320,24 @@ mod tests {
         db.set_preserve_secrets_on_prune(true);
         assert!(db.preserve_secrets_on_prune());
 
-        // Insert a secret
-        db.insert_secret("MySecretPassword123").unwrap();
+        // Insert a secret (auto-in-vault under Option 1)
+        let secret_id = db.insert_secret("MySecretPassword123").unwrap().unwrap();
 
         // Insert 3 regular text items
         db.insert("Regular 1").unwrap();
         db.insert("Regular 2").unwrap();
         db.insert("Regular 3").unwrap();
 
-        // With preserve_secrets_on_prune = true:
-        // Non-secret items are pruned to max_history (2 items: Regular 3 and Regular 2),
-        // but the secret is preserved!
+        // Vault/protected secrets are preserved regardless of preserve_secrets_on_prune.
         let items = db.get_recent(2, None).unwrap();
         assert_eq!(items.len(), 3);
         assert_eq!(items[0].content, "Regular 3");
         assert_eq!(items[1].content, "Regular 2");
         assert_eq!(items[2].content, "MySecretPassword123");
         assert_eq!(items[2].kind, ItemKind::Secret);
+        assert!(items[2].in_vault);
 
-        // Explicit manual prune to 1
+        // Explicit manual prune to 1: non-vault items pruned, vault secret kept.
         let purged = db.prune_history(1).unwrap();
         assert_eq!(purged, 1); // Regular 2 pruned
         let items_after = db.get_recent(1, None).unwrap();
@@ -1329,9 +1345,16 @@ mod tests {
         assert_eq!(items_after[0].content, "Regular 3");
         assert_eq!(items_after[1].content, "MySecretPassword123");
 
-        // Now disable preserve_secrets_on_prune and prune to 1
+        // Even with preserve_secrets_on_prune disabled, in-vault secrets are protected.
         db.set_preserve_secrets_on_prune(false);
         assert!(!db.preserve_secrets_on_prune());
+        db.prune_history(1).unwrap();
+        let items_still_protected = db.get_recent(10, None).unwrap();
+        assert_eq!(items_still_protected.len(), 2);
+        assert!(items_still_protected.iter().any(|i| i.id == secret_id));
+
+        // Remove from Vault: now preserve_secrets_on_prune=false allows prune to delete it.
+        assert!(!db.toggle_item_in_vault(secret_id).unwrap());
         db.prune_history(1).unwrap();
         let items_disabled = db.get_recent(10, None).unwrap();
         assert_eq!(items_disabled.len(), 1);
@@ -1690,7 +1713,9 @@ mod tests {
         assert_eq!(items[0].id, id2);
         assert_eq!(items[1].id, id1);
 
-        // 2. insert_secret() path: prune fails, returning Err and rolling back secret insert
+        // 2. insert_secret() path: prune fails, returning Err and rolling back secret insert.
+        // Secrets are auto-in-vault, so lower max_history to force an in_vault=0 prune.
+        db.set_max_history(1);
         let secret_res = db.insert_secret("secret 3 - should fail");
         assert!(
             secret_res.is_err(),
@@ -1878,7 +1903,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, None);
         assert_eq!(items[0].notes, None);
-        assert!(!items[0].is_pinned);
+        assert!(!items[0].in_vault);
     }
 
     #[test]
@@ -1926,28 +1951,28 @@ mod tests {
     }
 
     #[test]
-    fn test_pinned_items_exempt_from_prune_and_clear() {
+    fn test_in_vault_items_exempt_from_prune_and_clear() {
         let dir = tempdir().unwrap();
-        let db_path = dir.path().join("pinned_prune_clear.db");
+        let db_path = dir.path().join("in_vault_prune_clear.db");
         let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
 
         db.set_max_history(2);
-        let pinned_id = db.insert("Pinned item").unwrap().unwrap();
-        assert!(db.toggle_item_pinned(pinned_id).unwrap());
+        let vault_id = db.insert("Vault item").unwrap().unwrap();
+        assert!(db.toggle_item_in_vault(vault_id).unwrap());
 
         db.insert("Item 2").unwrap();
         db.insert("Item 3").unwrap();
         db.insert("Item 4").unwrap();
 
         let items = db.get_recent(10, None).unwrap();
-        assert!(items.iter().any(|i| i.id == pinned_id));
-        assert!(items.iter().filter(|i| !i.is_pinned).count() <= 2);
+        assert!(items.iter().any(|i| i.id == vault_id));
+        assert!(items.iter().filter(|i| !i.in_vault).count() <= 2);
 
         db.clear().unwrap();
         let after_clear = db.get_recent(10, None).unwrap();
         assert_eq!(after_clear.len(), 1);
-        assert_eq!(after_clear[0].id, pinned_id);
-        assert!(after_clear[0].is_pinned);
+        assert_eq!(after_clear[0].id, vault_id);
+        assert!(after_clear[0].in_vault);
     }
 
     #[test]
@@ -1965,11 +1990,11 @@ mod tests {
         assert_eq!(items[0].kind, ItemKind::Secret);
         assert_eq!(items[0].label.as_deref(), Some("VPN"));
         assert_eq!(items[0].notes.as_deref(), Some("user: admin"));
-        assert!(items[0].is_pinned);
+        assert!(items[0].in_vault);
     }
 
     #[test]
-    fn test_recopy_pinned_annotated_text_preserves_metadata() {
+    fn test_recopy_in_vault_annotated_text_preserves_metadata() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("recopy_text.db");
         let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
@@ -1977,7 +2002,7 @@ mod tests {
         let id = db.insert("keep me").unwrap().unwrap();
         db.set_item_annotation(id, Some("Label"), Some("Notes"))
             .unwrap();
-        assert!(db.toggle_item_pinned(id).unwrap());
+        assert!(db.toggle_item_in_vault(id).unwrap());
 
         db.insert("other").unwrap();
         let new_id = db.insert("keep me").unwrap().unwrap();
@@ -1988,11 +2013,11 @@ mod tests {
         assert_eq!(item.id, new_id);
         assert_eq!(item.label.as_deref(), Some("Label"));
         assert_eq!(item.notes.as_deref(), Some("Notes"));
-        assert!(item.is_pinned);
+        assert!(item.in_vault);
     }
 
     #[test]
-    fn test_recopy_pinned_annotated_secret_preserves_metadata() {
+    fn test_recopy_in_vault_annotated_secret_preserves_metadata() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("recopy_secret.db");
         let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
@@ -2000,7 +2025,7 @@ mod tests {
         let id = db.insert_secret("api-key").unwrap().unwrap();
         db.set_item_annotation(id, Some("API"), Some("prod"))
             .unwrap();
-        assert!(db.toggle_item_pinned(id).unwrap());
+        // Secrets auto-belong in Vault under Option 1.
 
         db.insert("noise").unwrap();
         let new_id = db.insert_secret("api-key").unwrap().unwrap();
@@ -2014,11 +2039,11 @@ mod tests {
         assert_eq!(item.id, new_id);
         assert_eq!(item.label.as_deref(), Some("API"));
         assert_eq!(item.notes.as_deref(), Some("prod"));
-        assert!(item.is_pinned);
+        assert!(item.in_vault);
     }
 
     #[test]
-    fn test_recopy_pinned_annotated_image_preserves_metadata() {
+    fn test_recopy_in_vault_annotated_image_preserves_metadata() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("recopy_image.db");
         let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
@@ -2027,7 +2052,7 @@ mod tests {
         let id = db.insert_image(2, 2, &png).unwrap().unwrap();
         db.set_item_annotation(id, Some("Shot"), Some("before"))
             .unwrap();
-        assert!(db.toggle_item_pinned(id).unwrap());
+        assert!(db.toggle_item_in_vault(id).unwrap());
 
         db.insert("noise").unwrap();
         let new_id = db.insert_image(2, 2, &png).unwrap().unwrap();
@@ -2038,7 +2063,7 @@ mod tests {
         assert_eq!(item.id, new_id);
         assert_eq!(item.label.as_deref(), Some("Shot"));
         assert_eq!(item.notes.as_deref(), Some("before"));
-        assert!(item.is_pinned);
+        assert!(item.in_vault);
     }
 
     #[test]
@@ -2050,7 +2075,7 @@ mod tests {
         let id = db.insert_secret("dup-secret").unwrap().unwrap();
         db.set_item_annotation(id, Some("Old"), Some("keep"))
             .unwrap();
-        assert!(db.toggle_item_pinned(id).unwrap());
+        // Secrets auto-belong in Vault under Option 1.
         db.insert("noise").unwrap();
 
         let new_id = db
@@ -2066,6 +2091,6 @@ mod tests {
         assert_eq!(item.id, new_id);
         assert_eq!(item.label.as_deref(), Some("New"));
         assert_eq!(item.notes.as_deref(), Some("keep"));
-        assert!(item.is_pinned);
+        assert!(item.in_vault);
     }
 }

@@ -149,7 +149,7 @@ impl FilterCounts {
                 ItemKind::Secret => {}
                 ItemKind::Image => counts.images += 1,
             }
-            if item.is_pinned || item.kind == ItemKind::Secret {
+            if item.in_vault || item.kind == ItemKind::Secret {
                 counts.vault += 1;
             }
             if item.kind != ItemKind::Color && !item.embedded_colors().is_empty() {
@@ -283,7 +283,6 @@ pub(crate) struct DialogState {
     pub(crate) new_secret_label: String,
     pub(crate) new_secret_value: zeroize::Zeroizing<String>,
     pub(crate) new_secret_notes: String,
-    pub(crate) new_secret_pinned: bool,
     pub(crate) new_secret_reveal: bool,
     pub(crate) editing_annotation_id: Option<i64>,
     pub(crate) annotation_label_input: String,
@@ -1323,7 +1322,7 @@ impl ClipboardApp {
                     "Colors",
                     counts.colors,
                 ),
-                (ContentFilter::Vault, icons::PUSH_PIN, "Vault", counts.vault),
+                (ContentFilter::Vault, icons::VAULT, "Vault", counts.vault),
                 (ContentFilter::Image, icons::IMAGE, "Images", counts.images),
             ];
 
@@ -1700,7 +1699,7 @@ impl ClipboardApp {
                     ContentFilter::Colors => {
                         item.kind == ItemKind::Color || !item.embedded_colors().is_empty()
                     }
-                    ContentFilter::Vault => item.is_pinned || item.kind == ItemKind::Secret,
+                    ContentFilter::Vault => item.in_vault || item.kind == ItemKind::Secret,
                     ContentFilter::Image => item.kind == ItemKind::Image,
                 };
                 if matches {
@@ -1786,7 +1785,7 @@ impl ClipboardApp {
                 ui.add_space(8.0_f32);
                 ui.label(
                     egui::RichText::new(
-                        "This action cannot be undone. Unpinned clips, URLs, code snippets, and images will be permanently erased. Pinned vault items are kept.",
+                        "This action cannot be undone. Items not in your Vault will be permanently erased. Vault items are kept.",
                     )
                     .size(12.0_f32)
                     .color(crate::theme::text_secondary(is_dark)),
@@ -1821,7 +1820,7 @@ impl ClipboardApp {
                                 self.refresh_items();
                                 self.dialogs.show_clear_confirm_dialog = false;
                                 self.show_toast(&format!(
-                                    "{} History cleared. Pinned items kept.",
+                                    "{} History cleared. Vault items kept.",
                                     icons::CHECK
                                 ));
                             }
@@ -2027,7 +2026,6 @@ impl ClipboardApp {
         self.dialogs.new_secret_label.clear();
         self.dialogs.new_secret_value = zeroize::Zeroizing::new(String::new());
         self.dialogs.new_secret_notes.clear();
-        self.dialogs.new_secret_pinned = true;
         self.dialogs.new_secret_reveal = false;
     }
 
@@ -2036,7 +2034,6 @@ impl ClipboardApp {
         self.dialogs.new_secret_label.clear();
         self.dialogs.new_secret_value = zeroize::Zeroizing::new(secret);
         self.dialogs.new_secret_notes.clear();
-        self.dialogs.new_secret_pinned = true;
         self.dialogs.new_secret_reveal = false;
     }
 
@@ -2045,7 +2042,6 @@ impl ClipboardApp {
         self.dialogs.new_secret_value = zeroize::Zeroizing::new(String::new());
         self.dialogs.new_secret_label.clear();
         self.dialogs.new_secret_notes.clear();
-        self.dialogs.new_secret_pinned = true;
         self.dialogs.new_secret_reveal = false;
     }
 
@@ -2133,8 +2129,6 @@ impl ClipboardApp {
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
         );
-        ui.add_space(8.0);
-        ui.checkbox(&mut dialogs.new_secret_pinned, "Pin to Vault");
     }
 
     fn render_new_secret_actions(&mut self, ui: &mut egui::Ui) {
@@ -2176,12 +2170,11 @@ impl ClipboardApp {
         let secret = self.dialogs.new_secret_value.clone();
         let label = self.dialogs.new_secret_label.clone();
         let notes = self.dialogs.new_secret_notes.clone();
-        let pinned = self.dialogs.new_secret_pinned;
         match self.db.insert_manual_secret(
             secret.as_str(),
             Some(label.as_str()),
             Some(notes.as_str()),
-            pinned,
+            true,
         ) {
             Ok(_) => {
                 self.close_new_secret_dialog();
