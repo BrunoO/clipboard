@@ -1,0 +1,6 @@
+# Vendored OpenSSL (`openssl-src`, via `rusqlite`'s `bundled-sqlcipher-vendored-openssl`)
+# triggers MSVC LNK4099 ("PDB 'ossl_static.pdb' was not found"), which `link.exe` refuses
+# to ignore via `/IGNORE:4099`. Suppress `linker_messages` for Windows MSVC builds so local
+# `cargo build --release` matches CI.
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+rustflags = ["-A", "linker-messages"]
