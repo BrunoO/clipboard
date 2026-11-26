@@ -307,6 +307,41 @@ pub(crate) fn configure_viewport_chrome(
     }
 }
 
+/// Returns the platform-appropriate `wgpu` backend set when `WGPU_BACKEND` is not set.
+///
+/// On Windows, `wgpu::Backends::PRIMARY` tries Vulkan before Direct3D 12; several Windows
+/// Vulkan drivers (notably Intel iGPU Vulkan) flicker the window on every repaint (such as
+/// mouse movement). Defaulting to `DX12` on Windows avoids Vulkan swapchain flicker while
+/// still allowing `WGPU_BACKEND` overrides.
+#[must_use]
+const fn default_wgpu_backends() -> eframe::wgpu::Backends {
+    #[cfg(target_os = "windows")]
+    {
+        eframe::wgpu::Backends::DX12
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        eframe::wgpu::Backends::PRIMARY.union(eframe::wgpu::Backends::GL)
+    }
+}
+
+/// Builds the `eframe` `wgpu` configuration tailored for a lightweight 2D desktop utility.
+///
+/// Prefers `LowPower` (the integrated GPU driving the display) across platforms to avoid
+/// hybrid-GPU cross-adapter DWM presentation flicker and unnecessary discrete GPU wakeups,
+/// and prefers `DX12` on Windows unless overridden via `WGPU_BACKEND` / `WGPU_POWER_PREF`.
+#[must_use]
+pub(crate) fn configure_wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    let mut config = eframe::egui_wgpu::WgpuConfiguration::default();
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(ref mut create_new) = config.wgpu_setup {
+        create_new.instance_descriptor.backends =
+            eframe::wgpu::Backends::from_env().unwrap_or_else(default_wgpu_backends);
+        create_new.power_preference = eframe::wgpu::PowerPreference::from_env()
+            .unwrap_or(eframe::wgpu::PowerPreference::LowPower);
+    }
+    config
+}
+
 /// Returns `true` if `eframe::App::on_exit` must terminate the process immediately after
 /// deterministic resource cleanup to avoid `AppKit` Touch Bar KVO teardown crashes (macOS).
 #[must_use]
@@ -1011,5 +1046,32 @@ mod tests {
 
         // No live tray, minimize setting true -> minimize to taskbar (true)
         assert!(should_minimize_on_hide(false, true));
+    }
+
+    #[test]
+    fn test_configure_wgpu_options_defaults() {
+        let backends = super::default_wgpu_backends();
+        #[cfg(target_os = "windows")]
+        assert_eq!(backends, eframe::wgpu::Backends::DX12);
+        #[cfg(not(target_os = "windows"))]
+        assert!(backends.contains(eframe::wgpu::Backends::PRIMARY));
+
+        let config = super::configure_wgpu_options();
+        match config.wgpu_setup {
+            eframe::egui_wgpu::WgpuSetup::CreateNew(create_new) => {
+                if std::env::var_os("WGPU_POWER_PREF").is_none() {
+                    assert_eq!(
+                        create_new.power_preference,
+                        eframe::wgpu::PowerPreference::LowPower
+                    );
+                }
+                if std::env::var_os("WGPU_BACKEND").is_none() {
+                    assert_eq!(create_new.instance_descriptor.backends, backends);
+                }
+            }
+            eframe::egui_wgpu::WgpuSetup::Existing(_) => {
+                panic!("Expected WgpuSetup::CreateNew from configure_wgpu_options");
+            }
+        }
     }
 }

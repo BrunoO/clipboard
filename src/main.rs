@@ -109,6 +109,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Register root viewport native handle and OS activation / reopen observers
             platform::register_main_window(cc);
+            if let Some(render_state) = &cc.wgpu_render_state {
+                let info = render_state.adapter.get_info();
+                logging::log_message(
+                    "INFO",
+                    &format!(
+                        "wgpu adapter initialized: backend={:?}, device_type={:?}, name={}",
+                        info.backend, info.device_type, info.name
+                    ),
+                );
+            }
             platform::set_repaint_context(&cc.egui_ctx);
             platform::setup_reopen_observer();
             spawn_smoke_quit(&tray_tx, &cc.egui_ctx); // CI quit smoke test (debug only)
@@ -218,6 +228,7 @@ fn build_native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: platform::configure_wgpu_options(),
         ..Default::default()
     }
 }
