@@ -281,7 +281,7 @@ pub(crate) struct DialogState {
     pub(crate) hotkey_recording_hint: Option<String>,
     pub(crate) show_new_secret_dialog: bool,
     pub(crate) new_secret_label: String,
-    pub(crate) new_secret_value: String,
+    pub(crate) new_secret_value: zeroize::Zeroizing<String>,
     pub(crate) new_secret_notes: String,
     pub(crate) new_secret_pinned: bool,
     pub(crate) new_secret_reveal: bool,
@@ -821,7 +821,7 @@ impl ClipboardApp {
             } else if self.dialogs.editing_annotation_id.is_some() {
                 self.dialogs.editing_annotation_id = None;
             } else if self.dialogs.show_new_secret_dialog {
-                self.dialogs.show_new_secret_dialog = false;
+                self.close_new_secret_dialog();
             } else if self.active_view != ActiveView::History {
                 self.active_view = ActiveView::History;
             } else {
@@ -1446,7 +1446,11 @@ impl ClipboardApp {
         if self.active_view == ActiveView::History
             && ui
                 .small_button(format!("{} + Secret", icons::LOCK))
-                .on_hover_text("New vault secret (Cmd+N / Ctrl+N)")
+                .on_hover_text(if cfg!(target_os = "macos") {
+                    "New vault secret (Cmd+N)"
+                } else {
+                    "New vault secret (Ctrl+Shift+N)"
+                })
                 .clicked()
         {
             self.open_new_secret_dialog();
@@ -2021,7 +2025,7 @@ impl ClipboardApp {
     fn open_new_secret_dialog(&mut self) {
         self.dialogs.show_new_secret_dialog = true;
         self.dialogs.new_secret_label.clear();
-        self.dialogs.new_secret_value.clear();
+        self.dialogs.new_secret_value = zeroize::Zeroizing::new(String::new());
         self.dialogs.new_secret_notes.clear();
         self.dialogs.new_secret_pinned = true;
         self.dialogs.new_secret_reveal = false;
@@ -2030,7 +2034,16 @@ impl ClipboardApp {
     fn open_new_secret_dialog_prefilled(&mut self, secret: String) {
         self.dialogs.show_new_secret_dialog = true;
         self.dialogs.new_secret_label.clear();
-        self.dialogs.new_secret_value = secret;
+        self.dialogs.new_secret_value = zeroize::Zeroizing::new(secret);
+        self.dialogs.new_secret_notes.clear();
+        self.dialogs.new_secret_pinned = true;
+        self.dialogs.new_secret_reveal = false;
+    }
+
+    fn close_new_secret_dialog(&mut self) {
+        self.dialogs.show_new_secret_dialog = false;
+        self.dialogs.new_secret_value = zeroize::Zeroizing::new(String::new());
+        self.dialogs.new_secret_label.clear();
         self.dialogs.new_secret_notes.clear();
         self.dialogs.new_secret_pinned = true;
         self.dialogs.new_secret_reveal = false;
@@ -2042,7 +2055,8 @@ impl ClipboardApp {
         }
 
         if Self::render_modal_backdrop(ctx, "new_secret_backdrop") {
-            self.dialogs.show_new_secret_dialog = false;
+            self.close_new_secret_dialog();
+            return;
         }
 
         let mut open = self.dialogs.show_new_secret_dialog;
@@ -2061,7 +2075,7 @@ impl ClipboardApp {
         });
 
         if !open {
-            self.dialogs.show_new_secret_dialog = false;
+            self.close_new_secret_dialog();
         }
     }
 
@@ -2084,7 +2098,7 @@ impl ClipboardApp {
                 .strong(),
         );
         ui.horizontal(|ui| {
-            let edit = egui::TextEdit::singleline(&mut dialogs.new_secret_value)
+            let edit = egui::TextEdit::singleline(&mut *dialogs.new_secret_value)
                 .password(!dialogs.new_secret_reveal)
                 .hint_text("Enter secret value")
                 .desired_width(ui.available_width() - 34.0);
@@ -2124,6 +2138,12 @@ impl ClipboardApp {
     }
 
     fn render_new_secret_actions(&mut self, ui: &mut egui::Ui) {
+        let can_save = !self.dialogs.new_secret_value.trim().is_empty();
+        let save_shortcut = can_save
+            && ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)
+                    || i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
+            });
         ui.horizontal(|ui| {
             let btn_width = 120.0_f32;
             let btn_height = 28.0_f32;
@@ -2135,18 +2155,18 @@ impl ClipboardApp {
                 .add_sized([btn_width, btn_height], egui::Button::new("Cancel (Esc)"))
                 .clicked()
             {
-                self.dialogs.show_new_secret_dialog = false;
+                self.close_new_secret_dialog();
+                return;
             }
 
-            let can_save = !self.dialogs.new_secret_value.trim().is_empty();
-            if ui
+            let save_clicked = ui
                 .add_enabled(
                     can_save,
                     egui::Button::new(format!("{} Save to Vault", icons::LOCK))
                         .min_size(egui::vec2(btn_width, btn_height)),
                 )
-                .clicked()
-            {
+                .clicked();
+            if save_clicked || save_shortcut {
                 self.save_new_secret_from_dialog();
             }
         });
@@ -2158,18 +2178,13 @@ impl ClipboardApp {
         let notes = self.dialogs.new_secret_notes.clone();
         let pinned = self.dialogs.new_secret_pinned;
         match self.db.insert_manual_secret(
-            &secret,
+            secret.as_str(),
             Some(label.as_str()),
             Some(notes.as_str()),
             pinned,
         ) {
             Ok(_) => {
-                self.dialogs.show_new_secret_dialog = false;
-                self.dialogs.new_secret_value.clear();
-                self.dialogs.new_secret_label.clear();
-                self.dialogs.new_secret_notes.clear();
-                self.dialogs.new_secret_pinned = true;
-                self.dialogs.new_secret_reveal = false;
+                self.close_new_secret_dialog();
                 self.refresh_items();
                 self.show_toast(&format!("{} Secret saved to Vault.", icons::LOCK));
             }
@@ -2408,7 +2423,12 @@ fn read_history_nav_input(ctx: &egui::Context) -> HistoryNavInput {
             nav.edit_annotation_selected = true;
         }
 
-        if i.consume_key(egui::Modifiers::COMMAND, egui::Key::N) {
+        let new_secret_shortcut = if cfg!(target_os = "macos") {
+            i.consume_key(egui::Modifiers::COMMAND, egui::Key::N)
+        } else {
+            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::N)
+        };
+        if new_secret_shortcut {
             nav.new_secret = true;
         }
 

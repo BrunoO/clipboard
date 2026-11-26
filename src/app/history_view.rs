@@ -356,7 +356,10 @@ impl ClipboardApp {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Card rendering keeps related UI branches local for readability"
+    )]
     fn render_clipboard_item(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
@@ -702,8 +705,13 @@ impl ClipboardApp {
         } else {
             "Pin to Vault"
         };
-        let pin_icon = icons::PUSH_PIN;
-        let pin_btn = ui.small_button(icons::button_icon(pin_icon));
+        let pin_text = if item.is_pinned {
+            icons::button_icon(icons::PUSH_PIN)
+                .color(crate::theme::warning_color(ui.visuals().dark_mode))
+        } else {
+            icons::button_icon(icons::PUSH_PIN)
+        };
+        let pin_btn = ui.small_button(pin_text);
         if pin_btn.on_hover_text(pin_tip).clicked() {
             action = ItemAction::TogglePin(item.id);
         }

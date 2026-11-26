@@ -200,6 +200,8 @@ impl From<rusqlite::Error> for DbOpenError {
     }
 }
 
+type AnnotationMeta = (Option<String>, Option<String>, bool);
+
 fn normalize_annotation_field(value: Option<&str>) -> Option<String> {
     value.and_then(|s| {
         let trimmed = s.trim();
@@ -531,6 +533,71 @@ impl Database {
         }
     }
 
+    fn existing_text_metadata(
+        tx: &rusqlite::Transaction<'_>,
+        content: &str,
+    ) -> Result<Option<AnnotationMeta>> {
+        let mut stmt = tx.prepare(
+            "SELECT label, notes, is_pinned
+             FROM clipboard_history
+             WHERE content = ?1 AND kind IN ('text', 'url', 'code', 'color', 'secret')
+             ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![content])?;
+        match rows.next()? {
+            Some(row) => Ok(Some((
+                row.get(0)?,
+                row.get(1)?,
+                row.get::<_, i64>(2).unwrap_or(0) != 0,
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    fn existing_secret_metadata(
+        tx: &rusqlite::Transaction<'_>,
+        content: &str,
+    ) -> Result<Option<AnnotationMeta>> {
+        let mut stmt = tx.prepare(
+            "SELECT label, notes, is_pinned
+             FROM clipboard_history
+             WHERE content = ?1 AND kind = 'secret'
+             ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![content])?;
+        match rows.next()? {
+            Some(row) => Ok(Some((
+                row.get(0)?,
+                row.get(1)?,
+                row.get::<_, i64>(2).unwrap_or(0) != 0,
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    fn existing_image_metadata(
+        tx: &rusqlite::Transaction<'_>,
+        width: u32,
+        height: u32,
+        png_bytes: &[u8],
+    ) -> Result<Option<AnnotationMeta>> {
+        let mut stmt = tx.prepare(
+            "SELECT label, notes, is_pinned
+             FROM clipboard_history
+             WHERE kind = 'image' AND width = ?1 AND height = ?2 AND image_data = ?3
+             ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![width, height, png_bytes])?;
+        match rows.next()? {
+            Some(row) => Ok(Some((
+                row.get(0)?,
+                row.get(1)?,
+                row.get::<_, i64>(2).unwrap_or(0) != 0,
+            ))),
+            None => Ok(None),
+        }
+    }
+
     /// Inserts a new text clipboard entry, deduplicating against history.
     /// If an identical item was already the most recent, returns `Ok(None)`.
     /// If an identical item exists earlier in history, deletes the stale copy and promotes
@@ -559,16 +626,20 @@ impl Database {
             }
         }
 
-        // 2. Remove any older duplicate so the item moves to the top of history
+        // 2. Remove any older duplicate so the item moves to the top of history,
+        // preserving any existing vault annotation/pin metadata.
+        let existing = Self::existing_text_metadata(&tx, content)?;
         tx.execute(
             "DELETE FROM clipboard_history
              WHERE content = ?1 AND kind IN ('text', 'url', 'code', 'color', 'secret')",
             params![content],
         )?;
 
+        let (label, notes, is_pinned) = existing.unwrap_or((None, None, false));
         tx.execute(
-            "INSERT INTO clipboard_history (kind, content, created_at) VALUES (?1, ?2, ?3)",
-            params![kind_str, content, now],
+            "INSERT INTO clipboard_history (kind, content, created_at, label, notes, is_pinned)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![kind_str, content, now, label, notes, i64::from(is_pinned)],
         )?;
 
         let new_id = tx.last_insert_rowid();
@@ -597,14 +668,17 @@ impl Database {
             }
         }
 
+        let existing = Self::existing_secret_metadata(&tx, content)?;
         tx.execute(
             "DELETE FROM clipboard_history WHERE content = ?1 AND kind = 'secret'",
             params![content],
         )?;
 
+        let (label, notes, is_pinned) = existing.unwrap_or((None, None, false));
         tx.execute(
-            "INSERT INTO clipboard_history (kind, content, created_at) VALUES ('secret', ?1, ?2)",
-            params![content, now],
+            "INSERT INTO clipboard_history (kind, content, created_at, label, notes, is_pinned)
+             VALUES ('secret', ?1, ?2, ?3, ?4, ?5)",
+            params![content, now, label, notes, i64::from(is_pinned)],
         )?;
 
         let new_id = tx.last_insert_rowid();
@@ -653,17 +727,29 @@ impl Database {
             }
         }
 
-        // 2. Remove any older duplicate image so the new copy moves to the top
+        // 2. Remove any older duplicate image so the new copy moves to the top,
+        // preserving any existing vault annotation/pin metadata.
+        let existing = Self::existing_image_metadata(&tx, width, height, png_bytes)?;
         tx.execute(
             "DELETE FROM clipboard_history
              WHERE kind = 'image' AND width = ?1 AND height = ?2 AND image_data = ?3",
             params![width, height, png_bytes],
         )?;
 
+        let (label, notes, is_pinned) = existing.unwrap_or((None, None, false));
         tx.execute(
-            "INSERT INTO clipboard_history (kind, content, image_data, width, height, created_at)
-             VALUES ('image', ?1, ?2, ?3, ?4, ?5)",
-            params![content, png_bytes, width, height, now],
+            "INSERT INTO clipboard_history (kind, content, image_data, width, height, created_at, label, notes, is_pinned)
+             VALUES ('image', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                content,
+                png_bytes,
+                width,
+                height,
+                now,
+                label,
+                notes,
+                i64::from(is_pinned)
+            ],
         )?;
 
         let new_id = tx.last_insert_rowid();
@@ -935,20 +1021,15 @@ impl Database {
     /// Returns the underlying SQLite error if the lookup or `UPDATE` fails.
     pub(crate) fn toggle_item_pinned(&self, id: i64) -> Result<bool, rusqlite::Error> {
         let conn = self.lock_conn();
-        let mut stmt = conn.prepare("SELECT is_pinned FROM clipboard_history WHERE id = ?1")?;
+        let mut stmt = conn.prepare(
+            "UPDATE clipboard_history SET is_pinned = 1 - is_pinned WHERE id = ?1 RETURNING is_pinned",
+        )?;
         let mut rows = stmt.query(params![id])?;
         let Some(row) = rows.next()? else {
             return Ok(false);
         };
-        let current: i64 = row.get(0).unwrap_or(0);
-        drop(rows);
-        drop(stmt);
-        let new_pinned = i64::from(current == 0);
-        conn.execute(
-            "UPDATE clipboard_history SET is_pinned = ?1 WHERE id = ?2",
-            params![new_pinned, id],
-        )?;
-        Ok(new_pinned != 0)
+        let pinned: i64 = row.get(0).unwrap_or(0);
+        Ok(pinned != 0)
     }
 
     /// Inserts a manually created secret/vault entry directly into the encrypted database.
@@ -990,14 +1071,27 @@ impl Database {
             }
         }
 
+        let existing = Self::existing_secret_metadata(&tx, secret)?;
         tx.execute(
             "DELETE FROM clipboard_history WHERE content = ?1 AND kind = 'secret'",
             params![secret],
         )?;
+
+        let (existing_label, existing_notes, existing_pinned) =
+            existing.unwrap_or((None, None, false));
+        let merged_label = label.or(existing_label);
+        let merged_notes = notes.or(existing_notes);
+        let merged_pinned = is_pinned || existing_pinned;
         tx.execute(
             "INSERT INTO clipboard_history (kind, content, created_at, label, notes, is_pinned)
              VALUES ('secret', ?1, ?2, ?3, ?4, ?5)",
-            params![secret, now, label, notes, i64::from(is_pinned)],
+            params![
+                secret,
+                now,
+                merged_label,
+                merged_notes,
+                i64::from(merged_pinned)
+            ],
         )?;
         let new_id = tx.last_insert_rowid();
         Self::prune_in_tx(&tx, max_limit, preserve)?;
@@ -1872,5 +1966,106 @@ mod tests {
         assert_eq!(items[0].label.as_deref(), Some("VPN"));
         assert_eq!(items[0].notes.as_deref(), Some("user: admin"));
         assert!(items[0].is_pinned);
+    }
+
+    #[test]
+    fn test_recopy_pinned_annotated_text_preserves_metadata() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("recopy_text.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        let id = db.insert("keep me").unwrap().unwrap();
+        db.set_item_annotation(id, Some("Label"), Some("Notes"))
+            .unwrap();
+        assert!(db.toggle_item_pinned(id).unwrap());
+
+        db.insert("other").unwrap();
+        let new_id = db.insert("keep me").unwrap().unwrap();
+        assert_ne!(id, new_id);
+
+        let items = db.get_recent(10, None).unwrap();
+        let item = items.iter().find(|i| i.content == "keep me").unwrap();
+        assert_eq!(item.id, new_id);
+        assert_eq!(item.label.as_deref(), Some("Label"));
+        assert_eq!(item.notes.as_deref(), Some("Notes"));
+        assert!(item.is_pinned);
+    }
+
+    #[test]
+    fn test_recopy_pinned_annotated_secret_preserves_metadata() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("recopy_secret.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        let id = db.insert_secret("api-key").unwrap().unwrap();
+        db.set_item_annotation(id, Some("API"), Some("prod"))
+            .unwrap();
+        assert!(db.toggle_item_pinned(id).unwrap());
+
+        db.insert("noise").unwrap();
+        let new_id = db.insert_secret("api-key").unwrap().unwrap();
+        assert_ne!(id, new_id);
+
+        let items = db.get_recent(10, None).unwrap();
+        let item = items
+            .iter()
+            .find(|i| i.kind == ItemKind::Secret && i.content == "api-key")
+            .unwrap();
+        assert_eq!(item.id, new_id);
+        assert_eq!(item.label.as_deref(), Some("API"));
+        assert_eq!(item.notes.as_deref(), Some("prod"));
+        assert!(item.is_pinned);
+    }
+
+    #[test]
+    fn test_recopy_pinned_annotated_image_preserves_metadata() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("recopy_image.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        let png = vec![1_u8, 2, 3, 4];
+        let id = db.insert_image(2, 2, &png).unwrap().unwrap();
+        db.set_item_annotation(id, Some("Shot"), Some("before"))
+            .unwrap();
+        assert!(db.toggle_item_pinned(id).unwrap());
+
+        db.insert("noise").unwrap();
+        let new_id = db.insert_image(2, 2, &png).unwrap().unwrap();
+        assert_ne!(id, new_id);
+
+        let items = db.get_recent(10, None).unwrap();
+        let item = items.iter().find(|i| i.kind == ItemKind::Image).unwrap();
+        assert_eq!(item.id, new_id);
+        assert_eq!(item.label.as_deref(), Some("Shot"));
+        assert_eq!(item.notes.as_deref(), Some("before"));
+        assert!(item.is_pinned);
+    }
+
+    #[test]
+    fn test_insert_manual_secret_merges_older_duplicate_metadata() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("manual_merge.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        let id = db.insert_secret("dup-secret").unwrap().unwrap();
+        db.set_item_annotation(id, Some("Old"), Some("keep"))
+            .unwrap();
+        assert!(db.toggle_item_pinned(id).unwrap());
+        db.insert("noise").unwrap();
+
+        let new_id = db
+            .insert_manual_secret("dup-secret", Some("New"), None, false)
+            .unwrap();
+        assert_ne!(id, new_id);
+
+        let items = db.get_recent(10, None).unwrap();
+        let item = items
+            .iter()
+            .find(|i| i.kind == ItemKind::Secret && i.content == "dup-secret")
+            .unwrap();
+        assert_eq!(item.id, new_id);
+        assert_eq!(item.label.as_deref(), Some("New"));
+        assert_eq!(item.notes.as_deref(), Some("keep"));
+        assert!(item.is_pinned);
     }
 }
