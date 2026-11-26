@@ -6,8 +6,14 @@ use std::path::Path;
 use zeroize::{Zeroize, Zeroizing};
 
 const SERVICE_NAME: &str = "cipherclipboard";
-const LEGACY_SERVICE_NAME: &str = "rusty_clipboard";
 const KEY_NAME: &str = "db_encryption_key";
+
+#[derive(Debug, PartialEq, Eq)]
+enum KeyringRead {
+    Found(Zeroizing<String>),
+    NotFound,
+    Unavailable,
+}
 
 /// Indicates where the active database encryption key is currently stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,7 +106,7 @@ fn get_or_create_encryption_key_with_mode(
 ) -> Result<(Zeroizing<String>, KeyStorageMode), KeyError> {
     let key_file = data_dir.join(".encryption_key");
 
-    if allow_key_file_cache {
+    let keyring_unavailable = if allow_key_file_cache {
         // Debug mode: prefer local key file to avoid Keychain prompts on every recompile.
         if let Some(key) = read_key_file(&key_file)? {
             let permissions_degraded =
@@ -113,34 +119,38 @@ fn get_or_create_encryption_key_with_mode(
             return Ok((key, local_fallback_mode(permissions_degraded)));
         }
 
-        if let Some((key, service)) = read_from_keyring() {
-            #[cfg(debug_assertions)]
-            println!("🔐 Loaded encryption key from OS Keyring ({service}).");
-            #[cfg(not(debug_assertions))]
-            let _ = service;
-            let permissions_degraded = save_key_file(&key_file, &key)?;
-            warn_if_local_cache_hardening_failed(permissions_degraded);
-            return Ok((key, KeyStorageMode::OsKeyring));
+        match read_from_keyring() {
+            KeyringRead::Found(key) => {
+                #[cfg(debug_assertions)]
+                println!("🔐 Loaded encryption key from OS Keyring ({SERVICE_NAME}).");
+                let permissions_degraded = save_key_file(&key_file, &key)?;
+                warn_if_local_cache_hardening_failed(permissions_degraded);
+                return Ok((key, KeyStorageMode::OsKeyring));
+            }
+            KeyringRead::NotFound => false,
+            KeyringRead::Unavailable => true,
         }
     } else {
         // Release mode: prefer OS Keyring exclusively and clean up any plaintext key file.
-        if let Some((key, service)) = read_from_keyring() {
-            #[cfg(debug_assertions)]
-            println!("🔐 Loaded encryption key from OS Keyring ({service}).");
-            if service != SERVICE_NAME {
-                let _ = write_to_keyring(&key);
-            }
-            if key_file.exists() {
-                remove_key_file(&key_file);
+        let unavailable = match read_from_keyring() {
+            KeyringRead::Found(key) => {
                 #[cfg(debug_assertions)]
-                println!("🧹 Removed legacy plaintext key file from disk.");
+                println!("🔐 Loaded encryption key from OS Keyring ({SERVICE_NAME}).");
+                if key_file.exists() {
+                    remove_key_file(&key_file);
+                    #[cfg(debug_assertions)]
+                    println!("🧹 Removed legacy plaintext key file from disk.");
+                }
+                return Ok((key, KeyStorageMode::OsKeyring));
             }
-            return Ok((key, KeyStorageMode::OsKeyring));
-        }
+            KeyringRead::NotFound => false,
+            KeyringRead::Unavailable => true,
+        };
 
-        // Migration path: if an older version stored .encryption_key, move it into the OS Keyring.
+        // Migration path: if an older version stored .encryption_key, move it into the OS Keyring
+        // (unless the keyring was already denied/unavailable on the read above).
         if let Some(key) = read_key_file(&key_file)? {
-            if write_to_keyring(&key).is_ok() {
+            if !unavailable && write_to_keyring(&key).is_ok() {
                 remove_key_file(&key_file);
                 #[cfg(debug_assertions)]
                 println!("🔐 Migrated encryption key into OS Keyring and removed local key file.");
@@ -155,7 +165,8 @@ fn get_or_create_encryption_key_with_mode(
             );
             return Ok((key, local_fallback_mode(permissions_degraded)));
         }
-    }
+        unavailable
+    };
 
     // Safety Check: If the database already exists on disk, we MUST NOT generate a new random key!
     if db_exists {
@@ -171,7 +182,9 @@ fn get_or_create_encryption_key_with_mode(
 
     let storage_mode = if allow_key_file_cache {
         let permissions_degraded = save_key_file(&key_file, &new_key)?;
-        if let Err(e) = write_to_keyring(&new_key) {
+        if keyring_unavailable {
+            local_fallback_mode(permissions_degraded)
+        } else if let Err(e) = write_to_keyring(&new_key) {
             #[cfg(debug_assertions)]
             eprintln!(
                 "ℹ️ Could not write key to OS Keyring ({e}); using local secure file instead."
@@ -185,6 +198,9 @@ fn get_or_create_encryption_key_with_mode(
             println!("🔑 Backed up encryption key to OS Keyring.");
             KeyStorageMode::OsKeyring
         }
+    } else if keyring_unavailable {
+        let permissions_degraded = save_key_file(&key_file, &new_key)?;
+        local_fallback_mode(permissions_degraded)
     } else if let Err(e) = write_to_keyring(&new_key) {
         #[cfg(debug_assertions)]
         eprintln!(
@@ -212,19 +228,23 @@ fn read_key_file(path: &Path) -> Result<Option<Zeroizing<String>>, std::io::Erro
 }
 
 #[cfg(not(test))]
-fn read_from_keyring() -> Option<(Zeroizing<String>, &'static str)> {
-    for service in [SERVICE_NAME, LEGACY_SERVICE_NAME] {
-        if let Ok(entry) = Entry::new(service, KEY_NAME) {
-            if let Ok(key) = entry.get_password() {
-                let key = Zeroizing::new(key);
-                let trimmed = Zeroizing::new(key.trim().to_string());
-                if !trimmed.is_empty() {
-                    return Some((trimmed, service));
-                }
+fn read_from_keyring() -> KeyringRead {
+    let Ok(entry) = Entry::new(SERVICE_NAME, KEY_NAME) else {
+        return KeyringRead::Unavailable;
+    };
+    match entry.get_password() {
+        Ok(key) => {
+            let key = Zeroizing::new(key);
+            let trimmed = Zeroizing::new(key.trim().to_string());
+            if trimmed.is_empty() {
+                KeyringRead::NotFound
+            } else {
+                KeyringRead::Found(trimmed)
             }
         }
+        Err(keyring::Error::NoEntry) => KeyringRead::NotFound,
+        Err(_) => KeyringRead::Unavailable,
     }
-    None
 }
 
 #[cfg(not(test))]
@@ -241,7 +261,9 @@ pub(crate) mod mock_keyring {
     #[derive(Default)]
     pub(crate) struct MockKeyringState {
         pub(crate) entries: HashMap<(String, String), String>,
+        pub(crate) fail_reads: bool,
         pub(crate) fail_writes: bool,
+        pub(crate) write_attempts: usize,
     }
 
     pub(crate) static MOCK_KEYRING: Mutex<Option<MockKeyringState>> = Mutex::new(None);
@@ -267,17 +289,16 @@ pub(crate) mod mock_keyring {
         *guard = Some(MockKeyringState::default());
     }
 
+    pub(crate) fn set_fail_reads(fail: bool) {
+        with_state(|s| s.fail_reads = fail);
+    }
+
     pub(crate) fn set_fail_writes(fail: bool) {
         with_state(|s| s.fail_writes = fail);
     }
 
-    pub(crate) fn insert(service: &str, key_name: &str, password: &str) {
-        with_state(|s| {
-            s.entries.insert(
-                (service.to_string(), key_name.to_string()),
-                password.to_string(),
-            );
-        });
+    pub(crate) fn write_attempts() -> usize {
+        with_state(|s| s.write_attempts)
     }
 
     pub(crate) fn get(service: &str, key_name: &str) -> Option<String> {
@@ -290,21 +311,28 @@ pub(crate) mod mock_keyring {
 }
 
 #[cfg(test)]
-fn read_from_keyring() -> Option<(Zeroizing<String>, &'static str)> {
-    for service in [SERVICE_NAME, LEGACY_SERVICE_NAME] {
-        if let Some(key) = mock_keyring::get(service, KEY_NAME) {
-            let trimmed = Zeroizing::new(key.trim().to_string());
-            if !trimmed.is_empty() {
-                return Some((trimmed, service));
-            }
+fn read_from_keyring() -> KeyringRead {
+    mock_keyring::with_state(|s| {
+        if s.fail_reads {
+            return KeyringRead::Unavailable;
         }
-    }
-    None
+        s.entries
+            .get(&(SERVICE_NAME.to_string(), KEY_NAME.to_string()))
+            .map_or(KeyringRead::NotFound, |key| {
+                let trimmed = Zeroizing::new(key.trim().to_string());
+                if trimmed.is_empty() {
+                    KeyringRead::NotFound
+                } else {
+                    KeyringRead::Found(trimmed)
+                }
+            })
+    })
 }
 
 #[cfg(test)]
 fn write_to_keyring(key: &str) -> Result<(), keyring::Error> {
     mock_keyring::with_state(|s| {
+        s.write_attempts += 1;
         if s.fail_writes {
             Err(keyring::Error::NoStorageAccess(Box::new(
                 std::io::Error::new(
@@ -461,33 +489,37 @@ mod tests {
     }
 
     #[test]
-    fn test_release_mode_migrates_legacy_service_key() {
+    fn test_unavailable_keyring_skips_redundant_write_attempt() {
         let _lock = mock_keyring::TEST_LOCK.lock().unwrap();
         mock_keyring::reset();
-        let legacy_key = test_hex_key(0x1111_2222_3333_4444);
-        mock_keyring::insert(LEGACY_SERVICE_NAME, KEY_NAME, &legacy_key);
+        mock_keyring::set_fail_reads(true);
         let dir = tempdir().unwrap();
 
-        let (loaded, mode) =
+        let (_loaded, mode) =
             get_or_create_encryption_key_with_mode(dir.path(), false, false).unwrap();
-        assert_eq!(loaded.as_str(), legacy_key.as_str());
-        assert_eq!(mode, KeyStorageMode::OsKeyring);
-        // Should have migrated into current SERVICE_NAME
-        assert_eq!(mock_keyring::get(SERVICE_NAME, KEY_NAME), Some(legacy_key));
+        assert!(matches!(
+            mode,
+            KeyStorageMode::LocalFileFallback | KeyStorageMode::LocalFileFallbackDegraded
+        ));
+        assert_eq!(
+            mock_keyring::write_attempts(),
+            0,
+            "must not prompt a second time by attempting a write after a denied/unavailable read"
+        );
     }
 
     #[test]
     fn test_keyring_mock_isolation() {
         let _lock = mock_keyring::TEST_LOCK.lock().unwrap();
         mock_keyring::reset();
-        assert_eq!(read_from_keyring(), None);
+        assert_eq!(read_from_keyring(), KeyringRead::NotFound);
         let mock_key = format!("mock-{}-{}", 1, 2);
         write_to_keyring(&mock_key).unwrap();
         assert_eq!(
             read_from_keyring(),
-            Some((Zeroizing::new(mock_key), SERVICE_NAME))
+            KeyringRead::Found(Zeroizing::new(mock_key))
         );
         mock_keyring::reset();
-        assert_eq!(read_from_keyring(), None);
+        assert_eq!(read_from_keyring(), KeyringRead::NotFound);
     }
 }

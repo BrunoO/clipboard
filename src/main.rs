@@ -368,7 +368,7 @@ mod tests {
                             (icons::LINK, "Links", 12),
                             (icons::CODE, "Code", 15),
                             (icons::PALETTE, "Colors", 8),
-                            (icons::VAULT, "Vault", 10),
+                            (icons::PUSH_PIN, "Pinned", 10),
                             (icons::IMAGE, "Images", 12),
                         ];
                         for (idx, (icon, label, count)) in tabs.into_iter().enumerate() {

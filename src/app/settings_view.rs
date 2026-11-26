@@ -698,23 +698,6 @@ impl ClipboardApp {
                 self.persist_settings();
             }
 
-            ui.add_space(4.0);
-            if ui
-                .checkbox(
-                    &mut self.settings.preserve_secrets_on_prune,
-                    "Preserve secrets during history pruning",
-                )
-                .on_hover_text(
-                    "Prevents passwords, API keys, and generated secrets from being automatically deleted when history reaches the item limit.",
-                )
-                .changed()
-            {
-                self.db
-                    .set_preserve_secrets_on_prune(self.settings.preserve_secrets_on_prune);
-                self.persist_settings();
-                self.refresh_items();
-            }
-
             ui.add_space(6.0);
             self.render_auto_clear_secret_selector(ui);
 

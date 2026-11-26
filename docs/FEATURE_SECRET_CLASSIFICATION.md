@@ -49,7 +49,7 @@ Manual secret conversion is implemented in the codebase:
 4. **Security Protections Applied to `ItemKind::Secret`:**
    - **UI masking:** `render_secret_content` masks content with bullets (`•`) unless explicitly revealed.
    - **Clipboard copy (`src/app/mod.rs`):** `copy_secret_to_clipboard` sets `db.skip_next_capture(secret)`, calls `platform::mark_clipboard_concealed()`, wraps the value in `zeroize::Zeroizing` for `pending_clipboard_clear`, and schedules `auto_clear_secret_secs`.
-   - **Retention:** Protected from automatic history pruning when `preserve_secrets_on_prune` is enabled.
+   - **Retention:** Controlled independently via **Pinning** (`is_pinned`); unpinned secrets age out with history pruning and `Clear All`, while pinned secrets are preserved.
 
 ---
 

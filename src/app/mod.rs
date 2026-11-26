@@ -111,7 +111,7 @@ pub(crate) enum ContentFilter {
     Links,
     Code,
     Colors,
-    Vault,
+    Pinned,
     Image,
 }
 
@@ -130,7 +130,7 @@ struct FilterCounts {
     links: usize,
     code: usize,
     colors: usize,
-    vault: usize,
+    pinned: usize,
     images: usize,
 }
 
@@ -149,8 +149,8 @@ impl FilterCounts {
                 ItemKind::Secret => {}
                 ItemKind::Image => counts.images += 1,
             }
-            if item.in_vault || item.kind == ItemKind::Secret {
-                counts.vault += 1;
+            if item.is_pinned {
+                counts.pinned += 1;
             }
             if item.kind != ItemKind::Color && !item.embedded_colors().is_empty() {
                 counts.colors += 1;
@@ -1323,7 +1323,12 @@ impl ClipboardApp {
                     "Colors",
                     counts.colors,
                 ),
-                (ContentFilter::Vault, icons::VAULT, "Vault", counts.vault),
+                (
+                    ContentFilter::Pinned,
+                    icons::PUSH_PIN,
+                    "Pinned",
+                    counts.pinned,
+                ),
                 (ContentFilter::Image, icons::IMAGE, "Images", counts.images),
             ];
 
@@ -1447,9 +1452,9 @@ impl ClipboardApp {
             && ui
                 .small_button(format!("{} + Secret", icons::LOCK))
                 .on_hover_text(if cfg!(target_os = "macos") {
-                    "New vault secret (Cmd+N)"
+                    "New pinned secret (Cmd+N)"
                 } else {
-                    "New vault secret (Ctrl+Shift+N)"
+                    "New pinned secret (Ctrl+Shift+N)"
                 })
                 .clicked()
         {
@@ -1700,7 +1705,7 @@ impl ClipboardApp {
                     ContentFilter::Colors => {
                         item.kind == ItemKind::Color || !item.embedded_colors().is_empty()
                     }
-                    ContentFilter::Vault => item.in_vault || item.kind == ItemKind::Secret,
+                    ContentFilter::Pinned => item.is_pinned,
                     ContentFilter::Image => item.kind == ItemKind::Image,
                 };
                 if matches {
@@ -1786,7 +1791,7 @@ impl ClipboardApp {
                 ui.add_space(8.0_f32);
                 ui.label(
                     egui::RichText::new(
-                        "This action cannot be undone. Items not in your Vault will be permanently erased. Vault items are kept.",
+                        "This action cannot be undone. Unpinned items will be permanently erased. Pinned items are kept.",
                     )
                     .size(12.0_f32)
                     .color(crate::theme::text_secondary(is_dark)),
@@ -1821,7 +1826,7 @@ impl ClipboardApp {
                                 self.refresh_items();
                                 self.dialogs.show_clear_confirm_dialog = false;
                                 self.show_toast(&format!(
-                                    "{} History cleared. Vault items kept.",
+                                    "{} History cleared. Pinned items kept.",
                                     icons::CHECK
                                 ));
                             }
@@ -2157,9 +2162,10 @@ impl ClipboardApp {
             let save_clicked = ui
                 .add_enabled(
                     can_save,
-                    egui::Button::new(format!("{} Save to Vault", icons::LOCK))
+                    egui::Button::new(format!("{} Save Secret", icons::LOCK))
                         .min_size(egui::vec2(btn_width, btn_height)),
                 )
+                .on_hover_text("Save directly as a pinned secret (without copying to clipboard)")
                 .clicked();
             if save_clicked || save_shortcut {
                 self.save_new_secret_from_dialog();
@@ -2180,10 +2186,10 @@ impl ClipboardApp {
             Ok(_) => {
                 self.close_new_secret_dialog();
                 self.refresh_items();
-                self.show_toast(&format!("{} Secret saved to Vault.", icons::LOCK));
+                self.show_toast(&format!("{} Secret saved & pinned.", icons::LOCK));
             }
             Err(error) => {
-                self.report_db_write_failure("save secret to vault", &error);
+                self.report_db_write_failure("save pinned secret", &error);
             }
         }
     }

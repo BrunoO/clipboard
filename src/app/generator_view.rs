@@ -144,8 +144,10 @@ impl ClipboardApp {
                 }
 
                 if ui
-                    .button(format!("{} Save to Vault", icons::LOCK))
-                    .on_hover_text("Save this password directly to the encrypted vault")
+                    .button(format!("{} Save Secret", icons::LOCK))
+                    .on_hover_text(
+                        "Save this password directly as a pinned secret (without copying to clipboard)",
+                    )
                     .clicked()
                 {
                     let secret = self.password_gen.current_value.to_string();

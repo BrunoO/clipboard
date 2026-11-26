@@ -30,7 +30,7 @@ pub(crate) const LOCK_OPEN: &str = mi::ICON_LOCK_OPEN.codepoint;
 pub(crate) const MAGNIFYING_GLASS: &str = mi::ICON_SEARCH.codepoint;
 pub(crate) const PALETTE: &str = mi::ICON_PALETTE.codepoint;
 pub(crate) const PENCIL: &str = mi::ICON_EDIT.codepoint;
-pub(crate) const VAULT: &str = mi::ICON_SHIELD_LOCK.codepoint;
+pub(crate) const PUSH_PIN: &str = mi::ICON_PUSH_PIN.codepoint;
 #[allow(dead_code)]
 pub(crate) const POWER: &str = mi::ICON_POWER_SETTINGS_NEW.codepoint;
 pub(crate) const SHIELD_CHECK: &str = mi::ICON_VERIFIED_USER.codepoint;

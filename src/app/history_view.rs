@@ -19,7 +19,7 @@ pub(super) enum ItemAction {
     OpenBrowser(String),
     ToggleSecret(i64, bool),
     ToggleRevealSecret(i64),
-    ToggleVault(i64),
+    TogglePin(i64),
     EditAnnotation(i64),
     Delete(i64),
     ShowWarning(String),
@@ -72,10 +72,10 @@ impl ClipboardApp {
                             "No Colors Captured",
                             "HEX, RGB, HSL, and CSS color codes will render as interactive enameled swatches.",
                         ),
-                        ContentFilter::Vault => (
-                            icons::VAULT,
-                            "Your Vault is Empty",
-                            "Move important entries or save secrets here to keep them organized and protected.",
+                        ContentFilter::Pinned => (
+                            icons::PUSH_PIN,
+                            "No Pinned Items Yet",
+                            "Pin important clips, snippets, links, images, or save secrets to keep them protected from pruning and Clear All.",
                         ),
                         ContentFilter::Image => (
                             icons::IMAGE,
@@ -290,7 +290,7 @@ impl ClipboardApp {
                 self.revealed_secrets.remove(&id);
                 self.refresh_items();
                 let msg = if make_secret {
-                    format!("{} Marked entry as Secret.", icons::LOCK)
+                    format!("{} Marked entry as Secret (masked).", icons::LOCK)
                 } else {
                     format!("{} Unmarked entry as Secret.", icons::LOCK_OPEN)
                 };
@@ -301,18 +301,18 @@ impl ClipboardApp {
                     self.revealed_secrets.insert(id);
                 }
             }
-            ItemAction::ToggleVault(id) => match self.db.toggle_item_in_vault(id) {
-                Ok(in_vault) => {
+            ItemAction::TogglePin(id) => match self.db.toggle_item_pin(id) {
+                Ok(is_pinned) => {
                     self.refresh_items();
-                    let msg = if in_vault {
-                        format!("{} Moved to Vault.", icons::VAULT)
+                    let msg = if is_pinned {
+                        format!("{} Item pinned.", icons::PUSH_PIN)
                     } else {
-                        format!("{} Removed from Vault.", icons::VAULT)
+                        format!("{} Item unpinned.", icons::PUSH_PIN)
                     };
                     self.show_toast(&msg);
                 }
                 Err(error) => {
-                    self.report_db_write_failure("update vault", &error);
+                    self.report_db_write_failure("update pin state", &error);
                 }
             },
             ItemAction::EditAnnotation(id) => {
@@ -615,13 +615,13 @@ impl ClipboardApp {
                 action = Self::render_item_header_actions(ui, item, is_selected, is_revealed);
 
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    if item.in_vault {
+                    if item.is_pinned {
                         ui.label(
-                            egui::RichText::new(icons::VAULT)
+                            egui::RichText::new(icons::PUSH_PIN)
                                 .size(12.0)
                                 .color(crate::theme::warning_color(is_dark)),
                         )
-                        .on_hover_text("In Vault");
+                        .on_hover_text("Pinned (protected from pruning & Clear All)");
                     }
 
                     if let Some(label) = item.label.as_deref() {
@@ -714,23 +714,19 @@ impl ClipboardApp {
             action = ItemAction::EditAnnotation(item.id);
         }
 
-        let vault_tip = if item.in_vault {
-            "Remove from Vault"
+        let pin_tip = if item.is_pinned {
+            "Unpin item"
         } else {
-            "Move to Vault"
+            "Pin item (keep from pruning & Clear All)"
         };
-        let vault_text = if item.in_vault {
-            icons::button_icon(icons::VAULT)
+        let pin_text = if item.is_pinned {
+            icons::button_icon(icons::PUSH_PIN)
                 .color(crate::theme::warning_color(ui.visuals().dark_mode))
         } else {
-            icons::button_icon(icons::VAULT)
+            icons::button_icon(icons::PUSH_PIN)
         };
-        if ui
-            .small_button(vault_text)
-            .on_hover_text(vault_tip)
-            .clicked()
-        {
-            action = ItemAction::ToggleVault(item.id);
+        if ui.small_button(pin_text).on_hover_text(pin_tip).clicked() {
+            action = ItemAction::TogglePin(item.id);
         }
 
         if ui
@@ -786,7 +782,7 @@ impl ClipboardApp {
                 (
                     icons::LOCK,
                     format!(
-                        "Mark as Secret (mask content, {}+L)",
+                        "Mask as Secret (hide content & auto-clear on copy, {}+L)",
                         crate::platform::PRIMARY_MODIFIER_NAME
                     ),
                 )
@@ -1014,7 +1010,7 @@ impl ClipboardApp {
                 )
             } else {
                 format!(
-                    "{} Mark as Secret ({}+L)",
+                    "{} Mask as Secret ({}+L)",
                     icons::LOCK,
                     crate::platform::PRIMARY_MODIFIER_NAME
                 )
@@ -1037,14 +1033,14 @@ impl ClipboardApp {
             }
         }
 
-        let vault_label = if item.in_vault {
-            format!("{} Remove from Vault", icons::VAULT)
+        let pin_label = if item.is_pinned {
+            format!("{} Unpin Item", icons::PUSH_PIN)
         } else {
-            format!("{} Move to Vault", icons::VAULT)
+            format!("{} Pin Item", icons::PUSH_PIN)
         };
-        if ui.button(vault_label).clicked() {
+        if ui.button(pin_label).clicked() {
             ui.close();
-            action = ItemAction::ToggleVault(item.id);
+            action = ItemAction::TogglePin(item.id);
         }
 
         if ui
@@ -2027,7 +2023,7 @@ mod tests {
             embedded_colors: Vec::new(),
             label: None,
             notes: None,
-            in_vault: false,
+            is_pinned: false,
         };
 
         let render_at_width = |width: f32, is_selected: bool| {
