@@ -37,6 +37,9 @@ pub(crate) struct ClipboardItem {
     pub(crate) height: Option<u32>,
     pub(crate) created_at: String,
     pub(crate) embedded_colors: Vec<crate::color::ParsedColor>,
+    pub(crate) label: Option<String>,
+    pub(crate) notes: Option<String>,
+    pub(crate) is_pinned: bool,
 }
 
 impl ClipboardItem {
@@ -197,6 +200,17 @@ impl From<rusqlite::Error> for DbOpenError {
     }
 }
 
+fn normalize_annotation_field(value: Option<&str>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 /// Returns `true` if the SQLite error represents an expected "duplicate column name" error
 /// when running `ALTER TABLE` schema migrations on an already-migrated database.
 fn is_duplicate_column_error(err: &rusqlite::Error) -> bool {
@@ -272,6 +286,9 @@ impl Database {
             "ALTER TABLE clipboard_history ADD COLUMN image_data BLOB",
             "ALTER TABLE clipboard_history ADD COLUMN width INTEGER",
             "ALTER TABLE clipboard_history ADD COLUMN height INTEGER",
+            "ALTER TABLE clipboard_history ADD COLUMN label TEXT",
+            "ALTER TABLE clipboard_history ADD COLUMN notes TEXT",
+            "ALTER TABLE clipboard_history ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
         ] {
             if let Err(e) = conn.execute(sql, []) {
                 if !is_duplicate_column_error(&e) {
@@ -279,6 +296,9 @@ impl Database {
                 }
             }
         }
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_clipboard_history_pinned ON clipboard_history(is_pinned, id DESC);",
+        )?;
 
         Ok(Self(Arc::new(DatabaseInner {
             conn: Mutex::new(conn),
@@ -387,6 +407,7 @@ impl Database {
     }
 
     /// Prunes older clipboard items exceeding the maximum history threshold.
+    /// Pinned vault items are always exempt from pruning.
     /// Returns the number of purged rows.
     ///
     /// # Errors
@@ -401,10 +422,11 @@ impl Database {
         let deleted = if preserve {
             conn.execute(
                 "DELETE FROM clipboard_history
-                 WHERE kind != 'secret'
+                 WHERE is_pinned = 0
+                   AND kind != 'secret'
                    AND id NOT IN (
                        SELECT id FROM clipboard_history
-                       WHERE kind != 'secret'
+                       WHERE is_pinned = 0 AND kind != 'secret'
                        ORDER BY id DESC LIMIT ?1
                    )",
                 params![limit_i64],
@@ -412,9 +434,12 @@ impl Database {
         } else {
             conn.execute(
                 "DELETE FROM clipboard_history
-                 WHERE id NOT IN (
-                     SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
-                 )",
+                 WHERE is_pinned = 0
+                   AND id NOT IN (
+                       SELECT id FROM clipboard_history
+                       WHERE is_pinned = 0
+                       ORDER BY id DESC LIMIT ?1
+                   )",
                 params![limit_i64],
             )?
         };
@@ -450,6 +475,7 @@ impl Database {
     }
 
     /// Prunes entries exceeding `max_limit` within an active SQLite transaction.
+    /// Pinned vault items are always exempt from pruning.
     fn prune_in_tx(
         tx: &rusqlite::Transaction<'_>,
         max_limit: usize,
@@ -460,10 +486,11 @@ impl Database {
             if preserve {
                 tx.execute(
                     "DELETE FROM clipboard_history
-                     WHERE kind != 'secret'
+                     WHERE is_pinned = 0
+                       AND kind != 'secret'
                        AND id NOT IN (
                            SELECT id FROM clipboard_history
-                           WHERE kind != 'secret'
+                           WHERE is_pinned = 0 AND kind != 'secret'
                            ORDER BY id DESC LIMIT ?1
                        )",
                     params![limit_i64],
@@ -471,9 +498,12 @@ impl Database {
             } else {
                 tx.execute(
                     "DELETE FROM clipboard_history
-                     WHERE id NOT IN (
-                         SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
-                     )",
+                     WHERE is_pinned = 0
+                       AND id NOT IN (
+                           SELECT id FROM clipboard_history
+                           WHERE is_pinned = 0
+                           ORDER BY id DESC LIMIT ?1
+                       )",
                     params![limit_i64],
                 )?;
             }
@@ -653,6 +683,9 @@ struct RawRecentRow {
     width: Option<u32>,
     height: Option<u32>,
     created_at: String,
+    label: Option<String>,
+    notes: Option<String>,
+    is_pinned: bool,
 }
 
 impl Database {
@@ -682,14 +715,23 @@ impl Database {
                 width: row.get(3)?,
                 height: row.get(4)?,
                 created_at: row.get(5)?,
+                label: row.get(6)?,
+                notes: row.get(7)?,
+                is_pinned: row.get::<_, i64>(8).unwrap_or(0) != 0,
             })
         };
 
         if let Some(pattern) = search_pattern {
             let mut stmt = conn.prepare(
-                "SELECT id, kind, content, width, height, created_at
+                "SELECT id, kind, content, width, height, created_at, label, notes, is_pinned
                  FROM clipboard_history
-                 WHERE kind != 'secret' AND content LIKE ?1 ESCAPE '\\'
+                 WHERE (
+                     CASE WHEN kind = 'secret' THEN
+                         (COALESCE(label, '') LIKE ?1 ESCAPE '\\' OR COALESCE(notes, '') LIKE ?1 ESCAPE '\\')
+                     ELSE
+                         (content LIKE ?1 ESCAPE '\\' OR COALESCE(label, '') LIKE ?1 ESCAPE '\\' OR COALESCE(notes, '') LIKE ?1 ESCAPE '\\')
+                     END
+                 )
                  ORDER BY id DESC LIMIT ?2",
             )?;
             let mut rows = stmt.query(params![pattern, limit_i64])?;
@@ -700,12 +742,13 @@ impl Database {
             let preserve = self.0.preserve_secrets_on_prune.load(Ordering::Relaxed);
             if preserve {
                 let mut stmt = conn.prepare(
-                    "SELECT id, kind, content, width, height, created_at
+                    "SELECT id, kind, content, width, height, created_at, label, notes, is_pinned
                      FROM clipboard_history
-                     WHERE kind = 'secret'
+                     WHERE is_pinned = 1
+                        OR kind = 'secret'
                         OR id IN (
                             SELECT id FROM clipboard_history
-                            WHERE kind != 'secret'
+                            WHERE is_pinned = 0 AND kind != 'secret'
                             ORDER BY id DESC LIMIT ?1
                         )
                      ORDER BY id DESC",
@@ -716,9 +759,15 @@ impl Database {
                 }
             } else {
                 let mut stmt = conn.prepare(
-                    "SELECT id, kind, content, width, height, created_at
+                    "SELECT id, kind, content, width, height, created_at, label, notes, is_pinned
                      FROM clipboard_history
-                     ORDER BY id DESC LIMIT ?1",
+                     WHERE is_pinned = 1
+                        OR id IN (
+                            SELECT id FROM clipboard_history
+                            WHERE is_pinned = 0
+                            ORDER BY id DESC LIMIT ?1
+                        )
+                     ORDER BY id DESC",
                 )?;
                 let mut rows = stmt.query(params![limit_i64])?;
                 while let Some(row) = rows.next()? {
@@ -759,6 +808,22 @@ impl Database {
                 } else {
                     Vec::new()
                 };
+                let label = r.label.and_then(|s| {
+                    let trimmed = s.trim().to_string();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed)
+                    }
+                });
+                let notes = r.notes.and_then(|s| {
+                    let trimmed = s.trim().to_string();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed)
+                    }
+                });
                 ClipboardItem {
                     id: r.id,
                     kind,
@@ -767,6 +832,9 @@ impl Database {
                     height: r.height,
                     created_at: r.created_at,
                     embedded_colors,
+                    label,
+                    notes,
+                    is_pinned: r.is_pinned,
                 }
             })
             .collect()
@@ -841,6 +909,102 @@ impl Database {
         Ok(())
     }
 
+    /// Updates the user annotation (label and notes) for a history entry.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the `UPDATE` fails.
+    pub(crate) fn set_item_annotation(
+        &self,
+        id: i64,
+        label: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        let label = normalize_annotation_field(label);
+        let notes = normalize_annotation_field(notes);
+        let conn = self.lock_conn();
+        conn.execute(
+            "UPDATE clipboard_history SET label = ?1, notes = ?2 WHERE id = ?3",
+            params![label, notes, id],
+        )?;
+        Ok(())
+    }
+
+    /// Toggles the pinned/vault state of a history entry and returns the new state.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the lookup or `UPDATE` fails.
+    pub(crate) fn toggle_item_pinned(&self, id: i64) -> Result<bool, rusqlite::Error> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare("SELECT is_pinned FROM clipboard_history WHERE id = ?1")?;
+        let mut rows = stmt.query(params![id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(false);
+        };
+        let current: i64 = row.get(0).unwrap_or(0);
+        drop(rows);
+        drop(stmt);
+        let new_pinned = i64::from(current == 0);
+        conn.execute(
+            "UPDATE clipboard_history SET is_pinned = ?1 WHERE id = ?2",
+            params![new_pinned, id],
+        )?;
+        Ok(new_pinned != 0)
+    }
+
+    /// Inserts a manually created secret/vault entry directly into the encrypted database.
+    /// This does not touch the OS clipboard. Returns the new row id.
+    ///
+    /// # Errors
+    /// Returns the underlying SQLite error if the insert transaction fails.
+    pub(crate) fn insert_manual_secret(
+        &self,
+        secret: &str,
+        label: Option<&str>,
+        notes: Option<&str>,
+        is_pinned: bool,
+    ) -> Result<i64, rusqlite::Error> {
+        let label = normalize_annotation_field(label);
+        let notes = normalize_annotation_field(notes);
+        let (now, max_limit, preserve) = self.insert_context();
+
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+
+        if let Some((last_kind, last_content)) = Self::last_text_entry(&tx)? {
+            if last_kind == "secret" && last_content == secret {
+                // Promote existing identical secret instead of creating a duplicate row.
+                tx.execute(
+                    "UPDATE clipboard_history
+                     SET created_at = ?1, label = COALESCE(?2, label), notes = COALESCE(?3, notes), is_pinned = MAX(is_pinned, ?4)
+                     WHERE id = (SELECT id FROM clipboard_history WHERE kind = 'secret' AND content = ?5 ORDER BY id DESC LIMIT 1)",
+                    params![now, label, notes, i64::from(is_pinned), secret],
+                )?;
+                let id: i64 = tx.query_row(
+                    "SELECT id FROM clipboard_history WHERE kind = 'secret' AND content = ?1 ORDER BY id DESC LIMIT 1",
+                    params![secret],
+                    |row| row.get(0),
+                )?;
+                Self::prune_in_tx(&tx, max_limit, preserve)?;
+                tx.commit()?;
+                return Ok(id);
+            }
+        }
+
+        tx.execute(
+            "DELETE FROM clipboard_history WHERE content = ?1 AND kind = 'secret'",
+            params![secret],
+        )?;
+        tx.execute(
+            "INSERT INTO clipboard_history (kind, content, created_at, label, notes, is_pinned)
+             VALUES ('secret', ?1, ?2, ?3, ?4, ?5)",
+            params![secret, now, label, notes, i64::from(is_pinned)],
+        )?;
+        let new_id = tx.last_insert_rowid();
+        Self::prune_in_tx(&tx, max_limit, preserve)?;
+        tx.commit()?;
+        Ok(new_id)
+    }
+
     /// Deletes a specific entry by its primary key ID.
     ///
     /// # Errors
@@ -851,8 +1015,9 @@ impl Database {
         Ok(())
     }
 
-    /// Deletes all history and then securely compacts the database and WAL
-    /// so previously deleted secrets do not linger on disk.
+    /// Deletes non-pinned history and then securely compacts the database and WAL
+    /// so previously deleted secrets do not linger on disk. Pinned vault items
+    /// are always preserved.
     ///
     /// # Errors
     /// Returns [`ClearError::Delete`] if row deletion fails, or
@@ -860,7 +1025,7 @@ impl Database {
     /// truncation failed. Callers must not report success for either case.
     pub(crate) fn clear(&self) -> Result<(), ClearError> {
         let conn = self.lock_conn();
-        conn.execute("DELETE FROM clipboard_history", [])
+        conn.execute("DELETE FROM clipboard_history WHERE is_pinned = 0", [])
             .map_err(|error| ClearError::Delete(Box::new(error)))?;
 
         let vacuum_error = conn.execute_batch("VACUUM;").err().map(Box::new);
@@ -1587,5 +1752,125 @@ mod tests {
         let embedded = items[0].embedded_colors();
         assert_eq!(embedded.len(), 2);
         assert_eq!(embedded[0].to_hex(), "#FF5733");
+    }
+
+    #[test]
+    fn test_schema_migration_adds_annotation_columns() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("annotation_migration.db");
+        let key = test_hex_key(1);
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.pragma_update(None, "key", &key).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE clipboard_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL DEFAULT 'text',
+                    content TEXT NOT NULL,
+                    image_data BLOB,
+                    width INTEGER,
+                    height INTEGER,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO clipboard_history (kind, content, created_at) VALUES ('text', 'old', '2026-01-01 00:00:00');",
+            )
+            .unwrap();
+        }
+
+        let db = Database::open(&db_path, &key).unwrap();
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, None);
+        assert_eq!(items[0].notes, None);
+        assert!(!items[0].is_pinned);
+    }
+
+    #[test]
+    fn test_set_item_annotation_and_search() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("annotation_search.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        let id = db.insert("plain content").unwrap().unwrap();
+        db.set_item_annotation(id, Some("GitHub PAT"), Some("user: dev@company.com"))
+            .unwrap();
+
+        let items = db.get_recent(10, Some("github")).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label.as_deref(), Some("GitHub PAT"));
+        assert_eq!(items[0].notes.as_deref(), Some("user: dev@company.com"));
+
+        let notes_match = db.get_recent(10, Some("dev@company")).unwrap();
+        assert_eq!(notes_match.len(), 1);
+    }
+
+    #[test]
+    fn test_secret_search_matches_only_annotations() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("secret_annotation_search.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        let secret = "super-secret-token-value";
+        let id = db.insert_secret(secret).unwrap().unwrap();
+        db.set_item_annotation(id, Some("AWS Root"), Some("prod account"))
+            .unwrap();
+
+        let by_label = db.get_recent(10, Some("aws")).unwrap();
+        assert_eq!(by_label.len(), 1);
+        assert_eq!(by_label[0].id, id);
+
+        let by_notes = db.get_recent(10, Some("prod")).unwrap();
+        assert_eq!(by_notes.len(), 1);
+
+        let by_content = db.get_recent(10, Some("super-secret-token")).unwrap();
+        assert!(
+            by_content.is_empty(),
+            "secret content must not be searchable"
+        );
+    }
+
+    #[test]
+    fn test_pinned_items_exempt_from_prune_and_clear() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("pinned_prune_clear.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        db.set_max_history(2);
+        let pinned_id = db.insert("Pinned item").unwrap().unwrap();
+        assert!(db.toggle_item_pinned(pinned_id).unwrap());
+
+        db.insert("Item 2").unwrap();
+        db.insert("Item 3").unwrap();
+        db.insert("Item 4").unwrap();
+
+        let items = db.get_recent(10, None).unwrap();
+        assert!(items.iter().any(|i| i.id == pinned_id));
+        assert!(items.iter().filter(|i| !i.is_pinned).count() <= 2);
+
+        db.clear().unwrap();
+        let after_clear = db.get_recent(10, None).unwrap();
+        assert_eq!(after_clear.len(), 1);
+        assert_eq!(after_clear[0].id, pinned_id);
+        assert!(after_clear[0].is_pinned);
+    }
+
+    #[test]
+    fn test_insert_manual_secret() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("manual_secret.db");
+        let db = Database::open(&db_path, &test_hex_key(1)).unwrap();
+
+        let id = db
+            .insert_manual_secret("s3cret", Some("VPN"), Some("user: admin"), true)
+            .unwrap();
+        let items = db.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, id);
+        assert_eq!(items[0].kind, ItemKind::Secret);
+        assert_eq!(items[0].label.as_deref(), Some("VPN"));
+        assert_eq!(items[0].notes.as_deref(), Some("user: admin"));
+        assert!(items[0].is_pinned);
     }
 }

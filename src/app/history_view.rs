@@ -19,6 +19,8 @@ pub(super) enum ItemAction {
     OpenBrowser(String),
     ToggleSecret(i64, bool),
     ToggleRevealSecret(i64),
+    TogglePin(i64),
+    EditAnnotation(i64),
     Delete(i64),
     ShowWarning(String),
 }
@@ -70,10 +72,10 @@ impl ClipboardApp {
                             "No Colors Captured",
                             "HEX, RGB, HSL, and CSS color codes will render as interactive enameled swatches.",
                         ),
-                        ContentFilter::Secrets => (
-                            icons::LOCK,
-                            "No Secret Vault Items",
-                            "Sensitive keys, passwords, and tokens are protected here with zero-logging.",
+                        ContentFilter::Vault => (
+                            icons::PUSH_PIN,
+                            "Your Vault is Empty",
+                            "Pin important entries or save secrets here to keep them organized and protected.",
                         ),
                         ContentFilter::Image => (
                             icons::IMAGE,
@@ -299,6 +301,27 @@ impl ClipboardApp {
                     self.revealed_secrets.insert(id);
                 }
             }
+            ItemAction::TogglePin(id) => match self.db.toggle_item_pinned(id) {
+                Ok(pinned) => {
+                    self.refresh_items();
+                    let msg = if pinned {
+                        format!("{} Pinned to Vault.", icons::PUSH_PIN)
+                    } else {
+                        format!("{} Unpinned from Vault.", icons::PUSH_PIN)
+                    };
+                    self.show_toast(&msg);
+                }
+                Err(error) => {
+                    self.report_db_write_failure("toggle pin", &error);
+                }
+            },
+            ItemAction::EditAnnotation(id) => {
+                if let Some(item) = self.items.iter().find(|i| i.id == id) {
+                    self.dialogs.editing_annotation_id = Some(id);
+                    self.dialogs.annotation_label_input = item.label.clone().unwrap_or_default();
+                    self.dialogs.annotation_notes_input = item.notes.clone().unwrap_or_default();
+                }
+            }
             ItemAction::Delete(id) => {
                 if let Err(error) = self.db.delete(id) {
                     self.report_db_write_failure("delete entry", &error);
@@ -333,6 +356,7 @@ impl ClipboardApp {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn render_clipboard_item(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
@@ -399,6 +423,15 @@ impl ClipboardApp {
                             action = color_action;
                         }
                     }
+                }
+
+                if let Some(notes) = item.notes.as_deref() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(notes)
+                            .size(11.0)
+                            .color(crate::theme::text_secondary(state.is_dark)),
+                    );
                 }
             });
 
@@ -562,6 +595,25 @@ impl ClipboardApp {
         let mut action = ItemAction::None;
 
         ui.horizontal(|ui| {
+            if item.is_pinned {
+                ui.label(
+                    egui::RichText::new(icons::PUSH_PIN)
+                        .size(12.0)
+                        .color(crate::theme::warning_color(is_dark)),
+                )
+                .on_hover_text("Pinned to Vault");
+            }
+
+            if let Some(label) = item.label.as_deref() {
+                ui.label(
+                    egui::RichText::new(label)
+                        .size(13.5)
+                        .strong()
+                        .color(crate::theme::text_primary(is_dark)),
+                );
+                ui.add_space(4.0);
+            }
+
             Self::render_item_badge(ui, item, is_dark);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -635,6 +687,25 @@ impl ClipboardApp {
         let lock_action = Self::render_secret_toggle_button(ui, item);
         if !matches!(lock_action, ItemAction::None) {
             action = lock_action;
+        }
+
+        if ui
+            .small_button(icons::button_icon(icons::PENCIL))
+            .on_hover_text("Edit annotation (F2)")
+            .clicked()
+        {
+            action = ItemAction::EditAnnotation(item.id);
+        }
+
+        let pin_tip = if item.is_pinned {
+            "Unpin from Vault"
+        } else {
+            "Pin to Vault"
+        };
+        let pin_icon = icons::PUSH_PIN;
+        let pin_btn = ui.small_button(icons::button_icon(pin_icon));
+        if pin_btn.on_hover_text(pin_tip).clicked() {
+            action = ItemAction::TogglePin(item.id);
         }
 
         if ui
@@ -906,40 +977,57 @@ impl ClipboardApp {
         item: &ClipboardItem,
         is_revealed: bool,
     ) -> ItemAction {
-        if item.kind == ItemKind::Image {
-            return ItemAction::None;
-        }
-
         let mut action = ItemAction::None;
-        let is_secret = item.kind == ItemKind::Secret;
-        let secret_label = if is_secret {
-            format!(
-                "{} Unmark as Secret ({}+L)",
-                icons::LOCK_OPEN,
-                crate::platform::PRIMARY_MODIFIER_NAME
-            )
-        } else {
-            format!(
-                "{} Mark as Secret ({}+L)",
-                icons::LOCK,
-                crate::platform::PRIMARY_MODIFIER_NAME
-            )
-        };
-        if ui.button(secret_label).clicked() {
-            ui.close();
-            action = ItemAction::ToggleSecret(item.id, !is_secret);
+
+        if item.kind != ItemKind::Image {
+            let is_secret = item.kind == ItemKind::Secret;
+            let secret_label = if is_secret {
+                format!(
+                    "{} Unmark as Secret ({}+L)",
+                    icons::LOCK_OPEN,
+                    crate::platform::PRIMARY_MODIFIER_NAME
+                )
+            } else {
+                format!(
+                    "{} Mark as Secret ({}+L)",
+                    icons::LOCK,
+                    crate::platform::PRIMARY_MODIFIER_NAME
+                )
+            };
+            if ui.button(secret_label).clicked() {
+                ui.close();
+                action = ItemAction::ToggleSecret(item.id, !is_secret);
+            }
+
+            if is_secret {
+                let reveal_label = if is_revealed {
+                    format!("{} Mask Secret Content", icons::EYE_SLASH)
+                } else {
+                    format!("{} Reveal Secret Content", icons::EYE)
+                };
+                if ui.button(reveal_label).clicked() {
+                    ui.close();
+                    action = ItemAction::ToggleRevealSecret(item.id);
+                }
+            }
         }
 
-        if is_secret {
-            let reveal_label = if is_revealed {
-                format!("{} Mask Secret Content", icons::EYE_SLASH)
-            } else {
-                format!("{} Reveal Secret Content", icons::EYE)
-            };
-            if ui.button(reveal_label).clicked() {
-                ui.close();
-                action = ItemAction::ToggleRevealSecret(item.id);
-            }
+        let pin_label = if item.is_pinned {
+            format!("{} Unpin from Vault", icons::PUSH_PIN)
+        } else {
+            format!("{} Pin to Vault", icons::PUSH_PIN)
+        };
+        if ui.button(pin_label).clicked() {
+            ui.close();
+            action = ItemAction::TogglePin(item.id);
+        }
+
+        if ui
+            .button(format!("{} Edit Annotation (F2)", icons::PENCIL))
+            .clicked()
+        {
+            ui.close();
+            action = ItemAction::EditAnnotation(item.id);
         }
 
         ui.separator();

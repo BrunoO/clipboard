@@ -111,7 +111,7 @@ pub(crate) enum ContentFilter {
     Links,
     Code,
     Colors,
-    Secrets,
+    Vault,
     Image,
 }
 
@@ -130,7 +130,7 @@ struct FilterCounts {
     links: usize,
     code: usize,
     colors: usize,
-    secrets: usize,
+    vault: usize,
     images: usize,
 }
 
@@ -146,8 +146,11 @@ impl FilterCounts {
                 ItemKind::Url => counts.links += 1,
                 ItemKind::Code => counts.code += 1,
                 ItemKind::Color => counts.colors += 1,
-                ItemKind::Secret => counts.secrets += 1,
+                ItemKind::Secret => {}
                 ItemKind::Image => counts.images += 1,
+            }
+            if item.is_pinned || item.kind == ItemKind::Secret {
+                counts.vault += 1;
             }
             if item.kind != ItemKind::Color && !item.embedded_colors().is_empty() {
                 counts.colors += 1;
@@ -267,8 +270,8 @@ impl AppServices {
 }
 
 /// Ephemeral dialog and modal interaction state.
-#[derive(Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Default)]
 pub(crate) struct DialogState {
     pub(crate) show_clear_confirm_dialog: bool,
     pub(crate) show_keyring_explanation: bool,
@@ -276,6 +279,15 @@ pub(crate) struct DialogState {
     pub(crate) manual_custom_hotkey_edit: bool,
     pub(crate) pending_custom_hotkey: String,
     pub(crate) hotkey_recording_hint: Option<String>,
+    pub(crate) show_new_secret_dialog: bool,
+    pub(crate) new_secret_label: String,
+    pub(crate) new_secret_value: String,
+    pub(crate) new_secret_notes: String,
+    pub(crate) new_secret_pinned: bool,
+    pub(crate) new_secret_reveal: bool,
+    pub(crate) editing_annotation_id: Option<i64>,
+    pub(crate) annotation_label_input: String,
+    pub(crate) annotation_notes_input: String,
 }
 
 pub(crate) struct ClipboardApp {
@@ -806,6 +818,10 @@ impl ClipboardApp {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             if self.dialogs.show_clear_confirm_dialog {
                 self.dialogs.show_clear_confirm_dialog = false;
+            } else if self.dialogs.editing_annotation_id.is_some() {
+                self.dialogs.editing_annotation_id = None;
+            } else if self.dialogs.show_new_secret_dialog {
+                self.dialogs.show_new_secret_dialog = false;
             } else if self.active_view != ActiveView::History {
                 self.active_view = ActiveView::History;
             } else {
@@ -862,7 +878,11 @@ impl ClipboardApp {
             return;
         }
 
-        if self.dialogs.show_clear_confirm_dialog || !self.window_state.is_visible {
+        if self.dialogs.show_clear_confirm_dialog
+            || self.dialogs.editing_annotation_id.is_some()
+            || self.dialogs.show_new_secret_dialog
+            || !self.window_state.is_visible
+        {
             return;
         }
 
@@ -909,6 +929,14 @@ impl ClipboardApp {
 
         if nav.toggle_secret_selected {
             self.toggle_secret_filtered_item(&filtered_indices, ctx);
+        }
+
+        if nav.edit_annotation_selected {
+            self.edit_annotation_filtered_item(&filtered_indices, ctx);
+        }
+
+        if nav.new_secret {
+            self.open_new_secret_dialog();
         }
     }
 
@@ -1104,6 +1132,15 @@ impl ClipboardApp {
         }
     }
 
+    fn edit_annotation_filtered_item(&mut self, filtered_indices: &[usize], ctx: &egui::Context) {
+        if let Some(&item_idx) = filtered_indices.get(self.selected_index) {
+            if let Some(item) = self.items.get(item_idx) {
+                let id = item.id;
+                self.dispatch_item_action(ItemAction::EditAnnotation(id), ctx);
+            }
+        }
+    }
+
     fn handle_app_activation(&mut self, ctx: &egui::Context) {
         let (is_focused, outer_rect, pointer_down) = ctx.input(|i| {
             (
@@ -1286,12 +1323,7 @@ impl ClipboardApp {
                     "Colors",
                     counts.colors,
                 ),
-                (
-                    ContentFilter::Secrets,
-                    icons::LOCK,
-                    "Secrets",
-                    counts.secrets,
-                ),
+                (ContentFilter::Vault, icons::PUSH_PIN, "Vault", counts.vault),
                 (ContentFilter::Image, icons::IMAGE, "Images", counts.images),
             ];
 
@@ -1409,6 +1441,15 @@ impl ClipboardApp {
             } else {
                 ActiveView::Generator
             };
+        }
+
+        if self.active_view == ActiveView::History
+            && ui
+                .small_button(format!("{} + Secret", icons::LOCK))
+                .on_hover_text("New vault secret (Cmd+N / Ctrl+N)")
+                .clicked()
+        {
+            self.open_new_secret_dialog();
         }
 
         if self.active_view == ActiveView::History
@@ -1655,7 +1696,7 @@ impl ClipboardApp {
                     ContentFilter::Colors => {
                         item.kind == ItemKind::Color || !item.embedded_colors().is_empty()
                     }
-                    ContentFilter::Secrets => item.kind == ItemKind::Secret,
+                    ContentFilter::Vault => item.is_pinned || item.kind == ItemKind::Secret,
                     ContentFilter::Image => item.kind == ItemKind::Image,
                 };
                 if matches {
@@ -1741,7 +1782,7 @@ impl ClipboardApp {
                 ui.add_space(8.0_f32);
                 ui.label(
                     egui::RichText::new(
-                        "This action cannot be undone. All saved clips, URLs, code snippets, and images will be permanently erased.",
+                        "This action cannot be undone. Unpinned clips, URLs, code snippets, and images will be permanently erased. Pinned vault items are kept.",
                     )
                     .size(12.0_f32)
                     .color(crate::theme::text_secondary(is_dark)),
@@ -1775,7 +1816,10 @@ impl ClipboardApp {
                                 self.texture_cache.clear();
                                 self.refresh_items();
                                 self.dialogs.show_clear_confirm_dialog = false;
-                                self.show_toast(&format!("{} History cleared.", icons::CHECK));
+                                self.show_toast(&format!(
+                                    "{} History cleared. Pinned items kept.",
+                                    icons::CHECK
+                                ));
                             }
                             Err(ClearError::Delete(error)) => {
                                 self.report_db_write_failure("clear history", &error);
@@ -1884,6 +1928,254 @@ impl ClipboardApp {
             self.dialogs.show_keyring_explanation = false;
             self.settings.keyring_explanation_shown = true;
             self.persist_settings();
+        }
+    }
+
+    fn render_annotation_edit_modal(&mut self, ctx: &egui::Context, is_dark: bool) {
+        let Some(edit_id) = self.dialogs.editing_annotation_id else {
+            return;
+        };
+
+        if Self::render_modal_backdrop(ctx, "annotation_edit_backdrop") {
+            self.dialogs.editing_annotation_id = None;
+        }
+
+        let mut open = true;
+        Self::modal_window(
+            format!("{} Edit Annotation", icons::PENCIL),
+            &mut open,
+            ctx,
+            is_dark,
+            360.0_f32,
+            420.0_f32,
+        )
+        .show(ctx, |ui| {
+            ui.label(
+                egui::RichText::new("Title / Label")
+                    .color(crate::theme::text_primary(is_dark))
+                    .strong(),
+            );
+            ui.add(
+                egui::TextEdit::singleline(&mut self.dialogs.annotation_label_input)
+                    .hint_text("e.g. GitHub Production PAT")
+                    .desired_width(f32::INFINITY),
+            );
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("Notes")
+                    .color(crate::theme::text_primary(is_dark))
+                    .strong(),
+            );
+            ui.add(
+                egui::TextEdit::multiline(&mut self.dialogs.annotation_notes_input)
+                    .hint_text("Optional notes, username, recovery info...")
+                    .desired_rows(4)
+                    .desired_width(f32::INFINITY),
+            );
+            ui.add_space(12.0);
+            let save_shortcut = ui.input(|i| {
+                i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)
+            });
+            ui.horizontal(|ui| {
+                let btn_width = 110.0_f32;
+                let btn_height = 28.0_f32;
+                let available_width = ui.available_width();
+                let spacing = btn_width.mul_add(-2.0_f32, available_width).max(0.0_f32) / 2.0_f32;
+                ui.add_space(spacing);
+
+                if ui
+                    .add_sized([btn_width, btn_height], egui::Button::new("Cancel (Esc)"))
+                    .clicked()
+                {
+                    self.dialogs.editing_annotation_id = None;
+                }
+
+                let save_btn = egui::Button::new(format!("{} Save", icons::CHECK));
+                let save_clicked = ui.add_sized([btn_width, btn_height], save_btn).clicked();
+                if save_clicked || save_shortcut {
+                    let label = self.dialogs.annotation_label_input.clone();
+                    let notes = self.dialogs.annotation_notes_input.clone();
+                    match self.db.set_item_annotation(
+                        edit_id,
+                        Some(label.as_str()),
+                        Some(notes.as_str()),
+                    ) {
+                        Ok(()) => {
+                            self.dialogs.editing_annotation_id = None;
+                            self.refresh_items();
+                            self.show_toast(&format!("{} Annotation saved.", icons::CHECK));
+                        }
+                        Err(error) => {
+                            self.report_db_write_failure("save annotation", &error);
+                        }
+                    }
+                }
+            });
+        });
+
+        if !open {
+            self.dialogs.editing_annotation_id = None;
+        }
+    }
+
+    fn open_new_secret_dialog(&mut self) {
+        self.dialogs.show_new_secret_dialog = true;
+        self.dialogs.new_secret_label.clear();
+        self.dialogs.new_secret_value.clear();
+        self.dialogs.new_secret_notes.clear();
+        self.dialogs.new_secret_pinned = true;
+        self.dialogs.new_secret_reveal = false;
+    }
+
+    fn open_new_secret_dialog_prefilled(&mut self, secret: String) {
+        self.dialogs.show_new_secret_dialog = true;
+        self.dialogs.new_secret_label.clear();
+        self.dialogs.new_secret_value = secret;
+        self.dialogs.new_secret_notes.clear();
+        self.dialogs.new_secret_pinned = true;
+        self.dialogs.new_secret_reveal = false;
+    }
+
+    fn render_new_secret_modal(&mut self, ctx: &egui::Context, is_dark: bool) {
+        if !self.dialogs.show_new_secret_dialog {
+            return;
+        }
+
+        if Self::render_modal_backdrop(ctx, "new_secret_backdrop") {
+            self.dialogs.show_new_secret_dialog = false;
+        }
+
+        let mut open = self.dialogs.show_new_secret_dialog;
+        Self::modal_window(
+            format!("{} New Secret", icons::LOCK_KEY),
+            &mut open,
+            ctx,
+            is_dark,
+            400.0_f32,
+            460.0_f32,
+        )
+        .show(ctx, |ui| {
+            Self::render_new_secret_form_fields(ui, &mut self.dialogs, is_dark);
+            ui.add_space(12.0);
+            self.render_new_secret_actions(ui);
+        });
+
+        if !open {
+            self.dialogs.show_new_secret_dialog = false;
+        }
+    }
+
+    fn render_new_secret_form_fields(ui: &mut egui::Ui, dialogs: &mut DialogState, is_dark: bool) {
+        ui.label(
+            egui::RichText::new("Label / Title")
+                .color(crate::theme::text_primary(is_dark))
+                .strong(),
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut dialogs.new_secret_label)
+                .hint_text("e.g. AWS Root Password")
+                .desired_width(f32::INFINITY),
+        );
+        ui.add_space(8.0);
+
+        ui.label(
+            egui::RichText::new("Secret Value")
+                .color(crate::theme::text_primary(is_dark))
+                .strong(),
+        );
+        ui.horizontal(|ui| {
+            let edit = egui::TextEdit::singleline(&mut dialogs.new_secret_value)
+                .password(!dialogs.new_secret_reveal)
+                .hint_text("Enter secret value")
+                .desired_width(ui.available_width() - 34.0);
+            ui.add(edit);
+            let eye = if dialogs.new_secret_reveal {
+                icons::EYE_SLASH
+            } else {
+                icons::EYE
+            };
+            if ui
+                .small_button(icons::button_icon(eye))
+                .on_hover_text(if dialogs.new_secret_reveal {
+                    "Hide secret"
+                } else {
+                    "Reveal secret"
+                })
+                .clicked()
+            {
+                dialogs.new_secret_reveal = !dialogs.new_secret_reveal;
+            }
+        });
+        ui.add_space(8.0);
+
+        ui.label(
+            egui::RichText::new("Notes / Username (optional)")
+                .color(crate::theme::text_primary(is_dark))
+                .strong(),
+        );
+        ui.add(
+            egui::TextEdit::multiline(&mut dialogs.new_secret_notes)
+                .hint_text("Optional notes or username")
+                .desired_rows(3)
+                .desired_width(f32::INFINITY),
+        );
+        ui.add_space(8.0);
+        ui.checkbox(&mut dialogs.new_secret_pinned, "Pin to Vault");
+    }
+
+    fn render_new_secret_actions(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let btn_width = 120.0_f32;
+            let btn_height = 28.0_f32;
+            let available_width = ui.available_width();
+            let spacing = btn_width.mul_add(-2.0_f32, available_width).max(0.0_f32) / 2.0_f32;
+            ui.add_space(spacing);
+
+            if ui
+                .add_sized([btn_width, btn_height], egui::Button::new("Cancel (Esc)"))
+                .clicked()
+            {
+                self.dialogs.show_new_secret_dialog = false;
+            }
+
+            let can_save = !self.dialogs.new_secret_value.trim().is_empty();
+            if ui
+                .add_enabled(
+                    can_save,
+                    egui::Button::new(format!("{} Save to Vault", icons::LOCK))
+                        .min_size(egui::vec2(btn_width, btn_height)),
+                )
+                .clicked()
+            {
+                self.save_new_secret_from_dialog();
+            }
+        });
+    }
+
+    fn save_new_secret_from_dialog(&mut self) {
+        let secret = self.dialogs.new_secret_value.clone();
+        let label = self.dialogs.new_secret_label.clone();
+        let notes = self.dialogs.new_secret_notes.clone();
+        let pinned = self.dialogs.new_secret_pinned;
+        match self.db.insert_manual_secret(
+            &secret,
+            Some(label.as_str()),
+            Some(notes.as_str()),
+            pinned,
+        ) {
+            Ok(_) => {
+                self.dialogs.show_new_secret_dialog = false;
+                self.dialogs.new_secret_value.clear();
+                self.dialogs.new_secret_label.clear();
+                self.dialogs.new_secret_notes.clear();
+                self.dialogs.new_secret_pinned = true;
+                self.dialogs.new_secret_reveal = false;
+                self.refresh_items();
+                self.show_toast(&format!("{} Secret saved to Vault.", icons::LOCK));
+            }
+            Err(error) => {
+                self.report_db_write_failure("save secret to vault", &error);
+            }
         }
     }
 }
@@ -2028,6 +2320,8 @@ impl eframe::App for ClipboardApp {
 
         self.render_clear_confirm_modal(&ctx, is_dark);
         self.render_keyring_explanation_modal(&ctx, is_dark);
+        self.render_annotation_edit_modal(&ctx, is_dark);
+        self.render_new_secret_modal(&ctx, is_dark);
     }
 }
 
@@ -2077,6 +2371,8 @@ struct HistoryNavInput {
     copy_raw_selected: bool,
     delete_selected: bool,
     toggle_secret_selected: bool,
+    edit_annotation_selected: bool,
+    new_secret: bool,
     copy_shortcut_slot: Option<usize>,
 }
 
@@ -2104,6 +2400,16 @@ fn read_history_nav_input(ctx: &egui::Context) -> HistoryNavInput {
 
         if i.consume_key(egui::Modifiers::COMMAND, egui::Key::L) {
             nav.toggle_secret_selected = true;
+        }
+
+        if i.consume_key(egui::Modifiers::NONE, egui::Key::F2)
+            || i.consume_key(egui::Modifiers::COMMAND, egui::Key::E)
+        {
+            nav.edit_annotation_selected = true;
+        }
+
+        if i.consume_key(egui::Modifiers::COMMAND, egui::Key::N) {
+            nav.new_secret = true;
         }
 
         if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)

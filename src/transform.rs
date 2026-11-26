@@ -1455,6 +1455,9 @@ mod tests {
             height: None,
             created_at: "2026-01-01".to_string(),
             embedded_colors: vec![],
+            label: None,
+            notes: None,
+            is_pinned: false,
         };
 
         assert!(TextTransform::JsonPrettify.applies_to(&json_item));
@@ -1477,6 +1480,9 @@ mod tests {
             height: None,
             created_at: "2026-01-01".to_string(),
             embedded_colors: vec![],
+            label: None,
+            notes: None,
+            is_pinned: false,
         };
         assert!(!has_strippable_formatting(&clean_item));
 
@@ -1488,6 +1494,9 @@ mod tests {
             height: None,
             created_at: "2026-01-01".to_string(),
             embedded_colors: vec![],
+            label: None,
+            notes: None,
+            is_pinned: false,
         };
         assert!(has_strippable_formatting(&ansi_item));
 
@@ -1499,6 +1508,9 @@ mod tests {
             height: None,
             created_at: "2026-01-01".to_string(),
             embedded_colors: vec![],
+            label: None,
+            notes: None,
+            is_pinned: false,
         };
         assert!(has_strippable_formatting(&html_item));
 
@@ -1510,6 +1522,9 @@ mod tests {
             height: Some(100),
             created_at: "2026-01-01".to_string(),
             embedded_colors: vec![],
+            label: None,
+            notes: None,
+            is_pinned: false,
         };
         assert!(!has_strippable_formatting(&image_item));
     }

@@ -143,6 +143,15 @@ impl ClipboardApp {
                     self.password_gen.regenerate();
                 }
 
+                if ui
+                    .button(format!("{} Save to Vault", icons::LOCK))
+                    .on_hover_text("Save this password directly to the encrypted vault")
+                    .clicked()
+                {
+                    let secret = self.password_gen.current_value.to_string();
+                    self.open_new_secret_dialog_prefilled(secret);
+                }
+
                 self.render_reveal_toggle(ui);
             });
         });
