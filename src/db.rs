@@ -1640,7 +1640,7 @@ mod tests {
         let secret_hits = db.get_recent(10, Some(marker.as_str())).unwrap();
         assert!(secret_hits.is_empty());
 
-        // Unfiltered query still returns the secret (so it appears in History/Secrets tab)
+        // Unfiltered query still returns the secret (so it appears in History/Vault views)
         let all = db.get_recent(10, None).unwrap();
         assert_eq!(all.len(), 4);
     }
