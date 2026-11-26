@@ -1348,18 +1348,41 @@ impl ClipboardApp {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.render_header_actions(ui, ctx);
+                self.render_header_actions(ui, ctx, is_dark);
             });
         });
     }
 
-    fn render_header_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn render_header_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, is_dark: bool) {
         if ui
             .small_button(icons::button_icon(icons::X))
             .on_hover_text("Hide window (Esc)")
             .clicked()
         {
             self.hide_window(ctx, self.settings.restore_focus, false);
+        }
+
+        ui.add_space(2.0_f32);
+
+        let quit_clicked = ui
+            .scope(|ui| {
+                let danger = crate::theme::error_color(is_dark);
+                let visuals = &mut ui.style_mut().visuals.widgets;
+                visuals.hovered.weak_bg_fill =
+                    danger.gamma_multiply(if is_dark { 0.22 } else { 0.14 });
+                visuals.hovered.bg_stroke = egui::Stroke::new(1.0, danger.gamma_multiply(0.55));
+                visuals.hovered.fg_stroke = egui::Stroke::new(1.5, danger);
+                visuals.active.weak_bg_fill =
+                    danger.gamma_multiply(if is_dark { 0.32 } else { 0.22 });
+                visuals.active.fg_stroke = egui::Stroke::new(1.5, danger);
+
+                ui.small_button(icons::button_icon(icons::POWER))
+                    .on_hover_text(crate::platform::quit_shortcut_tooltip())
+                    .clicked()
+            })
+            .inner;
+        if quit_clicked {
+            self.quit(ctx);
         }
 
         if render_view_toggle_button(
