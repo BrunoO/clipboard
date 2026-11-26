@@ -268,11 +268,14 @@ impl AppServices {
 
 /// Ephemeral dialog and modal interaction state.
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct DialogState {
     pub(crate) show_clear_confirm_dialog: bool,
     pub(crate) show_keyring_explanation: bool,
     pub(crate) recording_custom_hotkey: bool,
+    pub(crate) manual_custom_hotkey_edit: bool,
     pub(crate) pending_custom_hotkey: String,
+    pub(crate) hotkey_recording_hint: Option<String>,
 }
 
 pub(crate) struct ClipboardApp {
@@ -828,13 +831,19 @@ impl ClipboardApp {
                 };
 
                 if *key == egui::Key::Escape {
-                    self.dialogs.recording_custom_hotkey = false;
-                    self.dialogs.pending_custom_hotkey.clear();
+                    self.cancel_recording_custom_hotkey();
                     return;
                 }
 
-                if *key == egui::Key::Backspace {
-                    self.dialogs.pending_custom_hotkey.clear();
+                let active_mods = active_modifier_labels(*modifiers);
+                if *key == egui::Key::Backspace && active_mods.is_empty() {
+                    self.clear_custom_hotkey();
+                    return;
+                }
+
+                if active_mods.is_empty() && !is_function_key(*key) {
+                    self.dialogs.hotkey_recording_hint =
+                        Some("Include a modifier key (Ctrl, Alt, or Shift)".to_string());
                     return;
                 }
 
@@ -2109,11 +2118,10 @@ fn read_history_nav_input(ctx: &egui::Context) -> HistoryNavInput {
     nav
 }
 
-fn format_recorded_hotkey(modifiers: egui::Modifiers, key: egui::Key) -> Option<String> {
-    let key_name = egui_key_to_hotkey_name(key)?;
+pub(super) fn active_modifier_labels(modifiers: egui::Modifiers) -> Vec<&'static str> {
     // Note: in egui, `modifiers.command` aliases `ctrl` on Linux/Windows,
     // so only treat `mac_cmd` / `command` as Cmd on macOS.
-    let mut parts = Vec::with_capacity(5);
+    let mut parts = Vec::with_capacity(4);
     if modifiers.ctrl {
         parts.push("Ctrl");
     }
@@ -2126,6 +2134,42 @@ fn format_recorded_hotkey(modifiers: egui::Modifiers, key: egui::Key) -> Option<
     if crate::platform::has_recorded_command_modifier(modifiers) {
         parts.push("Cmd");
     }
+    parts
+}
+
+const fn is_function_key(key: egui::Key) -> bool {
+    matches!(
+        key,
+        egui::Key::F1
+            | egui::Key::F2
+            | egui::Key::F3
+            | egui::Key::F4
+            | egui::Key::F5
+            | egui::Key::F6
+            | egui::Key::F7
+            | egui::Key::F8
+            | egui::Key::F9
+            | egui::Key::F10
+            | egui::Key::F11
+            | egui::Key::F12
+            | egui::Key::F13
+            | egui::Key::F14
+            | egui::Key::F15
+            | egui::Key::F16
+            | egui::Key::F17
+            | egui::Key::F18
+            | egui::Key::F19
+            | egui::Key::F20
+            | egui::Key::F21
+            | egui::Key::F22
+            | egui::Key::F23
+            | egui::Key::F24
+    )
+}
+
+fn format_recorded_hotkey(modifiers: egui::Modifiers, key: egui::Key) -> Option<String> {
+    let key_name = egui_key_to_hotkey_name(key)?;
+    let mut parts = active_modifier_labels(modifiers);
     parts.push(key_name);
     Some(parts.join("+"))
 }
