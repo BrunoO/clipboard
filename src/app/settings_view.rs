@@ -137,12 +137,11 @@ impl ClipboardApp {
 
             self.render_hotkey_preset_selector(ui);
 
-            if crate::platform::supports_hotkey_layout_redetect() {
-                self.render_keyboard_layout_redetect_button(ui);
-            }
-
             if self.settings.hotkey == HotkeyPreset::Custom {
-                self.render_custom_hotkey_editor(ui, is_dark);
+                ui.add_space(4.0);
+                ui.indent("custom_hotkey_editor_indent", |ui| {
+                    self.render_custom_hotkey_editor(ui, is_dark);
+                });
             }
 
             self.render_hotkey_registration_status(ui, is_dark);
@@ -192,23 +191,6 @@ impl ClipboardApp {
                         ));
                     }
                 }
-            }
-        }
-    }
-
-    fn render_keyboard_layout_redetect_button(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(6.0);
-        if ui.button("Re-detect keyboard layout").clicked() {
-            if self.update_hotkeys_from_settings() {
-                self.show_toast(&format!(
-                    "{} Hotkeys re-registered for current keyboard layout",
-                    icons::CHECK
-                ));
-            } else {
-                self.show_warning_toast(&format!(
-                    "{} Could not re-register hotkeys (may be in use by OS)",
-                    icons::WARNING
-                ));
             }
         }
     }
@@ -333,10 +315,6 @@ impl ClipboardApp {
     }
 
     fn render_custom_hotkey_editor(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(6.0);
-
         if self.dialogs.manual_custom_hotkey_edit {
             self.render_manual_custom_hotkey_editor(ui, is_dark);
             return;

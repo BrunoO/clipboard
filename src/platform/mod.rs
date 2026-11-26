@@ -182,13 +182,6 @@ pub(crate) fn quote_key_is_ugrave() -> bool {
     }
 }
 
-/// Returns `true` if the current platform supports dynamic keyboard-layout re-detection
-/// for global hotkeys (Windows AZERTY/QWERTY scan-code mapping).
-#[must_use]
-pub(crate) const fn supports_hotkey_layout_redetect() -> bool {
-    cfg!(target_os = "windows")
-}
-
 /// Returns `true` when the platform requires explicit OS Accessibility permission for
 /// simulated auto-paste keystrokes and that permission has not yet been granted (macOS).
 #[must_use]
