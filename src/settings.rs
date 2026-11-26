@@ -91,12 +91,11 @@ impl HotkeyPreset {
         }
     }
 
-    /// All presets available in the selector (excludes None and Custom which are handled specially).
+    /// All presets available in the Settings selector.
     #[must_use]
     pub(crate) const fn all_presets() -> &'static [Self] {
         &[
             Self::Universal,
-            Self::AzertyQuote,
             Self::CtrlShiftC,
             Self::AltSpace,
             Self::CtrlSpace,
@@ -535,12 +534,23 @@ impl Default for AppSettings {
 impl AppSettings {
     const SETTINGS_KEY: &str = "app_config";
 
+    fn migrate_legacy_presets(&mut self) {
+        if self.hotkey == HotkeyPreset::AzertyQuote {
+            self.hotkey = HotkeyPreset::Custom;
+            self.custom_hotkey =
+                crate::platform::platform_select("Cmd+ù", "Ctrl+ù", "Ctrl+ù").to_string();
+        }
+    }
+
     /// Loads settings from the database, falling back to default if unset or corrupted.
     #[must_use]
     pub(crate) fn load(db: &Database) -> Self {
         match db.get_setting(Self::SETTINGS_KEY) {
-            Ok(Some(json)) => match serde_json::from_str(&json) {
-                Ok(settings) => settings,
+            Ok(Some(json)) => match serde_json::from_str::<Self>(&json) {
+                Ok(mut settings) => {
+                    settings.migrate_legacy_presets();
+                    settings
+                }
                 Err(e) => {
                     crate::logging::log_message(
                         "WARN",
@@ -832,5 +842,25 @@ mod tests {
         let parsed_tray_only: AppSettings =
             serde_json::from_str(tray_only_json).expect("Tray-only JSON should deserialize");
         assert!(!parsed_tray_only.minimize_to_taskbar);
+    }
+
+    #[test]
+    fn test_azerty_quote_removed_from_presets_and_migrates_to_custom() {
+        assert!(!HotkeyPreset::all_presets().contains(&HotkeyPreset::AzertyQuote));
+
+        let legacy_json = r#"{
+            "hotkey": "AzertyQuote",
+            "hide_on_copy": true,
+            "max_history": 100
+        }"#;
+        let mut settings: AppSettings =
+            serde_json::from_str(legacy_json).expect("Legacy AzertyQuote JSON should deserialize");
+        settings.migrate_legacy_presets();
+        assert_eq!(settings.hotkey, HotkeyPreset::Custom);
+        assert_eq!(
+            settings.custom_hotkey,
+            crate::platform::platform_select("Cmd+ù", "Ctrl+ù", "Ctrl+ù")
+        );
+        assert_eq!(settings.effective_hotkeys().len(), 1);
     }
 }
