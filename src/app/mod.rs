@@ -36,6 +36,11 @@ impl ImageTextureCache {
         Self::default()
     }
 
+    #[must_use]
+    pub(crate) fn is_cached(&self, id: i64) -> bool {
+        self.textures.contains_key(&id) || self.failed_ids.contains(&id)
+    }
+
     pub(crate) fn get_or_load(
         &mut self,
         id: i64,
@@ -174,11 +179,13 @@ struct Toast {
 }
 
 /// Tracks window visibility, focus tracking, and interaction timestamps.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 pub(crate) struct WindowFocusState {
     pub(crate) is_visible: bool,
     pub(crate) has_been_focused: bool,
     pub(crate) was_inactive_since_hidden: bool,
+    pub(crate) pending_order_front: bool,
     pub(crate) last_toggle_instant: Option<Instant>,
     pub(crate) last_drag_or_move_instant: Option<Instant>,
     pub(crate) last_outer_rect: Option<egui::Rect>,
@@ -192,6 +199,7 @@ impl Default for WindowFocusState {
             is_visible: true,
             has_been_focused: false,
             was_inactive_since_hidden: false,
+            pending_order_front: false,
             last_toggle_instant: None,
             last_drag_or_move_instant: None,
             last_outer_rect: None,
@@ -637,6 +645,7 @@ impl ClipboardApp {
     }
 
     fn show_window(&mut self, ctx: &egui::Context) {
+        #[cfg(debug_assertions)]
         crate::logging::log_message("INFO", "show_window called");
         self.window_state.is_visible = true;
         self.window_state.has_been_focused = false;
@@ -645,13 +654,21 @@ impl ClipboardApp {
         self.selected_index = 0;
         self.dialogs.show_clear_confirm_dialog = false;
         self.scroll_to_selected = true;
-        // Restore at the OS level first (important on Windows, where a minimized
-        // window may otherwise stay minimized even after Visible(true)).
-        crate::platform::order_front_main_window();
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        self.refresh_items();
+        if crate::platform::defer_order_front_until_painted() {
+            // Let `App::ui()` paint and present one fresh frame into the hidden Metal surface
+            // before unhiding the app on the next `logic()` pass (eliminates blank-frame flicker).
+            self.window_state.pending_order_front = true;
+        } else {
+            // Restore at the OS level first (important on Windows, where a minimized
+            // window may otherwise stay minimized even after Visible(true)).
+            crate::platform::order_front_main_window();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        // Only refresh from SQLite if the background monitor or search query actually changed
+        // since the last pass, avoiding a redundant full DB query + re-classification on summon.
+        self.handle_monitor_updates();
         if let Some((msg, severity)) = self.pending_toast.take() {
             self.show_toast_severity(&msg, severity);
         }
@@ -663,6 +680,7 @@ impl ClipboardApp {
         self.window_state.is_visible = false;
         self.window_state.has_been_focused = false;
         self.window_state.was_inactive_since_hidden = false;
+        self.window_state.pending_order_front = false;
         self.window_state.last_hide_instant = Some(Instant::now());
         self.dialogs.show_clear_confirm_dialog = false;
         self.revealed_secrets.clear();
@@ -672,6 +690,7 @@ impl ClipboardApp {
             .tray_service
             .as_ref()
             .is_some_and(TrayService::is_live);
+        #[cfg(debug_assertions)]
         crate::logging::log_message(
             "INFO",
             &format!(
@@ -1291,17 +1310,20 @@ impl ClipboardApp {
         let is_active = active_state.unwrap_or(false);
         let reopen_requested = crate::platform::take_reopen_requested();
 
-        // If an OS reopen was requested (e.g. macOS Dock click, Windows second-instance launch),
-        // ALWAYS summon and bring to front whether currently visible or hidden!
-        if reopen_requested {
-            self.show_window(ctx);
-            return;
-        }
-
         let in_show_grace_period = self
             .window_state
             .last_show_instant
             .is_some_and(|t| t.elapsed() < Duration::from_millis(500));
+
+        // If an OS reopen was requested (e.g. macOS Dock click, Windows second-instance launch),
+        // summon and bring to front—unless `show_window()` already ran moments ago (which itself
+        // triggers macOS activation/unhide notifications).
+        if reopen_requested {
+            if !(self.window_state.is_visible && in_show_grace_period) {
+                self.show_window(ctx);
+            }
+            return;
+        }
 
         if self.window_state.is_visible {
             if is_focused {
@@ -2393,10 +2415,21 @@ impl eframe::App for ClipboardApp {
             crate::logging::log_message("INFO", "First ClipboardApp::logic() pass started");
         }
 
+        if self.window_state.pending_order_front {
+            self.window_state.pending_order_front = false;
+            if self.window_state.is_visible {
+                self.window_state.last_show_instant = Some(Instant::now());
+                crate::platform::order_front_main_window();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        }
+
         self.handle_tray_events(ctx);
         self.handle_window_close_request(ctx);
+        #[cfg(debug_assertions)]
         let before_hotkey_visible = self.window_state.is_visible;
         self.handle_hotkey_toggle(ctx);
+        #[cfg(debug_assertions)]
         if self.window_state.is_visible != before_hotkey_visible {
             crate::logging::log_message(
                 "INFO",

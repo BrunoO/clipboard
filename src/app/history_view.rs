@@ -34,6 +34,7 @@ struct ItemRenderState {
     is_revealed: bool,
     is_dark: bool,
     is_pulse: bool,
+    now: jiff::civil::DateTime,
 }
 
 impl ClipboardApp {
@@ -195,6 +196,9 @@ impl ClipboardApp {
     ) {
         let should_scroll_selected = self.scroll_to_selected;
         self.scroll_to_selected = false;
+        let now = jiff::ZonedDateTime::now().datetime();
+        // Cap fresh PNG decodes per frame so summoning a history with many images stays snappy.
+        let mut image_decode_budget: usize = 2;
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -217,6 +221,7 @@ impl ClipboardApp {
                             item,
                             &self.db,
                             &mut self.texture_cache,
+                            &mut image_decode_budget,
                             ctx,
                             ItemRenderState {
                                 is_selected,
@@ -225,6 +230,7 @@ impl ClipboardApp {
                                 is_revealed,
                                 is_dark,
                                 is_pulse,
+                                now,
                             },
                         );
 
@@ -365,6 +371,7 @@ impl ClipboardApp {
         item: &ClipboardItem,
         db: &Database,
         texture_cache: &mut ImageTextureCache,
+        image_decode_budget: &mut usize,
         ctx: &egui::Context,
         state: ItemRenderState,
     ) -> (ItemAction, bool) {
@@ -389,6 +396,7 @@ impl ClipboardApp {
                     state.is_selected,
                     state.is_revealed,
                     state.is_dark,
+                    state.now,
                 );
                 if !matches!(header_action, ItemAction::None) {
                     action = header_action;
@@ -407,9 +415,15 @@ impl ClipboardApp {
                         state.is_revealed,
                         state.is_dark,
                     ),
-                    ItemKind::Image => {
-                        Self::render_image_content(ui, item, db, texture_cache, ctx, state.is_dark)
-                    }
+                    ItemKind::Image => Self::render_image_content(
+                        ui,
+                        item,
+                        db,
+                        texture_cache,
+                        image_decode_budget,
+                        ctx,
+                        state.is_dark,
+                    ),
                 };
 
                 if !matches!(content_action, ItemAction::None) {
@@ -488,7 +502,13 @@ impl ClipboardApp {
         (action, clicked)
     }
 
-    fn render_badge_meta(ui: &mut egui::Ui, meta: Option<&str>, created_at: &str, is_dark: bool) {
+    fn render_badge_meta(
+        ui: &mut egui::Ui,
+        meta: Option<&str>,
+        created_at: &str,
+        is_dark: bool,
+        now: jiff::civil::DateTime,
+    ) {
         if let Some(meta_text) = meta.filter(|s| !s.is_empty()) {
             if ui.available_width() > 0.0 {
                 ui.add(
@@ -502,7 +522,7 @@ impl ClipboardApp {
             }
         }
 
-        let relative = format_relative_time(created_at);
+        let relative = format_relative_time_from(created_at, now);
         let ts_text = egui::RichText::new(format!("• {relative}"))
             .size(10.0_f32)
             .color(crate::theme::text_secondary(is_dark));
@@ -518,7 +538,12 @@ impl ClipboardApp {
         }
     }
 
-    fn render_text_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
+    fn render_text_badge(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_dark: bool,
+        now: jiff::civil::DateTime,
+    ) {
         let embedded = item.embedded_colors();
         let color_hint = match embedded.len() {
             0 => None,
@@ -527,18 +552,28 @@ impl ClipboardApp {
         };
         let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Text);
         crate::theme::render_pill_tag(ui, icons::FILE_TEXT, "Text", text_c, bg_c, stroke_c);
-        Self::render_badge_meta(ui, color_hint.as_deref(), &item.created_at, is_dark);
+        Self::render_badge_meta(ui, color_hint.as_deref(), &item.created_at, is_dark, now);
     }
 
-    fn render_url_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
+    fn render_url_badge(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_dark: bool,
+        now: jiff::civil::DateTime,
+    ) {
         let host = item.url_host().unwrap_or_else(|| "link".to_string());
         let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Url);
         crate::theme::render_pill_tag(ui, icons::LINK, "Link", text_c, bg_c, stroke_c);
         let meta = format!("• {host}");
-        Self::render_badge_meta(ui, Some(&meta), &item.created_at, is_dark);
+        Self::render_badge_meta(ui, Some(&meta), &item.created_at, is_dark, now);
     }
 
-    fn render_code_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
+    fn render_code_badge(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_dark: bool,
+        now: jiff::civil::DateTime,
+    ) {
         let (icon, lang_name) = item
             .code_language()
             .map_or((icons::CODE, "Code"), |l| (l.icon(), l.name()));
@@ -552,44 +587,64 @@ impl ClipboardApp {
         let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Code);
         crate::theme::render_pill_tag(ui, icon, lang_name, text_c, bg_c, stroke_c);
         let meta = format!("• {line_count} lines{color_hint}");
-        Self::render_badge_meta(ui, Some(&meta), &item.created_at, is_dark);
+        Self::render_badge_meta(ui, Some(&meta), &item.created_at, is_dark, now);
     }
 
-    fn render_color_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
+    fn render_color_badge(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_dark: bool,
+        now: jiff::civil::DateTime,
+    ) {
         let hex = item
             .parsed_color()
             .map_or_else(|| item.content.clone(), crate::color::ParsedColor::to_hex);
         let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Color);
         crate::theme::render_pill_tag(ui, icons::PALETTE, "Color", text_c, bg_c, stroke_c);
         let meta = format!("• {hex}");
-        Self::render_badge_meta(ui, Some(&meta), &item.created_at, is_dark);
+        Self::render_badge_meta(ui, Some(&meta), &item.created_at, is_dark, now);
     }
 
-    fn render_secret_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
+    fn render_secret_badge(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_dark: bool,
+        now: jiff::civil::DateTime,
+    ) {
         let (text_c, bg_c, stroke_c) =
             crate::theme::category_pill_colors(is_dark, ItemKind::Secret);
         crate::theme::render_pill_tag(ui, icons::LOCK, "Secret", text_c, bg_c, stroke_c);
-        Self::render_badge_meta(ui, None, &item.created_at, is_dark);
+        Self::render_badge_meta(ui, None, &item.created_at, is_dark, now);
     }
 
-    fn render_image_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
+    fn render_image_badge(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_dark: bool,
+        now: jiff::civil::DateTime,
+    ) {
         let dims = match (item.width, item.height) {
             (Some(w), Some(h)) => format!("Image ({w}x{h})"),
             _ => "Image".to_string(),
         };
         let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Image);
         crate::theme::render_pill_tag(ui, icons::IMAGE, &dims, text_c, bg_c, stroke_c);
-        Self::render_badge_meta(ui, None, &item.created_at, is_dark);
+        Self::render_badge_meta(ui, None, &item.created_at, is_dark, now);
     }
 
-    fn render_item_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
+    fn render_item_badge(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_dark: bool,
+        now: jiff::civil::DateTime,
+    ) {
         match item.kind {
-            ItemKind::Text => Self::render_text_badge(ui, item, is_dark),
-            ItemKind::Url => Self::render_url_badge(ui, item, is_dark),
-            ItemKind::Code => Self::render_code_badge(ui, item, is_dark),
-            ItemKind::Color => Self::render_color_badge(ui, item, is_dark),
-            ItemKind::Secret => Self::render_secret_badge(ui, item, is_dark),
-            ItemKind::Image => Self::render_image_badge(ui, item, is_dark),
+            ItemKind::Text => Self::render_text_badge(ui, item, is_dark, now),
+            ItemKind::Url => Self::render_url_badge(ui, item, is_dark, now),
+            ItemKind::Code => Self::render_code_badge(ui, item, is_dark, now),
+            ItemKind::Color => Self::render_color_badge(ui, item, is_dark, now),
+            ItemKind::Secret => Self::render_secret_badge(ui, item, is_dark, now),
+            ItemKind::Image => Self::render_image_badge(ui, item, is_dark, now),
         }
     }
 
@@ -600,6 +655,7 @@ impl ClipboardApp {
         is_selected: bool,
         is_revealed: bool,
         is_dark: bool,
+        now: jiff::civil::DateTime,
     ) -> ItemAction {
         let mut action = ItemAction::None;
 
@@ -637,7 +693,7 @@ impl ClipboardApp {
                         ui.add_space(4.0);
                     }
 
-                    Self::render_item_badge(ui, item, is_dark);
+                    Self::render_item_badge(ui, item, is_dark, now);
                 });
             });
         });
@@ -1289,8 +1345,22 @@ impl ClipboardApp {
                     preview
                 };
 
-                let job = crate::code::highlight_code(ui.ctx(), ui.style(), &display_text, lang);
-                let label = ui.add(egui::Label::new(job).sense(egui::Sense::click()));
+                // Skip syntax highlighting for offscreen code cards so summoning a large history
+                // stays fast; plain monospace preserves identical line height for scrolling.
+                let approx_rect = egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(ui.available_width().max(1.0), 140.0),
+                );
+                let label = if ui.is_rect_visible(approx_rect) {
+                    let job =
+                        crate::code::highlight_code(ui.ctx(), ui.style(), &display_text, lang);
+                    ui.add(egui::Label::new(job).sense(egui::Sense::click()))
+                } else {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&display_text).monospace().size(11.5))
+                            .sense(egui::Sense::click()),
+                    )
+                };
 
                 if label.clicked() {
                     action = ItemAction::CopyText(item.content.clone());
@@ -1826,14 +1896,62 @@ impl ClipboardApp {
         }
     }
 
+    fn image_preview_size(width: Option<u32>, height: Option<u32>) -> egui::Vec2 {
+        const MAX_W: f32 = 340.0;
+        const MAX_H: f32 = 160.0;
+        match (width, height) {
+            (Some(w), Some(h)) if w > 0 && h > 0 => {
+                #[allow(clippy::cast_precision_loss)]
+                let (w, h) = (w as f32, h as f32);
+                let scale = (MAX_W / w).min(MAX_H / h).min(1.0);
+                egui::vec2(w * scale, h * scale)
+            }
+            _ => egui::vec2(MAX_W, 120.0),
+        }
+    }
+
     fn render_image_content(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
         db: &Database,
         texture_cache: &mut ImageTextureCache,
+        image_decode_budget: &mut usize,
         ctx: &egui::Context,
         is_dark: bool,
     ) -> ItemAction {
+        let preview_size = Self::image_preview_size(item.width, item.height);
+        let preview_rect = egui::Rect::from_min_size(ui.cursor().min, preview_size);
+        let is_visible = ui.is_rect_visible(preview_rect);
+
+        if !texture_cache.is_cached(item.id) {
+            if !is_visible {
+                // Offscreen image: reserve exact layout space without fetching or decoding PNG.
+                ui.allocate_exact_size(preview_size, egui::Sense::hover());
+                if let (Some(w), Some(h)) = (item.width, item.height) {
+                    ui.label(
+                        egui::RichText::new(format!("{w} × {h} px"))
+                            .size(10.0)
+                            .color(crate::theme::text_secondary(is_dark)),
+                    );
+                }
+                return ItemAction::None;
+            }
+            if *image_decode_budget == 0 {
+                // Defer remaining visible image decodes to the next frame for instant first paint.
+                ui.allocate_exact_size(preview_size, egui::Sense::hover());
+                if let (Some(w), Some(h)) = (item.width, item.height) {
+                    ui.label(
+                        egui::RichText::new(format!("{w} × {h} px"))
+                            .size(10.0)
+                            .color(crate::theme::text_secondary(is_dark)),
+                    );
+                }
+                ctx.request_repaint();
+                return ItemAction::None;
+            }
+            *image_decode_budget -= 1;
+        }
+
         let texture = texture_cache.get_or_load(item.id, db, ctx);
 
         if let Some(texture) = texture {
@@ -1888,6 +2006,7 @@ fn sanitize_browser_url(raw: &str) -> Option<String> {
 /// Formats a stored local timestamp (`%Y-%m-%d %H:%M:%S`) as a human-readable relative string
 /// (e.g. `"just now"`, `"2 minutes ago"`, `"3 hours ago"`), falling back to the raw string if
 /// parsing fails.
+#[cfg(test)]
 fn format_relative_time(created_at: &str) -> String {
     format_relative_time_from(created_at, jiff::ZonedDateTime::now().datetime())
 }
@@ -2043,6 +2162,7 @@ mod tests {
                         is_selected,
                         false,
                         true,
+                        jiff::ZonedDateTime::now().datetime(),
                     );
                 });
             });

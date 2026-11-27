@@ -642,7 +642,10 @@ pub(crate) fn hide_application() {
 /// Applies the platform-specific window dismissal policy when hiding the UI:
 /// - On Windows, minimizes to taskbar if `minimize_to_taskbar` is enabled or if no live tray icon exists;
 ///   otherwise hides the viewport (`Visible(false)`) cleanly to the system tray.
-/// - On macOS and Linux, hides the viewport and invokes OS-level application hiding.
+/// - On macOS, invokes OS-level application hiding (`NSApp.hide`) while keeping the winit viewport
+///   marked visible so `eframe` avoids the 100ms invisible-window repaint throttle and can render
+///   a fresh Metal frame before unhiding.
+/// - On Linux, hides the viewport (`Visible(false)`) and invokes OS-level application hiding.
 pub(crate) fn hide_window_viewport(
     ctx: &eframe::egui::Context,
     has_live_tray: bool,
@@ -662,12 +665,25 @@ pub(crate) fn hide_window_viewport(
             ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(false));
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (ctx, has_live_tray, minimize_to_taskbar);
+        hide_application();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = (has_live_tray, minimize_to_taskbar);
         ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(false));
         hide_application();
     }
+}
+
+/// Whether `show_window` should let `App::ui()` paint and present one fresh frame before
+/// ordering the OS window front (macOS hides via `NSApp.hide`, so painting first eliminates
+/// the blank-frame flash when unhiding).
+#[must_use]
+pub(crate) const fn defer_order_front_until_painted() -> bool {
+    cfg!(target_os = "macos")
 }
 
 /// Checks whether the captured auto-paste target blocks simulated keystrokes (e.g. due to
