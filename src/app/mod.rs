@@ -327,10 +327,17 @@ impl ClipboardApp {
         services: AppServices,
         settings: AppSettings,
         data_dir: std::path::PathBuf,
+        startup_error: Option<String>,
     ) -> Self {
         db.apply_settings(&settings);
 
-        let mut startup_toast = if services.hotkey_service.is_none()
+        let mut startup_toast = if let Some(message) = startup_error {
+            Some(Toast {
+                message: format!("{} {message}", icons::WARNING),
+                severity: ToastSeverity::Error,
+                shown_at: Instant::now(),
+            })
+        } else if services.hotkey_service.is_none()
             && settings.hotkey != crate::settings::HotkeyPreset::None
         {
             Some(Toast {

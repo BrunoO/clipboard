@@ -78,7 +78,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // 2. Open or initialize the SQLCipher encrypted database (key is zeroized on scope exit)
-    let (db, key_storage_mode) = open_encrypted_database(&data_dir)?;
+    let (db, key_storage_mode, startup_restore_error) = open_encrypted_database(&data_dir)?;
     #[cfg(debug_assertions)]
     println!("🛡️  Database opened & verified with SQLCipher.");
 
@@ -164,6 +164,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 services,
                 settings,
                 data_dir,
+                startup_restore_error,
             )))
         }),
     );
@@ -299,11 +300,16 @@ fn pending_restore_paths(data_dir: &std::path::Path) -> (std::path::PathBuf, std
     )
 }
 
+/// Applies a staged encrypted backup restore if present.
+///
+/// Returns `Ok(None)` when no restore was pending or the restore succeeded, and
+/// `Ok(Some(notice))` when an invalid/missing staged restore was safely discarded
+/// so startup can continue with the existing database while surfacing `notice` in the UI.
 fn apply_pending_restore_if_any(
     data_dir: &std::path::Path,
     db_path: &std::path::Path,
     encryption_key: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let (staged_db, marker) = pending_restore_paths(data_dir);
     if !marker.exists() {
         if staged_db.exists() {
@@ -313,15 +319,17 @@ fn apply_pending_restore_if_any(
                 "Removed staged restore file without marker; restore was not applied.",
             );
         }
-        return Ok(());
+        return Ok(None);
     }
     if !staged_db.exists() {
         let _ = fs::remove_file(&marker);
-        return Err("Pending restore marker found, but staged backup file is missing.".into());
+        let msg = "Staged backup file was missing; restore was cancelled and your existing history was kept.";
+        logging::log_message("ERROR", msg);
+        return Ok(Some(msg.to_string()));
     }
 
     // Validate staged DB can be opened with the current key and has expected schema.
-    // On failure, clear the pending marker & staged file so the next launch is not locked out.
+    // On failure, clear the pending marker & staged file and continue startup with a UI notice.
     if let Err(err) = Database::validate_backup_file(&staged_db, encryption_key) {
         let _ = fs::remove_file(&marker);
         let _ = fs::remove_file(&staged_db);
@@ -329,13 +337,17 @@ fn apply_pending_restore_if_any(
             "ERROR",
             &format!("Staged backup validation failed and was discarded: {err}"),
         );
-        return Err(err.into());
+        return Ok(Some(format!(
+            "Backup restore failed and was discarded ({err}). Your existing history was kept."
+        )));
     }
 
     if crate::platform::fs_security::set_restricted_permissions(&staged_db) {
         let _ = fs::remove_file(&marker);
         let _ = fs::remove_file(&staged_db);
-        return Err("Failed to restrict permissions on staged backup; restore aborted.".into());
+        let msg = "Failed to restrict permissions on staged backup; restore was cancelled and your existing history was kept.";
+        logging::log_message("ERROR", msg);
+        return Ok(Some(msg.to_string()));
     }
 
     if db_path.exists() {
@@ -359,20 +371,20 @@ fn apply_pending_restore_if_any(
     crate::platform::fs_security::replace_file_atomically(&staged_db, db_path)?;
     let _ = fs::remove_file(&marker);
     logging::log_message("INFO", "Pending backup restore applied successfully");
-    Ok(())
+    Ok(None)
 }
 
 /// Opens or initializes the `SQLCipher` database, ensuring the in-memory encryption key
 /// is zeroized and dropped before returning.
 fn open_encrypted_database(
     data_dir: &std::path::Path,
-) -> Result<(Database, crypto::KeyStorageMode), Box<dyn std::error::Error>> {
+) -> Result<(Database, crypto::KeyStorageMode, Option<String>), Box<dyn std::error::Error>> {
     let db_path = data_dir.join("clipboard_history.db");
     let db_exists = db_path.exists();
     let (encryption_key, storage_mode) = crypto::get_or_create_encryption_key(data_dir, db_exists)?;
-    apply_pending_restore_if_any(data_dir, &db_path, &encryption_key)?;
+    let restore_error = apply_pending_restore_if_any(data_dir, &db_path, &encryption_key)?;
     let db = Database::open(&db_path, &encryption_key)?;
-    Ok((db, storage_mode))
+    Ok((db, storage_mode, restore_error))
 }
 
 /// Computes the OS-appropriate local application data directory.
@@ -491,12 +503,16 @@ mod tests {
 
         // Orphan staged DB without marker is cleaned up silently.
         fs::write(&staged_db, b"orphan").unwrap();
-        apply_pending_restore_if_any(dir.path(), &db_path, &key).unwrap();
+        assert!(apply_pending_restore_if_any(dir.path(), &db_path, &key)
+            .unwrap()
+            .is_none());
         assert!(!staged_db.exists());
 
-        // Marker without staged DB removes marker and returns an error.
+        // Marker without staged DB removes marker and returns a UI notice without aborting startup.
         fs::write(&marker, b"pending").unwrap();
-        assert!(apply_pending_restore_if_any(dir.path(), &db_path, &key).is_err());
+        assert!(apply_pending_restore_if_any(dir.path(), &db_path, &key)
+            .unwrap()
+            .is_some());
         assert!(!marker.exists());
     }
 
@@ -515,15 +531,21 @@ mod tests {
         fs::write(&staged_db, b"not a valid sqlcipher db").unwrap();
         fs::write(&marker, b"pending").unwrap();
 
-        assert!(apply_pending_restore_if_any(dir.path(), &db_path, &key).is_err());
+        let notice = apply_pending_restore_if_any(dir.path(), &db_path, &key).unwrap();
+        assert!(
+            notice.is_some(),
+            "invalid staged backup must return a startup UI notice"
+        );
         assert!(
             !marker.exists(),
             "marker must be cleared to avoid startup lockout"
         );
         assert!(!staged_db.exists(), "invalid staged DB must be discarded");
 
-        // Subsequent launch succeeds and existing DB is completely intact.
-        apply_pending_restore_if_any(dir.path(), &db_path, &key).unwrap();
+        // Current and subsequent launches succeed and existing DB is completely intact.
+        assert!(apply_pending_restore_if_any(dir.path(), &db_path, &key)
+            .unwrap()
+            .is_none());
         let reopened = Database::open(&db_path, &key).unwrap();
         let items = reopened.get_recent(10, None).unwrap();
         assert_eq!(items.len(), 1);
