@@ -2,6 +2,9 @@
 
 A fast, encrypted cross-platform clipboard manager written in Rust.
 
+> [!NOTE]
+> **Platform testing status:** Currently, only the **macOS** and **Windows** builds have been reasonably tested in real-world use. The **Linux** build compiles and passes CI checks, but has not yet been tested on a live Linux desktop.
+
 CipherClipboard runs quietly in the background, instantly captures copied text and images, and stores everything in an AES-256 encrypted database secured primarily by your operating system's native keyring (with a restricted local-key fallback when the keyring is unavailable).
 
 ### Key Features
