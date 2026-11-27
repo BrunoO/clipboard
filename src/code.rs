@@ -64,6 +64,23 @@ impl CodeLanguage {
             Self::Yaml => "yaml",
         }
     }
+
+    #[must_use]
+    pub(crate) const fn markdown_fence_tag(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Cpp => "cpp",
+            Self::Python => "python",
+            Self::JavaScript => "javascript",
+            Self::TypeScript => "typescript",
+            Self::Json => "json",
+            Self::Html => "html",
+            Self::Sql => "sql",
+            Self::Shell => "bash",
+            Self::Toml => "toml",
+            Self::Yaml => "yaml",
+        }
+    }
 }
 
 /// Detects if the given text represents a recognized code snippet or structured data format.

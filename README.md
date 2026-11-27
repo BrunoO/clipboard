@@ -15,8 +15,23 @@ CipherClipboard runs quietly in the background, instantly captures copied text a
 * **Transient & Password Manager Protection:** Automatically respects conceal flags from password managers (1Password, Bitwarden, KeePass, Apple Keychain).
 * **Cross-Platform Immediate-Mode GUI:** Responsive interface built with [`egui`](https://github.com/emilk/egui) / [`eframe`](https://github.com/emilk/egui) with Direct3D 12 / WGPU acceleration on Windows and high WCAG contrast themes (Dark, Light, System).
 * **Developer Utilities:** In-line syntax highlighting for 11 languages, interactive CSS/Hex/RGB/HSL color palette extraction, and built-in cryptographically secure password & passphrase generator.
+* **Text Transformations & AI Prompt Prep:** One-click card menu transformations (with live hover previews) for cleanup, case/line operations, JSON/Base64/URL tools, and **AI & Prompt** presets that sanitize and format code, logs, or spreadsheets before pasting into Microsoft 365 Copilot or AI coding agents.
 * **Global Hotkey & Fast Recall:** Configurable global summon shortcut (`Ctrl+Shift+V` / `Cmd+Shift+V`) with single-instance window restoration and optional auto-paste.
 * **Lossless PNG Image Storage:** Efficient PNG encoding for clipboard images via [`image`](https://crates.io/crates/image).
+
+---
+
+## Text Transformations & AI Prompt Prep
+
+Open the `⋯` menu on any text clipboard card to copy a transformed version without modifying the stored original. Hovering over any transformation shows a description and a live preview of the output (hidden for masked secrets).
+
+* **AI & Prompt** *(designed for Copilot 365 & AI coding agents)*:
+  * **Prepare Code for AI:** Dedents common indentation, replaces local home paths (`/Users/<name>`, `/home/<name>`, `C:\Users\<name>`) with `<HOME>`, redacts PEM keys, tokens, URL credentials, and sensitive assignments, and wraps the snippet in an auto-tagged Markdown code fence.
+  * **Prepare Log for AI:** Strips ANSI escape codes, replaces local home paths, redacts secrets and non-loopback IPv4 addresses, collapses repeated consecutive lines (`... (repeated Nx)`), and wraps the result in `<log>...</log>`.
+  * **Prepare Table for AI:** Converts copied TSV (Excel/Sheets/SQL), CSV, or semicolon-separated rows into a clean Markdown pipe table.
+* **Cleanup:** Strip formatting (HTML, Markdown, ANSI, zero-width chars), unwrap hard line breaks, collapse whitespace.
+* **Case & Lines:** `UPPERCASE`, `lowercase`, `Title Case`, `camelCase`, `snake_case`, `kebab-case`, sort, deduplicate, remove empty lines, join with commas.
+* **Developer & URL:** Prettify/minify JSON, Base64 encode/decode, strip URL tracking parameters (`utm_*`, `fbclid`, `gclid`, etc.).
 
 ---
 
@@ -75,6 +90,7 @@ cipherclipboard/
 │   ├── logging.rs        # In-memory diagnostics ring-buffer & file logging
 │   ├── tray.rs           # Windows system tray icon & context menu lifecycle
 │   ├── secret.rs         # Heuristic detection & masking for credentials and API keys
+│   ├── transform.rs      # Deterministic text transformations & AI prompt preparation presets
 │   ├── code.rs           # Multi-language syntax detection & highlighting sections
 │   ├── color.rs          # Hex/RGB/HSL color parsing & swatch previews
 │   ├── password.rs       # Cryptographically secure password and passphrase generator

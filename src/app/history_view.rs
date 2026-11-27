@@ -933,7 +933,7 @@ impl ClipboardApp {
             action = image_action;
         }
 
-        let transform_action = Self::render_transform_menu_text_sections(ui, item);
+        let transform_action = Self::render_transform_menu_text_sections(ui, item, is_revealed);
         if !matches!(transform_action, ItemAction::None) {
             action = transform_action;
         }
@@ -970,7 +970,11 @@ impl ClipboardApp {
         action
     }
 
-    fn render_transform_menu_text_sections(ui: &mut egui::Ui, item: &ClipboardItem) -> ItemAction {
+    fn render_transform_menu_text_sections(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        is_revealed: bool,
+    ) -> ItemAction {
         if item.kind == ItemKind::Image {
             return ItemAction::None;
         }
@@ -983,6 +987,7 @@ impl ClipboardApp {
             .collect();
 
         let categories = [
+            crate::transform::TransformCategory::AiPrompt,
             crate::transform::TransformCategory::Cleanup,
             crate::transform::TransformCategory::Case,
             crate::transform::TransformCategory::Lines,
@@ -991,7 +996,8 @@ impl ClipboardApp {
         ];
 
         for cat in categories {
-            let cat_action = Self::render_transform_menu_category(ui, item, &applicable, cat);
+            let cat_action =
+                Self::render_transform_menu_category(ui, item, &applicable, cat, is_revealed);
             if !matches!(cat_action, ItemAction::None) {
                 action = cat_action;
             }
@@ -1006,6 +1012,7 @@ impl ClipboardApp {
         item: &ClipboardItem,
         applicable: &[crate::transform::TextTransform],
         cat: crate::transform::TransformCategory,
+        is_revealed: bool,
     ) -> ItemAction {
         let cat_transforms: Vec<crate::transform::TextTransform> = applicable
             .iter()
@@ -1018,14 +1025,15 @@ impl ClipboardApp {
         }
 
         let mut action = ItemAction::None;
-        ui.menu_button(cat.label(), |ui| {
+        let menu_resp = ui.menu_button(cat.label(), |ui| {
             for t in cat_transforms {
-                let transform_action = Self::render_transform_menu_item(ui, item, t);
+                let transform_action = Self::render_transform_menu_item(ui, item, t, is_revealed);
                 if !matches!(transform_action, ItemAction::None) {
                     action = transform_action;
                 }
             }
         });
+        menu_resp.response.on_hover_text(cat.tooltip());
         action
     }
 
@@ -1033,16 +1041,60 @@ impl ClipboardApp {
         ui: &mut egui::Ui,
         item: &ClipboardItem,
         t: crate::transform::TextTransform,
+        is_revealed: bool,
     ) -> ItemAction {
-        if !ui.button(t.label()).on_hover_text(t.tooltip()).clicked() {
+        const MAX_HOVER_PREVIEW_BYTES: usize = 32_768;
+
+        let resp = ui.button(t.label());
+        let clicked = resp.clicked();
+
+        resp.on_hover_ui(|ui| {
+            ui.set_max_width(360.0);
+            ui.label(t.tooltip());
+
+            if item.kind == ItemKind::Secret && !is_revealed {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Preview hidden while secret is masked.")
+                        .small()
+                        .weak()
+                        .italics(),
+                );
+                return;
+            }
+
+            if item.content.len() > MAX_HOVER_PREVIEW_BYTES {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Preview omitted for large clipboard entries.")
+                        .small()
+                        .weak()
+                        .italics(),
+                );
+                return;
+            }
+
+            if let Ok(output) = t.apply_with_summary(&item.content) {
+                if let Some(summary) = output.summary {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(summary).small().strong());
+                }
+                ui.add_space(4.0);
+                ui.separator();
+                let preview = crate::transform::format_preview_snippet(&output.text, 6, 72);
+                ui.label(egui::RichText::new(preview).monospace().small());
+            }
+        });
+
+        if !clicked {
             return ItemAction::None;
         }
 
         ui.close();
-        match t.apply(&item.content) {
-            Ok(res) => ItemAction::CopyTransformed {
-                content: res,
-                toast: t.toast_success(),
+        match t.apply_with_summary(&item.content) {
+            Ok(output) => ItemAction::CopyTransformed {
+                toast: t.toast_for_output(output.summary.as_deref()),
+                content: output.text,
                 is_secret: item.kind == ItemKind::Secret,
             },
             Err(e) => ItemAction::ShowWarning(format!("Transformation failed: {e}")),

@@ -123,7 +123,7 @@ fn has_url_credentials(text: &str) -> bool {
     !password.is_empty()
 }
 
-fn is_known_token_format(token: &str) -> bool {
+pub(crate) fn is_known_token_format(token: &str) -> bool {
     if token.len() < 16 {
         return false;
     }
@@ -213,25 +213,7 @@ fn is_secret_env_assignment(text: &str) -> bool {
             continue;
         }
 
-        let is_sensitive_key = [
-            "PASSWORD",
-            "PASSWD",
-            "SECRET",
-            "API_KEY",
-            "APIKEY",
-            "ACCESS_KEY",
-            "SECRET_KEY",
-            "PRIVATE_KEY",
-            "AUTH_TOKEN",
-            "ACCESS_TOKEN",
-            "REFRESH_TOKEN",
-            "CLIENT_SECRET",
-            "TOKEN",
-        ]
-        .iter()
-        .any(|suffix| key_upper == *suffix || key_upper.ends_with(&format!("_{suffix}")));
-
-        if !is_sensitive_key {
+        if !is_sensitive_key_name(&key_upper) {
             continue;
         }
 
@@ -247,7 +229,28 @@ fn is_secret_env_assignment(text: &str) -> bool {
     false
 }
 
-fn is_placeholder_value(val: &str) -> bool {
+pub(crate) fn is_sensitive_key_name(key_upper: &str) -> bool {
+    const SENSITIVE_SUFFIXES: &[&str] = &[
+        "PASSWORD",
+        "PASSWD",
+        "SECRET",
+        "API_KEY",
+        "APIKEY",
+        "ACCESS_KEY",
+        "SECRET_KEY",
+        "PRIVATE_KEY",
+        "AUTH_TOKEN",
+        "ACCESS_TOKEN",
+        "REFRESH_TOKEN",
+        "CLIENT_SECRET",
+        "TOKEN",
+    ];
+    SENSITIVE_SUFFIXES
+        .iter()
+        .any(|suffix| key_upper == *suffix || key_upper.ends_with(&format!("_{suffix}")))
+}
+
+pub(crate) fn is_placeholder_value(val: &str) -> bool {
     let lower = val.to_ascii_lowercase();
     matches!(
         lower.as_str(),

@@ -13,6 +13,7 @@ use crate::icons;
 /// Categories for organizing transformations in menus and palettes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransformCategory {
+    AiPrompt,
     Cleanup,
     Case,
     Lines,
@@ -24,6 +25,7 @@ impl TransformCategory {
     #[must_use]
     pub(crate) const fn label(self) -> &'static str {
         match self {
+            Self::AiPrompt => "AI & Prompt",
             Self::Cleanup => "Cleanup",
             Self::Case => "Case",
             Self::Lines => "Lines",
@@ -31,6 +33,31 @@ impl TransformCategory {
             Self::Url => "URL & Web",
         }
     }
+
+    #[must_use]
+    pub(crate) const fn tooltip(self) -> &'static str {
+        match self {
+            Self::AiPrompt => {
+                "Clean, sanitize, and format code, logs, or tables for Copilot and AI coding agents"
+            }
+            Self::Cleanup => {
+                "Strip source formatting, unwrap hard line breaks, or collapse whitespace"
+            }
+            Self::Case => {
+                "Convert text or identifiers between uppercase, lowercase, title, camel, snake, and kebab case"
+            }
+            Self::Lines => "Sort, deduplicate, remove blank lines, or join lines with commas",
+            Self::Developer => "Prettify or minify JSON and encode or decode Base64",
+            Self::Url => "Remove analytics and tracking query parameters from copied URLs",
+        }
+    }
+}
+
+/// Output of a text transformation, including an optional summary of actions taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransformOutput {
+    pub(crate) text: String,
+    pub(crate) summary: Option<String>,
 }
 
 /// Errors that can occur during text transformation.
@@ -40,6 +67,7 @@ pub(crate) enum TransformError {
     InvalidBase64,
     InvalidUtf8,
     InvalidUrl,
+    InvalidTable,
     ExecutionFailed(String),
 }
 
@@ -50,6 +78,7 @@ impl std::fmt::Display for TransformError {
             Self::InvalidBase64 => write!(f, "Invalid Base64 sequence"),
             Self::InvalidUtf8 => write!(f, "Decoded payload is not valid UTF-8"),
             Self::InvalidUrl => write!(f, "Invalid URL format"),
+            Self::InvalidTable => write!(f, "Input is not a valid TSV or CSV table"),
             Self::ExecutionFailed(msg) => write!(f, "{msg}"),
         }
     }
@@ -60,6 +89,11 @@ impl std::error::Error for TransformError {}
 /// Unified descriptor for pure text transformations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TextTransform {
+    // AI & Prompt
+    PrepareCodeForAi,
+    PrepareLogForAi,
+    PrepareTableForAi,
+
     // Cleanup
     StripFormatting,
     UnwrapLines,
@@ -92,6 +126,10 @@ pub(crate) enum TextTransform {
 impl TextTransform {
     /// Complete catalog of all transformations.
     pub(crate) const ALL: &[Self] = &[
+        // AI & Prompt
+        Self::PrepareCodeForAi,
+        Self::PrepareLogForAi,
+        Self::PrepareTableForAi,
         // Cleanup
         Self::StripFormatting,
         Self::UnwrapLines,
@@ -120,6 +158,9 @@ impl TextTransform {
     /// Machine identifier and user-facing label for this transform.
     const fn id_and_label(self) -> (&'static str, &'static str) {
         match self {
+            Self::PrepareCodeForAi => ("prepare_code_for_ai", "Prepare Code for AI"),
+            Self::PrepareLogForAi => ("prepare_log_for_ai", "Prepare Log for AI"),
+            Self::PrepareTableForAi => ("prepare_table_for_ai", "Prepare Table for AI"),
             Self::StripFormatting => ("strip_formatting", "Strip Formatting"),
             Self::UnwrapLines => ("unwrap_lines", "Unwrap Hard Line Breaks"),
             Self::CollapseWhitespace => ("collapse_whitespace", "Collapse Whitespace"),
@@ -158,6 +199,9 @@ impl TextTransform {
     #[must_use]
     pub(crate) const fn category(self) -> TransformCategory {
         match self {
+            Self::PrepareCodeForAi | Self::PrepareLogForAi | Self::PrepareTableForAi => {
+                TransformCategory::AiPrompt
+            }
             Self::StripFormatting | Self::UnwrapLines | Self::CollapseWhitespace => {
                 TransformCategory::Cleanup
             }
@@ -182,6 +226,15 @@ impl TextTransform {
     #[must_use]
     pub(crate) const fn tooltip(self) -> &'static str {
         match self {
+            Self::PrepareCodeForAi => {
+                "Dedent, strip local home paths, redact secrets, and wrap in a fenced code block"
+            }
+            Self::PrepareLogForAi => {
+                "Strip ANSI codes, collapse repeated lines, redact secrets & IPs, and wrap in <log> tags"
+            }
+            Self::PrepareTableForAi => {
+                "Convert tab-separated (TSV) or comma-separated (CSV) rows into a Markdown table"
+            }
             Self::StripFormatting => {
                 "Strip HTML tags, Markdown syntax, ANSI escape codes, and zero-width characters"
             }
@@ -213,6 +266,15 @@ impl TextTransform {
     #[must_use]
     pub(crate) fn toast_success(self) -> String {
         match self {
+            Self::PrepareCodeForAi => {
+                format!("{} Copied AI-ready code block to clipboard!", icons::CHECK)
+            }
+            Self::PrepareLogForAi => {
+                format!("{} Copied AI-ready log block to clipboard!", icons::CHECK)
+            }
+            Self::PrepareTableForAi => {
+                format!("{} Copied Markdown table to clipboard!", icons::CHECK)
+            }
             Self::StripFormatting => {
                 format!("{} Copied raw plain text to clipboard!", icons::CHECK)
             }
@@ -256,6 +318,8 @@ impl TextTransform {
         }
         let text = &item.content;
         match self {
+            Self::PrepareLogForAi => text.contains('\n') || text.contains('\x1b'),
+            Self::PrepareTableForAi => is_likely_tabular(text),
             Self::StripFormatting => has_strippable_formatting(item),
             Self::UnwrapLines
             | Self::SortLinesAsc
@@ -263,7 +327,8 @@ impl TextTransform {
             | Self::RemoveEmptyLines
             | Self::JoinWithComma => text.contains('\n'),
             Self::CollapseWhitespace => text.chars().any(char::is_whitespace),
-            Self::Uppercase
+            Self::PrepareCodeForAi
+            | Self::Uppercase
             | Self::Lowercase
             | Self::TitleCase
             | Self::CamelCase
@@ -279,9 +344,45 @@ impl TextTransform {
         }
     }
 
+    /// Confirmation toast message tailored to an optional transformation summary.
+    #[must_use]
+    pub(crate) fn toast_for_output(self, summary: Option<&str>) -> String {
+        let Some(summary) = summary.filter(|s| !s.is_empty()) else {
+            return self.toast_success();
+        };
+        match self {
+            Self::PrepareCodeForAi => {
+                format!("{} Copied AI-ready code block ({summary})", icons::CHECK)
+            }
+            Self::PrepareLogForAi => {
+                format!("{} Copied AI-ready log block ({summary})", icons::CHECK)
+            }
+            Self::PrepareTableForAi => {
+                format!("{} Copied Markdown table ({summary})", icons::CHECK)
+            }
+            _ => self.toast_success(),
+        }
+    }
+
+    /// Executes the transformation and returns both the output text and an optional action summary.
+    pub(crate) fn apply_with_summary(self, input: &str) -> Result<TransformOutput, TransformError> {
+        match self {
+            Self::PrepareCodeForAi => Ok(prepare_code_for_ai_detailed(input)),
+            Self::PrepareLogForAi => Ok(prepare_log_for_ai_detailed(input)),
+            Self::PrepareTableForAi => prepare_table_for_ai_detailed(input),
+            other => Ok(TransformOutput {
+                text: other.apply(input)?,
+                summary: None,
+            }),
+        }
+    }
+
     /// Executes the transformation on the provided input text.
     pub(crate) fn apply(self, input: &str) -> Result<String, TransformError> {
         match self {
+            Self::PrepareCodeForAi => Ok(prepare_code_for_ai_detailed(input).text),
+            Self::PrepareLogForAi => Ok(prepare_log_for_ai_detailed(input).text),
+            Self::PrepareTableForAi => prepare_table_for_ai_detailed(input).map(|o| o.text),
             Self::StripFormatting => Ok(strip_source_formatting(input)),
             Self::UnwrapLines => Ok(unwrap_lines(input)),
             Self::CollapseWhitespace => Ok(collapse_whitespace(input)),
@@ -1304,6 +1405,863 @@ fn normalize_whitespace(input: &str) -> String {
     collapsed.trim().to_string()
 }
 
+// ============================================================================
+// AI & Prompt Presets
+// ============================================================================
+
+/// Formats a bounded preview snippet suitable for hover tooltips.
+#[must_use]
+pub(crate) fn format_preview_snippet(
+    text: &str,
+    max_lines: usize,
+    max_chars_per_line: usize,
+) -> String {
+    let all_lines: Vec<&str> = text.lines().collect();
+    let total = all_lines.len();
+    let mut out = Vec::with_capacity(max_lines.min(total) + 1);
+
+    for line in all_lines.iter().take(max_lines) {
+        let char_count = line.chars().count();
+        if char_count > max_chars_per_line {
+            let truncated: String = line
+                .chars()
+                .take(max_chars_per_line.saturating_sub(1))
+                .collect();
+            out.push(format!("{truncated}…"));
+        } else {
+            out.push((*line).to_string());
+        }
+    }
+
+    if total > max_lines {
+        let remaining = total - max_lines;
+        let noun = if remaining == 1 { "line" } else { "lines" };
+        out.push(format!("… (+{remaining} more {noun})"));
+    }
+
+    out.join("\n")
+}
+
+fn format_count(n: usize, singular: &str, plural: &str) -> String {
+    let noun = if n == 1 { singular } else { plural };
+    format!("{n} {noun}")
+}
+
+/// Prepares a code snippet for pasting into an AI tool:
+/// dedents common indentation, strips local home paths, redacts secrets,
+/// and wraps the result in a fenced Markdown code block.
+fn prepare_code_for_ai_detailed(input: &str) -> TransformOutput {
+    let normalized = strip_invisible_and_normalize_newlines(input);
+    let (dedented, was_dedented) = dedent_with_flag(&normalized);
+    let lang = crate::code::detect_code_language(&dedented);
+    let (sanitized_paths, paths_stripped) = strip_local_paths_counted(&dedented);
+    let (redacted, stats) = redact_secrets_counted(&sanitized_paths, false);
+    let fenced = wrap_in_code_fence(&redacted, lang);
+
+    let mut parts = Vec::new();
+    if let Some(l) = lang {
+        parts.push(format!("{} fence", l.markdown_fence_tag()));
+    } else {
+        parts.push("fenced".to_string());
+    }
+    if was_dedented {
+        parts.push("dedented".to_string());
+    }
+    if paths_stripped > 0 {
+        parts.push(format!(
+            "{} stripped",
+            format_count(paths_stripped, "path", "paths")
+        ));
+    }
+    if stats.secrets > 0 {
+        parts.push(format!(
+            "{} redacted",
+            format_count(stats.secrets, "secret", "secrets")
+        ));
+    }
+
+    TransformOutput {
+        text: fenced,
+        summary: Some(parts.join(" · ")),
+    }
+}
+
+/// Prepares terminal logs or stack traces for pasting into an AI tool:
+/// strips ANSI escape codes, strips local home paths, redacts secrets and IPs,
+/// collapses repeated consecutive lines, and wraps in `<log>...</log>`.
+fn prepare_log_for_ai_detailed(input: &str) -> TransformOutput {
+    let no_ansi = strip_ansi(input);
+    let ansi_stripped = no_ansi != input;
+    let normalized = strip_invisible_and_normalize_newlines(&no_ansi);
+    let (sanitized_paths, paths_stripped) = strip_local_paths_counted(&normalized);
+    let (redacted, stats) = redact_secrets_counted(&sanitized_paths, true);
+    let (collapsed, lines_collapsed) = collapse_repeated_lines_counted(&redacted);
+    let body = collapsed.trim_matches('\n');
+
+    let mut parts = Vec::new();
+    if ansi_stripped {
+        parts.push("ANSI stripped".to_string());
+    }
+    if lines_collapsed > 0 {
+        parts.push(format!(
+            "{} collapsed",
+            format_count(lines_collapsed, "line", "lines")
+        ));
+    }
+    if paths_stripped > 0 {
+        parts.push(format!(
+            "{} stripped",
+            format_count(paths_stripped, "path", "paths")
+        ));
+    }
+    if stats.secrets > 0 {
+        parts.push(format!(
+            "{} redacted",
+            format_count(stats.secrets, "secret", "secrets")
+        ));
+    }
+    if stats.ips > 0 {
+        parts.push(format!("{} redacted", format_count(stats.ips, "IP", "IPs")));
+    }
+    if parts.is_empty() {
+        parts.push("wrapped in <log>".to_string());
+    }
+
+    TransformOutput {
+        text: format!("<log>\n{body}\n</log>"),
+        summary: Some(parts.join(" · ")),
+    }
+}
+
+/// Converts TSV, CSV, or semicolon-separated tabular text into a Markdown pipe table.
+fn prepare_table_for_ai_detailed(input: &str) -> Result<TransformOutput, TransformError> {
+    let rows = parse_tabular_rows(input).ok_or(TransformError::InvalidTable)?;
+    let max_cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if max_cols < 2 || rows.len() < 2 {
+        return Err(TransformError::InvalidTable);
+    }
+
+    let mut out = Vec::with_capacity(rows.len() + 1);
+    for (idx, row) in rows.iter().enumerate() {
+        let mut cells = Vec::with_capacity(max_cols);
+        for col in 0..max_cols {
+            let raw = row.get(col).map_or("", String::as_str).trim();
+            cells.push(raw.replace('|', "\\|"));
+        }
+        out.push(format!("| {} |", cells.join(" | ")));
+        if idx == 0 {
+            let sep = vec!["---"; max_cols].join(" | ");
+            out.push(format!("| {sep} |"));
+        }
+    }
+
+    Ok(TransformOutput {
+        text: out.join("\n"),
+        summary: Some(format!(
+            "{} × {}",
+            format_count(rows.len(), "row", "rows"),
+            format_count(max_cols, "col", "cols")
+        )),
+    })
+}
+
+/// Strips the common leading whitespace prefix across all non-empty lines and trims outer blank lines.
+fn dedent_with_flag(input: &str) -> (String, bool) {
+    let all_lines: Vec<&str> = input.lines().collect();
+    let Some(first) = all_lines.iter().position(|l| !l.trim().is_empty()) else {
+        return (String::new(), false);
+    };
+    let last = all_lines
+        .iter()
+        .rposition(|l| !l.trim().is_empty())
+        .unwrap_or(first);
+    let slice = &all_lines[first..=last];
+
+    let mut common_prefix: Option<&str> = None;
+    for line in slice {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let ws_len = line
+            .bytes()
+            .take_while(|&b| b == b' ' || b == b'\t')
+            .count();
+        let ws = &line[..ws_len];
+        common_prefix = Some(common_prefix.map_or(ws, |prev| {
+            let shared = prev
+                .bytes()
+                .zip(ws.bytes())
+                .take_while(|(a, b)| a == b)
+                .count();
+            &prev[..shared]
+        }));
+    }
+
+    let prefix_len = common_prefix.map_or(0, str::len);
+    let result = slice
+        .iter()
+        .map(|line| {
+            if line.trim().is_empty() {
+                ""
+            } else {
+                line[prefix_len..].trim_end()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (result, prefix_len > 0)
+}
+
+/// Wraps `body` in a Markdown fenced code block using enough backticks to avoid inner collisions.
+fn wrap_in_code_fence(body: &str, lang: Option<crate::code::CodeLanguage>) -> String {
+    let mut max_run = 0usize;
+    let mut current_run = 0usize;
+    for b in body.bytes() {
+        if b == b'`' {
+            current_run += 1;
+            if current_run > max_run {
+                max_run = current_run;
+            }
+        } else {
+            current_run = 0;
+        }
+    }
+    let fence_len = max_run.saturating_add(1).max(3);
+    let fence = "`".repeat(fence_len);
+    let tag = lang.map_or("", crate::code::CodeLanguage::markdown_fence_tag);
+    format!("{fence}{tag}\n{body}\n{fence}")
+}
+
+/// Replaces local macOS (`/Users/<user>`), Linux (`/home/<user>`), and Windows
+/// (`C:\Users\<user>`, `C:/Users/<user>`, `C:\\Users\\<user>`) home directory prefixes with `<HOME>`.
+#[cfg(test)]
+fn strip_local_paths(input: &str) -> String {
+    strip_local_paths_counted(input).0
+}
+
+fn strip_local_paths_counted(input: &str) -> (String, usize) {
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len);
+    let mut count = 0usize;
+    let mut i = 0;
+
+    while i < len {
+        if let Some(end) = match_home_path_prefix(input, i) {
+            out.push_str("<HOME>");
+            count += 1;
+            i = end;
+            continue;
+        }
+
+        let ch = input[i..].chars().next().unwrap_or('\0');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+
+    (out, count)
+}
+
+/// If a local home directory path begins at byte index `i`, returns the byte index right after the username.
+fn match_home_path_prefix(input: &str, i: usize) -> Option<usize> {
+    let bytes = input.as_bytes();
+    if i > 0 {
+        let prev = bytes[i - 1];
+        if prev.is_ascii_alphanumeric() || prev == b'_' {
+            return None;
+        }
+    }
+
+    let rest = &input[i..];
+
+    // Unix: /Users/<name> or /home/<name>
+    let after_root = if rest.starts_with("/Users/") {
+        Some(i + "/Users/".len())
+    } else if rest.starts_with("/home/") {
+        Some(i + "/home/".len())
+    } else {
+        match_windows_users_root(rest).map(|offset| i + offset)
+    }?;
+
+    // Consume username: [A-Za-z0-9._-]+
+    let mut end = after_root;
+    while end < bytes.len() {
+        let b = bytes[end];
+        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-') {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+
+    if end == after_root {
+        return None;
+    }
+
+    // Username must be bounded by path separator, delimiter, or end of string.
+    if end < bytes.len() {
+        let next = bytes[end];
+        let valid_boundary = matches!(
+            next,
+            b'/' | b'\\'
+                | b' '
+                | b'\t'
+                | b'\n'
+                | b'\r'
+                | b'"'
+                | b'\''
+                | b'`'
+                | b':'
+                | b')'
+                | b']'
+                | b'}'
+                | b'>'
+                | b','
+                | b';'
+        );
+        if !valid_boundary {
+            return None;
+        }
+    }
+
+    Some(end)
+}
+
+/// Matches Windows `[A-Za-z]:\Users\`, `[A-Za-z]:/Users/`, or `[A-Za-z]:\\Users\\` case-insensitively.
+fn match_windows_users_root(rest: &str) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    if bytes.len() < 9 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
+        return None;
+    }
+    let after_drive = &rest[2..];
+    for prefix in ["\\\\Users\\\\", "\\Users\\", "/Users/"] {
+        if after_drive.len() >= prefix.len()
+            && after_drive[..prefix.len()].eq_ignore_ascii_case(prefix)
+        {
+            return Some(2 + prefix.len());
+        }
+    }
+    None
+}
+
+#[derive(Default)]
+struct RedactionStats {
+    secrets: usize,
+    ips: usize,
+}
+
+/// Redacts PEM private keys, sensitive key-value assignments, URL credentials, Bearer tokens,
+/// known API key/JWT formats, and (optionally) non-loopback IPv4 addresses.
+#[cfg(test)]
+fn redact_secrets(input: &str, redact_ips: bool) -> String {
+    redact_secrets_counted(input, redact_ips).0
+}
+
+fn redact_secrets_counted(input: &str, redact_ips: bool) -> (String, RedactionStats) {
+    let mut out_lines = Vec::new();
+    let mut in_pem_block = false;
+    let mut stats = RedactionStats::default();
+
+    for line in input.lines() {
+        if in_pem_block {
+            if is_pem_end_line(line) {
+                in_pem_block = false;
+            }
+            continue;
+        }
+        if is_pem_begin_line(line) {
+            out_lines.push("[REDACTED_PRIVATE_KEY]".to_string());
+            stats.secrets += 1;
+            if !is_pem_end_line(line) {
+                in_pem_block = true;
+            }
+            continue;
+        }
+
+        let (step1, assign_redacted) = redact_sensitive_assignment_line(line);
+        if assign_redacted {
+            stats.secrets += 1;
+        }
+        let (step2, inline_redacted) = redact_inline_tokens_in_line(&step1);
+        stats.secrets += inline_redacted;
+        let step3 = if redact_ips {
+            let (with_ips, ip_count) = redact_ipv4_addresses(&step2);
+            stats.ips += ip_count;
+            with_ips
+        } else {
+            step2
+        };
+        out_lines.push(step3);
+    }
+
+    (out_lines.join("\n"), stats)
+}
+
+fn is_pem_begin_line(line: &str) -> bool {
+    line.contains("-----BEGIN ")
+        && (line.contains("PRIVATE KEY-----") || line.contains("PGP PRIVATE KEY BLOCK-----"))
+}
+
+fn is_pem_end_line(line: &str) -> bool {
+    line.contains("-----END ")
+        && (line.contains("PRIVATE KEY-----") || line.contains("PGP PRIVATE KEY BLOCK-----"))
+}
+
+/// Redacts values in `.env`, YAML, TOML, or JSON lines whose key name is sensitive
+/// (e.g., `API_KEY=...`, `"client_secret": "..."`, `password: ...`).
+fn redact_sensitive_assignment_line(line: &str) -> (String, bool) {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+        return (line.to_string(), false);
+    }
+
+    let leading_len = line.len() - trimmed.len();
+    let (export_prefix, body) = trimmed
+        .strip_prefix("export ")
+        .map_or(("", trimmed), |rest| ("export ", rest));
+
+    let sep_pos = find_assignment_separator(body);
+    let Some((sep_idx, sep_char)) = sep_pos else {
+        return (line.to_string(), false);
+    };
+
+    let raw_key = body[..sep_idx].trim();
+    let key_unquoted = raw_key.trim_matches(|c| c == '"' || c == '\'');
+    let key_upper = key_unquoted.to_ascii_uppercase();
+    if key_upper.is_empty()
+        || !key_upper
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return (line.to_string(), false);
+    }
+
+    let normalized_key = key_upper.replace('-', "_");
+    if !crate::secret::is_sensitive_key_name(&normalized_key) {
+        return (line.to_string(), false);
+    }
+
+    let after_sep = &body[sep_idx + 1..];
+    let ws_after_sep = after_sep.len() - after_sep.trim_start().len();
+    let val_region = &after_sep[ws_after_sep..];
+
+    let (value_part, trailing_suffix) = split_assignment_value_and_suffix(val_region);
+    let (quote_char, inner_val) = unwrap_matching_quotes(value_part);
+    let inner_trimmed = inner_val.trim();
+
+    if inner_trimmed.len() < 6
+        || crate::secret::is_placeholder_value(inner_trimmed)
+        || inner_trimmed.starts_with("[REDACTED")
+    {
+        return (line.to_string(), false);
+    }
+
+    let mut rebuilt = String::with_capacity(line.len());
+    rebuilt.push_str(&line[..leading_len]);
+    rebuilt.push_str(export_prefix);
+    rebuilt.push_str(&body[..sep_idx]);
+    rebuilt.push(sep_char);
+    rebuilt.push_str(&after_sep[..ws_after_sep]);
+    if let Some(q) = quote_char {
+        rebuilt.push(q);
+        rebuilt.push_str("[REDACTED]");
+        rebuilt.push(q);
+    } else {
+        rebuilt.push_str("[REDACTED]");
+    }
+    rebuilt.push_str(trailing_suffix);
+    (rebuilt, true)
+}
+
+fn find_assignment_separator(body: &str) -> Option<(usize, char)> {
+    let mut in_quote: Option<char> = None;
+    for (idx, ch) in body.char_indices() {
+        if let Some(q) = in_quote {
+            if ch == q {
+                in_quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => in_quote = Some(ch),
+            '=' | ':' => return Some((idx, ch)),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_assignment_value_and_suffix(val_region: &str) -> (&str, &str) {
+    let trimmed_end = val_region.trim_end();
+    let trailing_ws_start = trimmed_end.len();
+    trimmed_end
+        .strip_suffix(',')
+        .or_else(|| trimmed_end.strip_suffix(';'))
+        .map_or_else(
+            || (trimmed_end, &val_region[trailing_ws_start..]),
+            |without_punct| (without_punct, &val_region[without_punct.len()..]),
+        )
+}
+
+fn unwrap_matching_quotes(s: &str) -> (Option<char>, &str) {
+    if s.len() >= 2 {
+        if let Some(inner) = s.strip_prefix('"').and_then(|x| x.strip_suffix('"')) {
+            return (Some('"'), inner);
+        }
+        if let Some(inner) = s.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')) {
+            return (Some('\''), inner);
+        }
+    }
+    (None, s)
+}
+
+/// Redacts inline Bearer tokens, URL credentials, and known token/API-key formats while
+/// preserving exact whitespace and surrounding delimiters.
+fn redact_inline_tokens_in_line(line: &str) -> (String, usize) {
+    let mut out = String::with_capacity(line.len());
+    let mut count = 0usize;
+    let mut prev_was_bearer = false;
+    let mut rest = line;
+
+    while !rest.is_empty() {
+        let ws_len = rest
+            .char_indices()
+            .take_while(|&(_, c)| c.is_whitespace())
+            .last()
+            .map_or(0, |(idx, c)| idx + c.len_utf8());
+        if ws_len > 0 {
+            out.push_str(&rest[..ws_len]);
+            rest = &rest[ws_len..];
+            continue;
+        }
+
+        let tok_len = rest
+            .char_indices()
+            .take_while(|&(_, c)| !c.is_whitespace())
+            .last()
+            .map_or(0, |(idx, c)| idx + c.len_utf8());
+        let token = &rest[..tok_len];
+        rest = &rest[tok_len..];
+
+        let (lead, cleaned, trail) = split_token_wrappers(token);
+        if prev_was_bearer
+            && cleaned.len() >= 16
+            && !crate::secret::is_placeholder_value(cleaned)
+            && !cleaned.starts_with("[REDACTED")
+        {
+            out.push_str(lead);
+            out.push_str("[REDACTED_TOKEN]");
+            out.push_str(trail);
+            count += 1;
+            prev_was_bearer = false;
+            continue;
+        }
+
+        prev_was_bearer = cleaned.eq_ignore_ascii_case("bearer");
+
+        if let Some(redacted) = redact_single_token_payload(cleaned) {
+            out.push_str(lead);
+            out.push_str(&redacted);
+            out.push_str(trail);
+            count += 1;
+        } else {
+            out.push_str(token);
+        }
+    }
+
+    (out, count)
+}
+
+fn split_token_wrappers(token: &str) -> (&str, &str, &str) {
+    let is_wrapper = |c: char| {
+        matches!(
+            c,
+            '"' | '\'' | '`' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+        )
+    };
+    let start = token
+        .char_indices()
+        .find(|&(_, c)| !is_wrapper(c))
+        .map_or(token.len(), |(idx, _)| idx);
+    let end = token
+        .char_indices()
+        .rev()
+        .find(|&(_, c)| !is_wrapper(c))
+        .map_or(start, |(idx, c)| idx + c.len_utf8());
+    if start >= end {
+        (token, "", "")
+    } else {
+        (&token[..start], &token[start..end], &token[end..])
+    }
+}
+
+fn redact_single_token_payload(cleaned: &str) -> Option<String> {
+    if cleaned.is_empty() || cleaned.starts_with("[REDACTED") {
+        return None;
+    }
+    if let Some(redacted_url) = redact_url_credentials(cleaned) {
+        return Some(redacted_url);
+    }
+    if crate::secret::is_known_token_format(cleaned) {
+        return Some("[REDACTED_SECRET]".to_string());
+    }
+
+    // Handle inline key=value or key:value tokens like `--token=ghp_...` or `"key":"sk-proj-..."`
+    let sep_idx = cleaned.find('=').or_else(|| cleaned.find(':'))?;
+    let (lhs, rhs_with_sep) = cleaned.split_at(sep_idx);
+    let sep = &rhs_with_sep[..1];
+    let rhs = &rhs_with_sep[1..];
+    let (r_lead, r_clean, r_trail) = split_token_wrappers(rhs);
+    if let Some(redacted_url) = redact_url_credentials(r_clean) {
+        return Some(format!("{lhs}{sep}{r_lead}{redacted_url}{r_trail}"));
+    }
+    if crate::secret::is_known_token_format(r_clean) {
+        return Some(format!("{lhs}{sep}{r_lead}[REDACTED_SECRET]{r_trail}"));
+    }
+    None
+}
+
+/// Redacts the password portion of `scheme://user:password@host...` URLs.
+fn redact_url_credentials(token: &str) -> Option<String> {
+    let scheme_end = token.find("://")?;
+    let after_scheme_idx = scheme_end + 3;
+    let after_scheme = &token[after_scheme_idx..];
+    let authority_len = after_scheme.find('/').unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..authority_len];
+    let at_pos = authority.find('@')?;
+    let userinfo = &authority[..at_pos];
+    let host = &authority[at_pos + 1..];
+    if host.is_empty() {
+        return None;
+    }
+    let colon_pos = userinfo.find(':')?;
+    let password = &userinfo[colon_pos + 1..];
+    if password.is_empty() || password.starts_with("[REDACTED") {
+        return None;
+    }
+
+    let user_end = after_scheme_idx + colon_pos + 1;
+    let host_start = after_scheme_idx + at_pos;
+    Some(format!(
+        "{}[REDACTED]{}",
+        &token[..user_end],
+        &token[host_start..]
+    ))
+}
+
+/// Redacts non-loopback IPv4 addresses in `line` to `[REDACTED_IP]`.
+fn redact_ipv4_addresses(line: &str) -> (String, usize) {
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len);
+    let mut count = 0usize;
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i].is_ascii_digit() {
+            let left_ok = i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'.');
+            if left_ok {
+                if let Some((ip_end, is_loopback)) = parse_ipv4_at(bytes, i) {
+                    let right_ok = ip_end == len
+                        || (!bytes[ip_end].is_ascii_alphanumeric() && bytes[ip_end] != b'.');
+                    if right_ok && !is_loopback {
+                        out.push_str("[REDACTED_IP]");
+                        count += 1;
+                        i = ip_end;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        let ch = line[i..].chars().next().unwrap_or('\0');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+
+    (out, count)
+}
+
+/// Parses an IPv4 dotted-quad starting at `start`, returning `(end_index, is_loopback_or_zero)`.
+fn parse_ipv4_at(bytes: &[u8], start: usize) -> Option<(usize, bool)> {
+    let mut idx = start;
+    let mut octets = [0u8; 4];
+
+    for (part, slot) in octets.iter_mut().enumerate() {
+        if part > 0 {
+            if idx >= bytes.len() || bytes[idx] != b'.' {
+                return None;
+            }
+            idx += 1;
+        }
+        let digit_start = idx;
+        let mut val: u16 = 0;
+        while idx < bytes.len() && bytes[idx].is_ascii_digit() && idx - digit_start < 4 {
+            val = val * 10 + u16::from(bytes[idx] - b'0');
+            idx += 1;
+        }
+        let digit_len = idx - digit_start;
+        if digit_len == 0 || digit_len > 3 || val > 255 {
+            return None;
+        }
+        if digit_len > 1 && bytes[digit_start] == b'0' {
+            return None;
+        }
+        *slot = u8::try_from(val).ok()?;
+    }
+
+    let is_local = octets == [127, 0, 0, 1] || octets == [0, 0, 0, 0];
+    Some((idx, is_local))
+}
+
+/// Collapses runs of 3+ identical consecutive non-empty lines into one line plus a repeat count,
+/// and collapses consecutive blank lines into a single blank line.
+fn collapse_repeated_lines_counted(input: &str) -> (String, usize) {
+    let mut out: Vec<String> = Vec::new();
+    let mut prev_line: Option<&str> = None;
+    let mut repeat_count: usize = 0;
+    let mut collapsed_duplicates: usize = 0;
+    let mut prev_was_blank = false;
+
+    let flush =
+        |out: &mut Vec<String>, prev: &mut Option<&str>, count: &mut usize, saved: &mut usize| {
+            if let Some(line) = prev.take() {
+                if *count >= 3 {
+                    out.push(line.to_string());
+                    out.push(format!("... (repeated {}x)", *count));
+                    *saved += *count - 1;
+                } else {
+                    for _ in 0..*count {
+                        out.push(line.to_string());
+                    }
+                }
+                *count = 0;
+            }
+        };
+
+    for raw_line in input.lines() {
+        let line = raw_line.trim_end();
+        if line.is_empty() {
+            flush(
+                &mut out,
+                &mut prev_line,
+                &mut repeat_count,
+                &mut collapsed_duplicates,
+            );
+            if !prev_was_blank && !out.is_empty() {
+                out.push(String::new());
+                prev_was_blank = true;
+            }
+            continue;
+        }
+
+        prev_was_blank = false;
+        if prev_line == Some(line) {
+            repeat_count += 1;
+        } else {
+            flush(
+                &mut out,
+                &mut prev_line,
+                &mut repeat_count,
+                &mut collapsed_duplicates,
+            );
+            prev_line = Some(line);
+            repeat_count = 1;
+        }
+    }
+
+    flush(
+        &mut out,
+        &mut prev_line,
+        &mut repeat_count,
+        &mut collapsed_duplicates,
+    );
+    while out.last().is_some_and(String::is_empty) {
+        out.pop();
+    }
+
+    (out.join("\n"), collapsed_duplicates)
+}
+
+/// Checks whether `text` looks like a multi-row TSV, CSV, or semicolon-separated table.
+fn is_likely_tabular(text: &str) -> bool {
+    parse_tabular_rows(text).is_some()
+}
+
+/// Parses TSV, CSV, or semicolon-separated tabular rows (requiring at least 2 rows and 2 columns).
+fn parse_tabular_rows(input: &str) -> Option<Vec<Vec<String>>> {
+    let normalized = strip_invisible_and_normalize_newlines(input);
+    let lines: Vec<&str> = normalized
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if lines.len() < 2 {
+        return None;
+    }
+
+    // 1. TSV: unambiguous tab-delimited rows (e.g., copied from Excel, Sheets, or SQL clients)
+    let tab_lines = lines.iter().filter(|l| l.contains('\t')).count();
+    if lines[0].contains('\t') && tab_lines >= 2 {
+        let rows: Vec<Vec<String>> = lines
+            .iter()
+            .map(|l| l.split('\t').map(ToString::to_string).collect())
+            .collect();
+        if rows[0].len() >= 2 {
+            return Some(rows);
+        }
+    }
+
+    // 2. CSV or semicolon-separated with RFC 4180 quoting and consistent column counts
+    for delimiter in [',', ';'] {
+        if !lines[0].contains(delimiter) {
+            continue;
+        }
+        let rows: Vec<Vec<String>> = lines
+            .iter()
+            .map(|l| parse_delimited_line(l, delimiter))
+            .collect();
+        let cols = rows[0].len();
+        if cols >= 2 && rows.iter().all(|r| r.len() == cols) {
+            return Some(rows);
+        }
+    }
+
+    None
+}
+
+/// Parses a single delimited line (CSV / semicolon) supporting quoted fields and `""` escapes.
+fn parse_delimited_line(line: &str, delimiter: char) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    current.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                current.push(ch);
+            }
+        } else if ch == '"' && current.trim().is_empty() {
+            current.clear();
+            in_quotes = true;
+        } else if ch == delimiter {
+            fields.push(std::mem::take(&mut current));
+        } else {
+            current.push(ch);
+        }
+    }
+
+    fields.push(current);
+    fields
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1527,5 +2485,188 @@ mod tests {
             is_pinned: false,
         };
         assert!(!has_strippable_formatting(&image_item));
+    }
+
+    #[test]
+    fn test_prepare_code_for_ai_dedent_paths_secrets_and_fence() {
+        let input = "\n        fn connect() {\n            let cfg = \"/Users/alice/dev/app/.env\";\n            let db = \"postgres://admin:s3cr3tPass!@db.internal:5432/prod\";\n            let key = \"sk-proj-abcdefghijklmnopqrstuvwxyz123456\";\n        }\n    ";
+        let result = TextTransform::PrepareCodeForAi.apply(input).unwrap();
+        assert!(result.starts_with("```rust\n"));
+        assert!(result.ends_with("\n```"));
+        assert!(result.contains("fn connect() {\n    let cfg = \"<HOME>/dev/app/.env\";"));
+        assert!(result.contains("postgres://admin:[REDACTED]@db.internal:5432/prod"));
+        assert!(result.contains("let key = \"[REDACTED_SECRET]\";"));
+        assert!(!result.contains("alice"));
+        assert!(!result.contains("s3cr3tPass!"));
+        assert!(!result.contains("sk-proj-"));
+    }
+
+    #[test]
+    fn test_prepare_code_for_ai_expands_fence_for_inner_backticks() {
+        let input = "    let doc = \"```json\\n{}\\n```\";";
+        let result = TextTransform::PrepareCodeForAi.apply(input).unwrap();
+        assert!(result.starts_with("````"));
+        assert!(result.ends_with("\n````"));
+    }
+
+    #[test]
+    fn test_strip_local_paths_cross_platform() {
+        assert_eq!(
+            strip_local_paths("at /Users/alice/src/main.rs:42"),
+            "at <HOME>/src/main.rs:42"
+        );
+        assert_eq!(
+            strip_local_paths("file:///home/bob.smith/project/Cargo.toml"),
+            "file://<HOME>/project/Cargo.toml"
+        );
+        assert_eq!(
+            strip_local_paths(r"C:\Users\carol\Documents\app.rs"),
+            r"<HOME>\Documents\app.rs"
+        );
+        assert_eq!(
+            strip_local_paths(r#"{"path": "C:\\Users\\carol\\app"}"#),
+            r#"{"path": "<HOME>\\app"}"#
+        );
+    }
+
+    #[test]
+    fn test_redact_secrets_pem_env_and_bearer() {
+        let input = "\
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEAtestkeydata
+-----END RSA PRIVATE KEY-----
+export API_KEY=\"super_secret_api_value_123\"
+\"client_secret\": \"my_client_secret_value\",
+Authorization: Bearer abcdef1234567890abcdef
+API_KEY=<YOUR_KEY_HERE>";
+
+        let redacted = redact_secrets(input, false);
+        assert!(redacted.contains("[REDACTED_PRIVATE_KEY]"));
+        assert!(!redacted.contains("MIIEowIBAAKCAQEA"));
+        assert!(redacted.contains("export API_KEY=\"[REDACTED]\""));
+        assert!(redacted.contains("\"client_secret\": \"[REDACTED]\","));
+        assert!(redacted.contains("Authorization: Bearer [REDACTED_TOKEN]"));
+        assert!(redacted.contains("API_KEY=<YOUR_KEY_HERE>"));
+    }
+
+    #[test]
+    fn test_prepare_log_for_ai_ansi_collapse_ips_and_wrap() {
+        let input = "\x1b[31mERROR\x1b[0m failed connecting to 10.24.8.15:5432 from /home/ubuntu/svc\n\
+                     \x1b[31mERROR\x1b[0m failed connecting to 10.24.8.15:5432 from /home/ubuntu/svc\n\
+                     \x1b[31mERROR\x1b[0m failed connecting to 10.24.8.15:5432 from /home/ubuntu/svc\n\
+                     \x1b[31mERROR\x1b[0m failed connecting to 10.24.8.15:5432 from /home/ubuntu/svc\n\
+                     INFO fallback listening on 127.0.0.1:8080\n\
+                     INFO fallback listening on 127.0.0.1:8080";
+
+        let result = TextTransform::PrepareLogForAi.apply(input).unwrap();
+        let expected = "<log>\n\
+                        ERROR failed connecting to [REDACTED_IP]:5432 from <HOME>/svc\n\
+                        ... (repeated 4x)\n\
+                        INFO fallback listening on 127.0.0.1:8080\n\
+                        INFO fallback listening on 127.0.0.1:8080\n\
+                        </log>";
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_prepare_table_for_ai_tsv_csv_semicolon_and_invalid() {
+        let tsv = "Name\tRole\tNote\nAlice\tAdmin\ta | b\nBob\tUser\tok";
+        let tab_table = TextTransform::PrepareTableForAi.apply(tsv).unwrap();
+        assert_eq!(
+            tab_table,
+            "| Name | Role | Note |\n| --- | --- | --- |\n| Alice | Admin | a \\| b |\n| Bob | User | ok |"
+        );
+
+        let csv = "Name,City,Quote\n\"Smith, Alice\",Paris,\"He said \"\"hi\"\"\"\nBob,Lyon,Hello";
+        let comma_table = TextTransform::PrepareTableForAi.apply(csv).unwrap();
+        assert_eq!(
+            comma_table,
+            "| Name | City | Quote |\n| --- | --- | --- |\n| Smith, Alice | Paris | He said \"hi\" |\n| Bob | Lyon | Hello |"
+        );
+
+        let semi = "Item;Price\nCoffee;3.50\nTea;2.80";
+        let semi_table = TextTransform::PrepareTableForAi.apply(semi).unwrap();
+        assert_eq!(
+            semi_table,
+            "| Item | Price |\n| --- | --- |\n| Coffee | 3.50 |\n| Tea | 2.80 |"
+        );
+
+        let prose = "First line, with a comma.\nSecond line without any delimiter.";
+        assert_eq!(
+            TextTransform::PrepareTableForAi.apply(prose),
+            Err(TransformError::InvalidTable)
+        );
+    }
+
+    #[test]
+    fn test_ai_presets_applicability() {
+        let make_item = |kind: ItemKind, content: &str| ClipboardItem {
+            id: 10,
+            kind,
+            content: content.to_string(),
+            width: None,
+            height: None,
+            created_at: "2026-01-01".to_string(),
+            embedded_colors: vec![],
+            label: None,
+            notes: None,
+            is_pinned: false,
+        };
+
+        let single_line = make_item(ItemKind::Text, "hello world");
+        assert!(TextTransform::PrepareCodeForAi.applies_to(&single_line));
+        assert!(!TextTransform::PrepareLogForAi.applies_to(&single_line));
+        assert!(!TextTransform::PrepareTableForAi.applies_to(&single_line));
+
+        let ansi_line = make_item(ItemKind::Text, "\x1b[32mOK\x1b[0m");
+        assert!(TextTransform::PrepareLogForAi.applies_to(&ansi_line));
+
+        let tsv_item = make_item(ItemKind::Text, "A\tB\n1\t2");
+        assert!(TextTransform::PrepareTableForAi.applies_to(&tsv_item));
+
+        let image_item = make_item(ItemKind::Image, "");
+        assert!(!TextTransform::PrepareCodeForAi.applies_to(&image_item));
+        assert!(!TextTransform::PrepareLogForAi.applies_to(&image_item));
+        assert!(!TextTransform::PrepareTableForAi.applies_to(&image_item));
+    }
+
+    #[test]
+    fn test_ai_presets_summaries_and_toasts() {
+        let code = "    fn demo() {\n        let p = \"/Users/alice/app\";\n        let k = \"sk-proj-abcdefghijklmnopqrstuvwxyz123456\";\n    }";
+        let code_out = TextTransform::PrepareCodeForAi
+            .apply_with_summary(code)
+            .unwrap();
+        assert_eq!(
+            code_out.summary.as_deref(),
+            Some("rust fence · dedented · 1 path stripped · 1 secret redacted")
+        );
+        let code_toast =
+            TextTransform::PrepareCodeForAi.toast_for_output(code_out.summary.as_deref());
+        assert!(code_toast.contains("rust fence · dedented · 1 path stripped · 1 secret redacted"));
+
+        let log =
+            "\x1b[31mERR\x1b[0m 10.0.0.5\n\x1b[31mERR\x1b[0m 10.0.0.5\n\x1b[31mERR\x1b[0m 10.0.0.5";
+        let log_out = TextTransform::PrepareLogForAi
+            .apply_with_summary(log)
+            .unwrap();
+        assert_eq!(
+            log_out.summary.as_deref(),
+            Some("ANSI stripped · 2 lines collapsed · 3 IPs redacted")
+        );
+
+        let tbl_out = TextTransform::PrepareTableForAi
+            .apply_with_summary("A\tB\n1\t2\n3\t4")
+            .unwrap();
+        assert_eq!(tbl_out.summary.as_deref(), Some("3 rows × 2 cols"));
+        assert!(TextTransform::PrepareTableForAi
+            .toast_for_output(tbl_out.summary.as_deref())
+            .contains("3 rows × 2 cols"));
+    }
+
+    #[test]
+    fn test_format_preview_snippet_bounds_lines_and_width() {
+        let text = "short\n123456789012345\nline3\nline4";
+        let preview = format_preview_snippet(text, 2, 10);
+        assert_eq!(preview, "short\n123456789…\n… (+2 more lines)");
     }
 }
