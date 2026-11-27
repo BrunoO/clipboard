@@ -1889,16 +1889,15 @@ fn sanitize_browser_url(raw: &str) -> Option<String> {
 /// (e.g. `"just now"`, `"2 minutes ago"`, `"3 hours ago"`), falling back to the raw string if
 /// parsing fails.
 fn format_relative_time(created_at: &str) -> String {
-    format_relative_time_from(created_at, chrono::Local::now().naive_local())
+    format_relative_time_from(created_at, jiff::ZonedDateTime::now().datetime())
 }
 
-fn format_relative_time_from(created_at: &str, now: chrono::NaiveDateTime) -> String {
-    let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(created_at.trim(), "%Y-%m-%d %H:%M:%S")
-    else {
+fn format_relative_time_from(created_at: &str, now: jiff::civil::DateTime) -> String {
+    let Ok(parsed) = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", created_at.trim()) else {
         return created_at.to_string();
     };
 
-    let elapsed_secs = now.signed_duration_since(parsed).num_seconds();
+    let elapsed_secs = now.duration_since(parsed).as_secs();
     if elapsed_secs < 60 {
         return "just now".to_string();
     }
@@ -2091,7 +2090,7 @@ mod tests {
 
     #[test]
     fn test_format_relative_time_buckets() {
-        let now = chrono::NaiveDateTime::parse_from_str("2026-11-27 12:00:00", "%Y-%m-%d %H:%M:%S")
+        let now = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", "2026-11-27 12:00:00")
             .expect("valid reference timestamp");
 
         assert_eq!(

@@ -10,10 +10,7 @@ targets = [
 
 [advisories]
 unmaintained = "workspace"
-ignore = [
-    # chrono unmaintained advisory RUSTSEC-2026-0543
-    { id = "RUSTSEC-2026-0543", reason = "Used only for local timestamp string formatting in db.rs and logging.rs" },
-]
+ignore = []
 
 [licenses]
 confidence-threshold = 0.8
