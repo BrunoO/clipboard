@@ -47,7 +47,7 @@ Distilled from developing, hardening, and shipping CipherClipboard across **Wind
 ## 3. macOS-Specific Lessons
 
 - **Never call `[NSApplication sharedApplication]` off the main thread.** AppKit asserts main-thread execution and traps with `SIGTRAP` — including inside `cargo test` worker threads! Guard every `NSApplication` helper (`is_active`, `hide_app`, `order_front_main_window`) with `[NSThread isMainThread]` (from Foundation, which is thread-safe).
-- **Wrap Objective-C calls in `objc::rc::autoreleasepool`.** Background threads and short-lived FFI helpers without an active pool leak autoreleased `NSString`/`NSArray` objects.
+- **Wrap Objective-C calls in `objc2::rc::autoreleasepool`.** Background threads and short-lived FFI helpers without an active pool leak autoreleased `NSString`/`NSArray` objects.
 - **Filter `[ns_app windows]` with `canBecomeMainWindow` and avoid re-entrant `NSNotificationCenter` window mutations.** AppKit's window list includes private internal panels (Touch Bar, popovers, tooltips); ordering those front or mutating windows synchronously inside `NSNotificationCenter` callbacks triggers `_NSTouchBarFinderObservation` KVO crashes.
 - **Accessibility permission is required for synthetic `Cmd+V`.** Surface permission status (`AXIsProcessTrusted`) and direct Settings deep-link (`x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`) in the macOS-only Settings section.
 - **Window chrome & Dock reopen.** macOS uses full-size content view with hidden titlebar (requiring `header_left_padding` for traffic lights) and expects Dock icon clicks (`NSApplicationDidBecomeActiveNotification` / `NSApplicationDidUnhideNotification`) to reopen a hidden window.

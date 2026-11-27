@@ -1,11 +1,20 @@
 #![allow(unsafe_code)]
-#![allow(unexpected_cfgs)]
 
-use objc::declare::ClassDecl;
-use objc::runtime::{Class, Object, Sel};
-use objc::{class, msg_send, sel, sel_impl};
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
+
+use objc2::rc::{autoreleasepool, Allocated, Retained};
+use objc2::runtime::{AnyClass, AnyObject, NSObject};
+use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationOptions, NSApplicationDidBecomeActiveNotification,
+    NSApplicationDidUnhideNotification, NSPasteboard, NSRunningApplication, NSWorkspace,
+};
+use objc2_foundation::{
+    ns_string, NSArray, NSData, NSDictionary, NSError, NSNotification, NSNotificationCenter,
+    NSNumber, NSString,
+};
 
 static PREVIOUS_APP_PID: AtomicI32 = AtomicI32::new(0);
 static REPAINT_CTX: Mutex<Option<eframe::egui::Context>> = Mutex::new(None);
@@ -38,181 +47,134 @@ pub(super) fn take_reopen_requested() -> bool {
     REOPEN_REQUESTED.swap(false, Ordering::AcqRel)
 }
 
-/// `AppKit`'s `[NSApplication sharedApplication]` asserts it is called on the
-/// main thread (trapping with `SIGTRAP` on macOS if invoked from a background
-/// or `cargo test` worker thread).
-fn is_main_thread() -> bool {
-    // SAFETY: NSThread's `isMainThread` is a side-effect-free class query; the receiver comes from the ObjC runtime and no shared state is mutated.
-    unsafe {
-        let is_main: bool = msg_send![class!(NSThread), isMainThread];
-        is_main
-    }
-}
-
 pub(super) fn is_active() -> bool {
-    if !is_main_thread() {
+    let Some(mtm) = MainThreadMarker::new() else {
         return false;
-    }
-    // SAFETY: Guarded by `is_main_thread()`; `sharedApplication` is null-checked before messaging, and these AppKit getters do not mutate private windows.
-    unsafe {
-        let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-        if ns_app.is_null() {
-            return false;
-        }
-        let active: bool = msg_send![ns_app, isActive];
-        let hidden: bool = msg_send![ns_app, isHidden];
-        active && !hidden
-    }
+    };
+    let ns_app = NSApplication::sharedApplication(mtm);
+    ns_app.isActive() && !ns_app.isHidden()
 }
 
 pub(super) fn hide_app() {
-    if !is_main_thread() {
+    let Some(mtm) = MainThreadMarker::new() else {
         return;
-    }
-    // SAFETY: Guarded by `is_main_thread()`; `sharedApplication` is null-checked and `hide:` accepts nil, so only a valid app object receives a valid selector.
-    unsafe {
-        let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-        if !ns_app.is_null() {
-            let nil_obj: *mut Object = std::ptr::null_mut();
-            let _: () = msg_send![ns_app, hide: nil_obj];
-        }
-    }
+    };
+    let ns_app = NSApplication::sharedApplication(mtm);
+    ns_app.hide(None);
 }
 
 pub(super) fn order_front_main_window() {
-    if !is_main_thread() {
+    let Some(mtm) = MainThreadMarker::new() else {
         return;
-    }
-    // SAFETY: Main-thread guarded and autoreleased; every AppKit object is null-checked, and private windows are skipped via `canBecomeMainWindow`.
-    objc::rc::autoreleasepool(|| unsafe {
-        let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-        if ns_app.is_null() {
-            return;
+    };
+    autoreleasepool(|_| {
+        let ns_app = NSApplication::sharedApplication(mtm);
+        if ns_app.isHidden() {
+            ns_app.unhide(None);
         }
-        let nil_obj: *mut Object = std::ptr::null_mut();
-        let hidden: bool = msg_send![ns_app, isHidden];
-        if hidden {
-            let _: () = msg_send![ns_app, unhide: nil_obj];
-        }
-        let active: bool = msg_send![ns_app, isActive];
-        if !active {
-            let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+        if !ns_app.isActive() {
+            #[allow(deprecated)]
+            ns_app.activateIgnoringOtherApps(true);
         }
 
-        let windows: *mut Object = msg_send![ns_app, windows];
-        if !windows.is_null() {
-            let count: usize = msg_send![windows, count];
-            for i in 0..count {
-                let window: *mut Object = msg_send![windows, objectAtIndex: i];
-                if window.is_null() {
-                    continue;
-                }
-                // Skip AppKit's private internal windows (Touch Bar panels,
-                // tooltips, popovers, animation proxies) — mutating their
-                // visibility/key state corrupts _NSTouchBarFinderObservation KVO.
-                let can_main: bool = msg_send![window, canBecomeMainWindow];
-                if can_main {
-                    let _: () = msg_send![window, makeKeyAndOrderFront: nil_obj];
-                }
+        for window in ns_app.windows() {
+            // Skip AppKit's private internal windows (Touch Bar panels,
+            // tooltips, popovers, animation proxies) — mutating their
+            // visibility/key state corrupts _NSTouchBarFinderObservation KVO.
+            if window.canBecomeMainWindow() {
+                window.makeKeyAndOrderFront(None);
             }
         }
     });
 }
 
-extern "C" fn on_app_reopen(_this: &Object, _cmd: Sel, _notification: *mut Object) {
-    // Defer window ordering to the next egui frame (ClipboardApp::update checks
-    // take_reopen_requested()) instead of mutating AppKit windows re-entrantly
-    // inside NSNotificationCenter activation/unhide callbacks.
-    REOPEN_REQUESTED.store(true, Ordering::Release);
-    request_repaint();
+define_class!(
+    // SAFETY:
+    // - `NSObject` has no subclassing requirements.
+    // - `ReopenObserver` does not implement `Drop`.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "CipherReopenObserver"]
+    struct ReopenObserver;
+
+    impl ReopenObserver {
+        #[unsafe(method(onNotification:))]
+        fn on_notification(&self, _notification: &NSNotification) {
+            // Defer window ordering to the next egui frame (ClipboardApp::update checks
+            // take_reopen_requested()) instead of mutating AppKit windows re-entrantly
+            // inside NSNotificationCenter activation/unhide callbacks.
+            REOPEN_REQUESTED.store(true, Ordering::Release);
+            request_repaint();
+        }
+    }
+);
+
+impl ReopenObserver {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: `ReopenObserver` inherits from `NSObject` with unit ivars; `init` is valid.
+        unsafe { msg_send![super(this), init] }
+    }
 }
 
-// Strictly main-thread-only (guarded by is_main_thread()), so a thread_local
+// Strictly main-thread-only (guarded by `MainThreadMarker`), so a thread_local
 // avoids needing unsafe Send/Sync impls or a Mutex.
 thread_local! {
-    static REOPEN_OBSERVER: std::cell::Cell<*mut Object> = const {
-        std::cell::Cell::new(std::ptr::null_mut())
+    static REOPEN_OBSERVER: RefCell<Option<Retained<ReopenObserver>>> = const {
+        RefCell::new(None)
     };
 }
 
 pub(super) fn setup_reopen_observer() {
     static INIT: std::sync::Once = std::sync::Once::new();
-    if !is_main_thread() {
+    let Some(mtm) = MainThreadMarker::new() else {
         return;
-    }
+    };
     INIT.call_once(|| {
-        // SAFETY: Main-thread guarded, run once, and autoreleased; the class is registered before `class!`, both objects are null-checked, and the observer is retained for teardown.
-        objc::rc::autoreleasepool(|| unsafe {
-            let superclass = class!(NSObject);
-            if let Some(mut decl) = ClassDecl::new("CipherReopenObserver", superclass) {
-                decl.add_method(
+        autoreleasepool(|_| {
+            let center = NSNotificationCenter::defaultCenter();
+            let observer = ReopenObserver::new(mtm);
+
+            // SAFETY: `observer` responds to `onNotification:` (defined above), stays retained
+            // in `REOPEN_OBSERVER` until `teardown_reopen_observer` removes it, and both
+            // notification name constants are valid static `NSNotificationName` globals.
+            unsafe {
+                // Observe NSApplicationDidBecomeActiveNotification (fires on Dock click, Cmd+Tab, app activate)
+                center.addObserver_selector_name_object(
+                    &observer,
                     sel!(onNotification:),
-                    on_app_reopen as extern "C" fn(&Object, Sel, *mut Object),
+                    Some(NSApplicationDidBecomeActiveNotification),
+                    None,
                 );
-                decl.register();
+                // Observe NSApplicationDidUnhideNotification (fires when macOS unhides on Dock click / Cmd+Tab)
+                center.addObserver_selector_name_object(
+                    &observer,
+                    sel!(onNotification:),
+                    Some(NSApplicationDidUnhideNotification),
+                    None,
+                );
             }
 
-            let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
-            if center.is_null() {
-                return;
-            }
-            let observer_cls = class!(CipherReopenObserver);
-            let observer: *mut Object = msg_send![observer_cls, new];
-            if observer.is_null() {
-                return;
-            }
-
-            let nil_obj: *mut Object = std::ptr::null_mut();
-
-            // Observe NSApplicationDidBecomeActiveNotification (fires on Dock click, Cmd+Tab, app activate)
-            let active_name: *mut Object = msg_send![
-                class!(NSString),
-                stringWithUTF8String: c"NSApplicationDidBecomeActiveNotification".as_ptr()
-            ];
-            if !active_name.is_null() {
-                let _: () = msg_send![
-                    center,
-                    addObserver: observer
-                    selector: sel!(onNotification:)
-                    name: active_name
-                    object: nil_obj
-                ];
-            }
-
-            // Observe NSApplicationDidUnhideNotification (fires when macOS unhides on Dock click / Cmd+Tab)
-            let unhide_name: *mut Object = msg_send![
-                class!(NSString),
-                stringWithUTF8String: c"NSApplicationDidUnhideNotification".as_ptr()
-            ];
-            if !unhide_name.is_null() {
-                let _: () = msg_send![
-                    center,
-                    addObserver: observer
-                    selector: sel!(onNotification:)
-                    name: unhide_name
-                    object: nil_obj
-                ];
-            }
-
-            // Store observer for later cleanup
-            REOPEN_OBSERVER.with(|cell| cell.set(observer));
+            REOPEN_OBSERVER.with(|cell| {
+                *cell.borrow_mut() = Some(observer);
+            });
         });
     });
 }
 
 pub(super) fn teardown_reopen_observer() {
-    if !is_main_thread() {
+    if MainThreadMarker::new().is_none() {
         return;
     }
-    let observer = REOPEN_OBSERVER.with(|cell| cell.replace(std::ptr::null_mut()));
-    if !observer.is_null() {
-        // SAFETY: Main-thread guarded and autoreleased; the observer pointer came from `setup_reopen_observer`, the center is null-checked, and `release` balances `new`.
-        objc::rc::autoreleasepool(|| unsafe {
-            let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
-            if !center.is_null() {
-                let _: () = msg_send![center, removeObserver: observer];
+    let observer = REOPEN_OBSERVER.with(|cell| cell.borrow_mut().take());
+    if let Some(observer) = observer {
+        autoreleasepool(|_| {
+            let center = NSNotificationCenter::defaultCenter();
+            // SAFETY: `observer` was registered with `center` in `setup_reopen_observer`
+            // and is still alive until dropped at the end of this block.
+            unsafe {
+                center.removeObserver(&observer);
             }
-            let _: () = msg_send![observer, release];
         });
     }
     // Release the cloned egui::Context held in the global static on shutdown.
@@ -249,22 +211,12 @@ pub(crate) fn is_trusted() -> bool {
 }
 
 pub(crate) fn prompt_permission() -> bool {
-    // SAFETY: Autoreleased; the NSString/NSNumber/NSDictionary objects are null-checked and stay alive for the call, and the NSDictionary is CF-compatible for `AXIsProcessTrustedWithOptions`.
-    objc::rc::autoreleasepool(|| unsafe {
-        let str_obj: *mut Object = msg_send![
-            class!(NSString),
-            stringWithUTF8String: c"AXTrustedCheckOptionPrompt".as_ptr()
-        ];
-        let num_obj: *mut Object = msg_send![class!(NSNumber), numberWithBool: true];
-        if str_obj.is_null() || num_obj.is_null() {
-            return AXIsProcessTrusted();
-        }
-        let dict: *mut Object =
-            msg_send![class!(NSDictionary), dictionaryWithObject: num_obj forKey: str_obj];
-        if dict.is_null() {
-            return AXIsProcessTrusted();
-        }
-        AXIsProcessTrustedWithOptions(dict as *const std::ffi::c_void)
+    autoreleasepool(|_| {
+        let key = ns_string!("AXTrustedCheckOptionPrompt");
+        let val = NSNumber::numberWithBool(true);
+        let dict = NSDictionary::from_slices(&[key], &[&*val]);
+        // SAFETY: `dict` is a valid, toll-free-bridged `CFDictionary` kept alive for the call.
+        unsafe { AXIsProcessTrustedWithOptions(Retained::as_ptr(&dict).cast::<std::ffi::c_void>()) }
     })
 }
 
@@ -275,17 +227,12 @@ pub(crate) fn open_accessibility_settings() {
 }
 
 pub(super) fn capture_frontmost() {
-    // SAFETY: Autoreleased; `NSWorkspace` and its frontmost app are null-checked before messaging, and PIDs are converted/compared without truncation.
-    objc::rc::autoreleasepool(|| unsafe {
-        let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
-        if workspace.is_null() {
+    autoreleasepool(|_| {
+        let workspace = NSWorkspace::sharedWorkspace();
+        let Some(frontmost) = workspace.frontmostApplication() else {
             return;
-        }
-        let frontmost: *mut Object = msg_send![workspace, frontmostApplication];
-        if frontmost.is_null() {
-            return;
-        }
-        let pid: i32 = msg_send![frontmost, processIdentifier];
+        };
+        let pid = frontmost.processIdentifier();
         let Ok(our_pid) = i32::try_from(std::process::id()) else {
             return;
         };
@@ -300,21 +247,15 @@ pub(super) fn restore_focus() {
     // Note: hide_app() is already called on the main thread before spawning
     // the restore/paste worker thread. Calling [NSApplication sharedApplication]
     // from a background thread violates AppKit's main-thread contract (SIGTRAP).
-    // SAFETY: Autoreleased; the PID comes from our own atomic, the `NSRunningApplication` result is null-checked, and no `NSApplication` call is made off the main thread.
-    objc::rc::autoreleasepool(|| unsafe {
+    autoreleasepool(|_| {
         let pid = PREVIOUS_APP_PID.load(Ordering::Relaxed);
         if pid > 0 {
-            let target_app: *mut Object = msg_send![
-                class!(NSRunningApplication),
-                runningApplicationWithProcessIdentifier: pid
-            ];
-            if !target_app.is_null() {
-                // NSApplicationActivateIgnoringOtherApps = 1 << 1 (2)
-                const ACTIVATE_IGNORING_OTHER_APPS: usize = 2;
-                let _: bool = msg_send![
-                    target_app,
-                    activateWithOptions: ACTIVATE_IGNORING_OTHER_APPS
-                ];
+            if let Some(target_app) =
+                NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            {
+                #[allow(deprecated)]
+                let _ = target_app
+                    .activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
             }
         }
     });
@@ -325,18 +266,12 @@ pub(super) fn is_target_foreground() -> bool {
     if target_pid <= 0 {
         return false;
     }
-    // SAFETY: Autoreleased; workspace/frontmost app are null-checked before reading the PID scalar used for the foreground comparison.
-    objc::rc::autoreleasepool(|| unsafe {
-        let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
-        if workspace.is_null() {
+    autoreleasepool(|_| {
+        let workspace = NSWorkspace::sharedWorkspace();
+        let Some(frontmost) = workspace.frontmostApplication() else {
             return false;
-        }
-        let frontmost: *mut Object = msg_send![workspace, frontmostApplication];
-        if frontmost.is_null() {
-            return false;
-        }
-        let pid: i32 = msg_send![frontmost, processIdentifier];
-        pid == target_pid
+        };
+        frontmost.processIdentifier() == target_pid
     })
 }
 
@@ -383,50 +318,29 @@ pub(super) fn simulate_paste() {
 }
 
 pub(super) fn clipboard_change_token() -> Option<u64> {
-    // SAFETY: Autoreleased; the pasteboard is null-checked and `changeCount` is read as a scalar inside the pool's lifetime.
-    objc::rc::autoreleasepool(|| unsafe {
-        let pasteboard: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
-        if pasteboard.is_null() {
-            return None;
-        }
-        let count: isize = msg_send![pasteboard, changeCount];
+    autoreleasepool(|_| {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let count = pasteboard.changeCount();
         Some((count as i64).cast_unsigned())
     })
 }
 
 pub(super) fn is_clipboard_concealed() -> bool {
-    // SAFETY: Autoreleased; pasteboard, types, and each item are null-checked, and `UTF8String` data is read as a `CStr` only while the owning NSString is alive.
-    objc::rc::autoreleasepool(|| unsafe {
-        let pasteboard: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
-        if pasteboard.is_null() {
+    autoreleasepool(|_| {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let Some(types) = pasteboard.types() else {
             return false;
-        }
-        let types: *mut Object = msg_send![pasteboard, types];
-        if types.is_null() {
-            return false;
-        }
-        let count: usize = msg_send![types, count];
-
-        for i in 0..count {
-            let item_type: *mut Object = msg_send![types, objectAtIndex: i];
-            if item_type.is_null() {
-                continue;
-            }
-            let utf8_ptr: *const std::ffi::c_char = msg_send![item_type, UTF8String];
-            if !utf8_ptr.is_null() {
-                if let Ok(type_str) = std::ffi::CStr::from_ptr(utf8_ptr).to_str() {
-                    for marker in &[
-                        "org.nspasteboard.ConcealedType",
-                        "org.nspasteboard.AutoGeneratedType",
-                        "org.nspasteboard.TransientType",
-                        "com.agilebits.onepassword",
-                        "de.petermaurer.TransientPasteboardType",
-                    ] {
-                        if type_str == *marker {
-                            return true;
-                        }
-                    }
-                }
+        };
+        let markers = [
+            ns_string!("org.nspasteboard.ConcealedType"),
+            ns_string!("org.nspasteboard.AutoGeneratedType"),
+            ns_string!("org.nspasteboard.TransientType"),
+            ns_string!("com.agilebits.onepassword"),
+            ns_string!("de.petermaurer.TransientPasteboardType"),
+        ];
+        for item_type in types {
+            if markers.iter().any(|&marker| &*item_type == marker) {
+                return true;
             }
         }
         false
@@ -434,31 +348,19 @@ pub(super) fn is_clipboard_concealed() -> bool {
 }
 
 pub(super) fn mark_clipboard_concealed() {
-    // SAFETY: Autoreleased; pasteboard and NSData are null-checked, each marker is NUL-terminated, and type arrays are null-checked before being passed to AppKit.
-    objc::rc::autoreleasepool(|| unsafe {
-        let pasteboard: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
-        if pasteboard.is_null() {
-            return;
-        }
-        let empty_data: *mut Object = msg_send![class!(NSData), data];
-        if empty_data.is_null() {
-            return;
-        }
-        let nil_obj: *mut Object = std::ptr::null_mut();
+    autoreleasepool(|_| {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let empty_data = NSData::new();
         for marker in [
-            c"org.nspasteboard.ConcealedType",
-            c"org.nspasteboard.TransientType",
+            ns_string!("org.nspasteboard.ConcealedType"),
+            ns_string!("org.nspasteboard.TransientType"),
         ] {
-            let type_str: *mut Object =
-                msg_send![class!(NSString), stringWithUTF8String: marker.as_ptr()];
-            if type_str.is_null() {
-                continue;
+            let types = NSArray::from_slice(&[marker]);
+            // SAFETY: `types` is a valid non-empty `NSArray<NSPasteboardType>` and owner is `None`.
+            unsafe {
+                let _ = pasteboard.addTypes_owner(&types, None);
             }
-            let types_arr: *mut Object = msg_send![class!(NSArray), arrayWithObject: type_str];
-            if !types_arr.is_null() {
-                let _: isize = msg_send![pasteboard, addTypes: types_arr owner: nil_obj];
-                let _: bool = msg_send![pasteboard, setData: empty_data forType: type_str];
-            }
+            let _ = pasteboard.setData_forType(Some(&empty_data), marker);
         }
     });
 }
@@ -469,147 +371,94 @@ extern "C" {}
 pub(super) fn supports_image_ocr() -> bool {
     // Apple Vision framework is available on macOS 10.15+.
     // Verify required classes are registered in the ObjC runtime.
-    objc::runtime::Class::get("VNImageRequestHandler").is_some()
-        && objc::runtime::Class::get("VNRecognizeTextRequest").is_some()
+    AnyClass::get(c"VNImageRequestHandler").is_some()
+        && AnyClass::get(c"VNRecognizeTextRequest").is_some()
 }
 
 /// Looks up the two Vision classes needed for OCR, keeping the original
 /// class-not-found error messages. This only queries the `ObjC` runtime and
 /// performs no message sends, so it needs no autorelease pool of its own.
-fn ocr_classes() -> Result<(&'static Class, &'static Class), String> {
-    let handler_cls = Class::get("VNImageRequestHandler")
+fn ocr_classes() -> Result<(&'static AnyClass, &'static AnyClass), String> {
+    let handler_cls = AnyClass::get(c"VNImageRequestHandler")
         .ok_or_else(|| "VNImageRequestHandler class not found".to_string())?;
-    let request_cls = Class::get("VNRecognizeTextRequest")
+    let request_cls = AnyClass::get(c"VNRecognizeTextRequest")
         .ok_or_else(|| "VNRecognizeTextRequest class not found".to_string())?;
     Ok((handler_cls, request_cls))
 }
 
 /// # Safety
-/// All `ObjC` message sends happen inside the caller's autorelease pool, every
-/// handle is null-checked before use, and a partially built handler is released
-/// before returning an error so the caller only ever owns the returned pair.
+/// All `ObjC` message sends happen inside the caller's autorelease pool, and
+/// `handler_cls` / `request_cls` must be `VNImageRequestHandler` and
+/// `VNRecognizeTextRequest`.
 unsafe fn build_request_handler(
     png_bytes: &[u8],
-    handler_cls: &'static Class,
-    request_cls: &'static Class,
-) -> Result<(*mut Object, *mut Object), String> {
-    let ns_data: *mut Object = msg_send![
-        class!(NSData),
-        dataWithBytes: png_bytes.as_ptr()
-        length: png_bytes.len()
+    handler_cls: &'static AnyClass,
+    request_cls: &'static AnyClass,
+) -> Result<(Retained<AnyObject>, Retained<AnyObject>), String> {
+    let ns_data = NSData::with_bytes(png_bytes);
+
+    let handler_alloc: Allocated<AnyObject> = msg_send![handler_cls, alloc];
+    let handler: Option<Retained<AnyObject>> = msg_send![
+        handler_alloc,
+        initWithData: &*ns_data,
+        options: std::ptr::null::<AnyObject>()
     ];
-    if ns_data.is_null() {
-        return Err("Failed to allocate NSData for image".to_string());
-    }
+    let handler = handler.ok_or_else(|| "Failed to create VNImageRequestHandler".to_string())?;
 
-    let nil_opts: *mut Object = std::ptr::null_mut();
-    let handler_alloc: *mut Object = msg_send![handler_cls, alloc];
-    let handler: *mut Object = msg_send![handler_alloc, initWithData: ns_data options: nil_opts];
-    if handler.is_null() {
-        return Err("Failed to create VNImageRequestHandler".to_string());
-    }
-
-    let request_alloc: *mut Object = msg_send![request_cls, alloc];
-    let request: *mut Object = msg_send![request_alloc, init];
-    if request.is_null() {
-        let _: () = msg_send![handler, release];
-        return Err("Failed to create VNRecognizeTextRequest".to_string());
-    }
+    let request_alloc: Allocated<AnyObject> = msg_send![request_cls, alloc];
+    let request: Option<Retained<AnyObject>> = msg_send![request_alloc, init];
+    let request = request.ok_or_else(|| "Failed to create VNRecognizeTextRequest".to_string())?;
 
     // VNRequestTextRecognitionLevelAccurate = 1
-    let _: () = msg_send![request, setRecognitionLevel: 1isize];
-    let _: () = msg_send![request, setUsesLanguageCorrection: true];
+    let _: () = msg_send![&*request, setRecognitionLevel: 1_isize];
+    let _: () = msg_send![&*request, setUsesLanguageCorrection: true];
 
     Ok((handler, request))
 }
 
 /// # Safety
-/// All `ObjC` message sends happen inside the caller's autorelease pool and the
-/// `error` out-pointer is only read after `performRequests:` has populated it.
-unsafe fn perform_ocr_request(
-    handler: *mut Object,
-    request: *mut Object,
-) -> Result<String, String> {
-    let req_array: *mut Object = msg_send![class!(NSArray), arrayWithObject: request];
-    let mut error: *mut Object = std::ptr::null_mut();
-    let success: bool = msg_send![handler, performRequests: req_array error: &mut error];
-    if success {
-        Ok(recognized_text(request))
-    } else {
-        Err(vision_error_description(error))
+/// `handler` must be a `VNImageRequestHandler` and `request` a `VNRecognizeTextRequest`,
+/// called inside an active autorelease pool.
+unsafe fn perform_ocr_request(handler: &AnyObject, request: &AnyObject) -> Result<String, String> {
+    let req_array = NSArray::from_slice(&[request]);
+    let res: Result<(), Retained<NSError>> =
+        msg_send![handler, performRequests: &*req_array, error: _];
+    match res {
+        Ok(()) => Ok(recognized_text(request)),
+        Err(err) => {
+            let msg = err.localizedDescription().to_string();
+            if msg.is_empty() {
+                Err("Vision text recognition request failed".to_string())
+            } else {
+                Err(msg)
+            }
+        }
     }
 }
 
-/// # Safety
-/// All `ObjC` message sends happen inside the caller's autorelease pool and every
-/// handle is null-checked before use.
-unsafe fn vision_error_description(error: *mut Object) -> String {
-    const FALLBACK: &str = "Vision text recognition request failed";
-    if error.is_null() {
-        return FALLBACK.to_string();
-    }
-    let desc: *mut Object = msg_send![error, localizedDescription];
-    if desc.is_null() {
-        return FALLBACK.to_string();
-    }
-    let utf8: *const std::os::raw::c_char = msg_send![desc, UTF8String];
-    if utf8.is_null() {
-        return FALLBACK.to_string();
-    }
-    std::ffi::CStr::from_ptr(utf8)
-        .to_string_lossy()
-        .into_owned()
-}
-
-/// Returns the recognized string of an observation's top candidate, preserving
-/// every null/invalid check of the original nested extraction.
+/// Returns the recognized string of an observation's top candidate.
 ///
 /// # Safety
-/// All `ObjC` message sends happen inside the caller's autorelease pool and every
-/// handle is null-checked before use.
-unsafe fn first_candidate_text(obs: *mut Object) -> Option<String> {
-    let top_candidates: *mut Object = msg_send![obs, topCandidates: 1usize];
-    if top_candidates.is_null() {
-        return None;
-    }
-    let cand_count: usize = msg_send![top_candidates, count];
-    if cand_count == 0 {
-        return None;
-    }
-    let cand: *mut Object = msg_send![top_candidates, objectAtIndex: 0usize];
-    if cand.is_null() {
-        return None;
-    }
-    let str_obj: *mut Object = msg_send![cand, string];
-    if str_obj.is_null() {
-        return None;
-    }
-    let utf8_ptr: *const std::os::raw::c_char = msg_send![str_obj, UTF8String];
-    if utf8_ptr.is_null() {
-        return None;
-    }
-    std::ffi::CStr::from_ptr(utf8_ptr)
-        .to_str()
-        .ok()
-        .map(str::to_string)
+/// `obs` must be a `VNRecognizedTextObservation` inside an active autorelease pool.
+unsafe fn first_candidate_text(obs: &AnyObject) -> Option<String> {
+    let top_candidates: Option<Retained<NSArray<AnyObject>>> =
+        msg_send![obs, topCandidates: 1_usize];
+    let cand = top_candidates?.firstObject()?;
+    let str_obj: Option<Retained<NSString>> = msg_send![&*cand, string];
+    str_obj.map(|s| s.to_string())
 }
 
 /// # Safety
-/// All `ObjC` message sends happen inside the caller's autorelease pool and every
-/// handle is null-checked before use.
-unsafe fn recognized_text(request: *mut Object) -> String {
-    let results: *mut Object = msg_send![request, results];
-    if results.is_null() {
+/// `request` must be a `VNRecognizeTextRequest` whose results have been populated
+/// inside an active autorelease pool.
+unsafe fn recognized_text(request: &AnyObject) -> String {
+    let results: Option<Retained<NSArray<AnyObject>>> = msg_send![request, results];
+    let Some(results) = results else {
         return String::new();
-    }
-    let count: usize = msg_send![results, count];
-    let mut lines = Vec::with_capacity(count);
-    for i in 0..count {
-        let obs: *mut Object = msg_send![results, objectAtIndex: i];
-        if obs.is_null() {
-            continue;
-        }
-        if let Some(line) = first_candidate_text(obs) {
+    };
+    let mut lines = Vec::with_capacity(results.len());
+    for obs in results {
+        if let Some(line) = first_candidate_text(&obs) {
             lines.push(line);
         }
     }
@@ -624,18 +473,14 @@ pub(super) fn extract_text_from_png(png_bytes: &[u8]) -> Result<String, String> 
         return Err("Image payload is empty".to_string());
     }
 
-    // SAFETY: The whole Vision request runs inside one autorelease pool; helpers
-    // null-check every `ObjC` handle, and request/handler are released exactly once.
-    objc::rc::autoreleasepool(|| unsafe {
+    autoreleasepool(|_| {
         let (handler_cls, request_cls) = ocr_classes()?;
-        let (handler, request) = build_request_handler(png_bytes, handler_cls, request_cls)?;
-
-        let result = perform_ocr_request(handler, request);
-
-        let _: () = msg_send![request, release];
-        let _: () = msg_send![handler, release];
-
-        result
+        // SAFETY: Both classes were validated by `ocr_classes()`, all Vision message sends
+        // run inside this autorelease pool, and `Retained` releases `handler`/`request` on drop.
+        unsafe {
+            let (handler, request) = build_request_handler(png_bytes, handler_cls, request_cls)?;
+            perform_ocr_request(&handler, &request)
+        }
     })
 }
 
