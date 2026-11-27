@@ -1311,6 +1311,7 @@ impl ClipboardApp {
         let counts = self.filter_counts;
 
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
             let tabs = [
                 (ContentFilter::All, icons::STACK, "All", counts.all),
                 (ContentFilter::Text, icons::FILE_TEXT, "Text", counts.text),

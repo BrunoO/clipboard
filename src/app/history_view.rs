@@ -488,31 +488,54 @@ impl ClipboardApp {
         (action, clicked)
     }
 
+    fn render_badge_meta(ui: &mut egui::Ui, meta: Option<&str>, created_at: &str, is_dark: bool) {
+        if let Some(meta_text) = meta.filter(|s| !s.is_empty()) {
+            if ui.available_width() > 0.0 {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(meta_text)
+                            .size(10.0_f32)
+                            .color(crate::theme::text_secondary(is_dark)),
+                    )
+                    .truncate(),
+                );
+            }
+        }
+
+        let relative = format_relative_time(created_at);
+        let ts_text = egui::RichText::new(format!("• {relative}"))
+            .size(10.0_f32)
+            .color(crate::theme::text_secondary(is_dark));
+        let galley = egui::WidgetText::from(ts_text).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Body,
+        );
+        if galley.size().x <= ui.available_width() {
+            ui.add(egui::Label::new(galley).selectable(false))
+                .on_hover_text(created_at);
+        }
+    }
+
     fn render_text_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
         let embedded = item.embedded_colors();
         let color_hint = match embedded.len() {
-            0 => String::new(),
-            1 => format!(" • {} 1 color", icons::PALETTE),
-            n => format!(" • {} {n} colors", icons::PALETTE),
+            0 => None,
+            1 => Some(format!("• {} 1 color", icons::PALETTE)),
+            n => Some(format!("• {} {n} colors", icons::PALETTE)),
         };
         let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Text);
         crate::theme::render_pill_tag(ui, icons::FILE_TEXT, "Text", text_c, bg_c, stroke_c);
-        ui.label(
-            egui::RichText::new(format!("{color_hint} • {}", item.created_at))
-                .size(10.0_f32)
-                .color(crate::theme::text_secondary(is_dark)),
-        );
+        Self::render_badge_meta(ui, color_hint.as_deref(), &item.created_at, is_dark);
     }
 
     fn render_url_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
         let host = item.url_host().unwrap_or_else(|| "link".to_string());
         let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Url);
         crate::theme::render_pill_tag(ui, icons::LINK, "Link", text_c, bg_c, stroke_c);
-        ui.label(
-            egui::RichText::new(format!("• {host} • {}", item.created_at))
-                .size(10.0_f32)
-                .color(crate::theme::text_secondary(is_dark)),
-        );
+        let meta = format!("• {host}");
+        Self::render_badge_meta(ui, Some(&meta), &item.created_at, is_dark);
     }
 
     fn render_code_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
@@ -528,14 +551,8 @@ impl ClipboardApp {
         };
         let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Code);
         crate::theme::render_pill_tag(ui, icon, lang_name, text_c, bg_c, stroke_c);
-        ui.label(
-            egui::RichText::new(format!(
-                "• {line_count} lines{color_hint} • {}",
-                item.created_at
-            ))
-            .size(10.0_f32)
-            .color(crate::theme::text_secondary(is_dark)),
-        );
+        let meta = format!("• {line_count} lines{color_hint}");
+        Self::render_badge_meta(ui, Some(&meta), &item.created_at, is_dark);
     }
 
     fn render_color_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
@@ -544,22 +561,15 @@ impl ClipboardApp {
             .map_or_else(|| item.content.clone(), crate::color::ParsedColor::to_hex);
         let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Color);
         crate::theme::render_pill_tag(ui, icons::PALETTE, "Color", text_c, bg_c, stroke_c);
-        ui.label(
-            egui::RichText::new(format!("• {hex} • {}", item.created_at))
-                .size(10.0_f32)
-                .color(crate::theme::text_secondary(is_dark)),
-        );
+        let meta = format!("• {hex}");
+        Self::render_badge_meta(ui, Some(&meta), &item.created_at, is_dark);
     }
 
     fn render_secret_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
         let (text_c, bg_c, stroke_c) =
             crate::theme::category_pill_colors(is_dark, ItemKind::Secret);
         crate::theme::render_pill_tag(ui, icons::LOCK, "Secret", text_c, bg_c, stroke_c);
-        ui.label(
-            egui::RichText::new(format!("• {}", item.created_at))
-                .size(10.0_f32)
-                .color(crate::theme::text_secondary(is_dark)),
-        );
+        Self::render_badge_meta(ui, None, &item.created_at, is_dark);
     }
 
     fn render_image_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
@@ -569,11 +579,7 @@ impl ClipboardApp {
         };
         let (text_c, bg_c, stroke_c) = crate::theme::category_pill_colors(is_dark, ItemKind::Image);
         crate::theme::render_pill_tag(ui, icons::IMAGE, &dims, text_c, bg_c, stroke_c);
-        ui.label(
-            egui::RichText::new(format!("• {}", item.created_at))
-                .size(10.0_f32)
-                .color(crate::theme::text_secondary(is_dark)),
-        );
+        Self::render_badge_meta(ui, None, &item.created_at, is_dark);
     }
 
     fn render_item_badge(ui: &mut egui::Ui, item: &ClipboardItem, is_dark: bool) {
@@ -598,33 +604,41 @@ impl ClipboardApp {
         let mut action = ItemAction::None;
 
         ui.horizontal(|ui| {
-            if item.in_vault {
-                ui.label(
-                    egui::RichText::new(icons::VAULT)
-                        .size(12.0)
-                        .color(crate::theme::warning_color(is_dark)),
-                )
-                .on_hover_text("In Vault");
-            }
-
-            if let Some(label) = item.label.as_deref() {
-                ui.label(
-                    egui::RichText::new(label)
-                        .size(13.5)
-                        .strong()
-                        .color(crate::theme::text_primary(is_dark)),
-                );
-                ui.add_space(4.0);
-            }
-
-            Self::render_item_badge(ui, item, is_dark);
-
+            // Lay out right-aligned actions first so the left-aligned badge/metadata
+            // receives the exact remaining width and can hide the timestamp when
+            // dynamic action buttons would otherwise overlap it.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(num) = shortcut_num {
                     Self::render_shortcut_badge(ui, num, is_selected, is_dark);
                 }
 
                 action = Self::render_item_header_actions(ui, item, is_selected, is_revealed);
+
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if item.in_vault {
+                        ui.label(
+                            egui::RichText::new(icons::VAULT)
+                                .size(12.0)
+                                .color(crate::theme::warning_color(is_dark)),
+                        )
+                        .on_hover_text("In Vault");
+                    }
+
+                    if let Some(label) = item.label.as_deref() {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(label)
+                                    .size(13.5)
+                                    .strong()
+                                    .color(crate::theme::text_primary(is_dark)),
+                            )
+                            .truncate(),
+                        );
+                        ui.add_space(4.0);
+                    }
+
+                    Self::render_item_badge(ui, item, is_dark);
+                });
             });
         });
 
@@ -1875,9 +1889,71 @@ fn sanitize_browser_url(raw: &str) -> Option<String> {
     }
 }
 
+/// Formats a stored local timestamp (`%Y-%m-%d %H:%M:%S`) as a human-readable relative string
+/// (e.g. `"just now"`, `"2 minutes ago"`, `"3 hours ago"`), falling back to the raw string if
+/// parsing fails.
+fn format_relative_time(created_at: &str) -> String {
+    format_relative_time_from(created_at, chrono::Local::now().naive_local())
+}
+
+fn format_relative_time_from(created_at: &str, now: chrono::NaiveDateTime) -> String {
+    let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(created_at.trim(), "%Y-%m-%d %H:%M:%S")
+    else {
+        return created_at.to_string();
+    };
+
+    let elapsed_secs = now.signed_duration_since(parsed).num_seconds();
+    if elapsed_secs < 60 {
+        return "just now".to_string();
+    }
+
+    let minutes = elapsed_secs / 60;
+    if minutes < 60 {
+        return if minutes == 1 {
+            "1 minute ago".to_string()
+        } else {
+            format!("{minutes} minutes ago")
+        };
+    }
+
+    let hours = minutes / 60;
+    if hours < 24 {
+        return if hours == 1 {
+            "1 hour ago".to_string()
+        } else {
+            format!("{hours} hours ago")
+        };
+    }
+
+    let days = hours / 24;
+    if days < 30 {
+        return if days == 1 {
+            "1 day ago".to_string()
+        } else {
+            format!("{days} days ago")
+        };
+    }
+
+    let months = days / 30;
+    if months < 12 {
+        return if months == 1 {
+            "1 month ago".to_string()
+        } else {
+            format!("{months} months ago")
+        };
+    }
+
+    let years = days / 365;
+    if years <= 1 {
+        "1 year ago".to_string()
+    } else {
+        format!("{years} years ago")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sanitize_browser_url;
+    use super::{format_relative_time, format_relative_time_from, sanitize_browser_url};
 
     #[test]
     fn test_sanitize_browser_url_allows_http_and_https() {
@@ -1908,5 +1984,175 @@ mod tests {
         // Dispatching ExtractTextFromImage for an image that does not exist surfaces warning
         app.dispatch_item_action(super::ItemAction::ExtractTextFromImage(999), &ctx);
         assert!(app.toast.is_some());
+    }
+
+    fn collect_text_shapes(
+        shapes: &[eframe::egui::epaint::ClippedShape],
+    ) -> Vec<(String, eframe::egui::Rect)> {
+        fn walk(shape: &eframe::egui::Shape, out: &mut Vec<(String, eframe::egui::Rect)>) {
+            match shape {
+                eframe::egui::Shape::Text(text_shape) => {
+                    out.push((
+                        text_shape.galley.job.text.clone(),
+                        text_shape.visual_bounding_rect(),
+                    ));
+                }
+                eframe::egui::Shape::Vec(children) => {
+                    for child in children {
+                        walk(child, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = Vec::new();
+        for clipped in shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    #[test]
+    fn test_item_header_hides_timestamp_when_buttons_would_overlap() {
+        use eframe::egui;
+
+        let item = crate::db::ClipboardItem {
+            id: 1,
+            kind: crate::db::ItemKind::Url,
+            content: "https://github.com/BrunoO/clipboard".to_string(),
+            width: None,
+            height: None,
+            created_at: "2026-11-27 00:35:34".to_string(),
+            embedded_colors: Vec::new(),
+            label: None,
+            notes: None,
+            in_vault: false,
+        };
+
+        let render_at_width = |width: f32, is_selected: bool| {
+            let ctx = egui::Context::default();
+            let raw_input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 200.0),
+                )),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(raw_input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    super::ClipboardApp::render_item_header(
+                        ui,
+                        &item,
+                        Some(1),
+                        is_selected,
+                        false,
+                        true,
+                    );
+                });
+            });
+            output.textures_delta.clear();
+            collect_text_shapes(&output.shapes)
+        };
+
+        let expected_ts = format_relative_time(&item.created_at);
+
+        // Narrow row with selected dynamic action buttons: timestamp must be hidden
+        let narrow_selected = render_at_width(340.0, true);
+        assert!(
+            !narrow_selected
+                .iter()
+                .any(|(text, _)| text.contains(&expected_ts)),
+            "Expected timestamp to be hidden on narrow selected header, got: {narrow_selected:?}"
+        );
+
+        // Same narrow width when unselected (fewer buttons): timestamp has room and is shown
+        let narrow_unselected = render_at_width(340.0, false);
+        assert!(
+            narrow_unselected
+                .iter()
+                .any(|(text, _)| text.contains(&expected_ts)),
+            "Expected timestamp to be visible on unselected header"
+        );
+
+        // Spacious row with selected dynamic action buttons: timestamp is shown without overlap
+        let wide_selected = render_at_width(640.0, true);
+        let ts_rect = wide_selected
+            .iter()
+            .find(|(text, _)| text.contains(&expected_ts))
+            .map(|(_, rect)| *rect)
+            .expect("Expected timestamp to be visible on wide selected header");
+        let open_btn_rect = wide_selected
+            .iter()
+            .find(|(text, _)| text.contains("Open"))
+            .map(|(_, rect)| *rect)
+            .expect("Expected Open button on selected URL header");
+        assert!(
+            ts_rect.max.x <= open_btn_rect.min.x,
+            "Timestamp {ts_rect:?} must not overlap dynamic action button {open_btn_rect:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_buckets() {
+        let now = chrono::NaiveDateTime::parse_from_str("2026-11-27 12:00:00", "%Y-%m-%d %H:%M:%S")
+            .expect("valid reference timestamp");
+
+        assert_eq!(
+            format_relative_time_from("2026-11-27 12:00:00", now),
+            "just now"
+        );
+        assert_eq!(
+            format_relative_time_from("2026-11-27 11:59:15", now),
+            "just now"
+        );
+        assert_eq!(
+            format_relative_time_from("2026-11-27 12:00:30", now),
+            "just now"
+        );
+        assert_eq!(
+            format_relative_time_from("2026-11-27 11:59:00", now),
+            "1 minute ago"
+        );
+        assert_eq!(
+            format_relative_time_from("2026-11-27 11:58:00", now),
+            "2 minutes ago"
+        );
+        assert_eq!(
+            format_relative_time_from("2026-11-27 11:00:00", now),
+            "1 hour ago"
+        );
+        assert_eq!(
+            format_relative_time_from("2026-11-27 07:00:00", now),
+            "5 hours ago"
+        );
+        assert_eq!(
+            format_relative_time_from("2026-11-26 12:00:00", now),
+            "1 day ago"
+        );
+        assert_eq!(
+            format_relative_time_from("2026-11-15 12:00:00", now),
+            "12 days ago"
+        );
+        assert_eq!(
+            format_relative_time_from("2026-10-25 12:00:00", now),
+            "1 month ago"
+        );
+        assert_eq!(
+            format_relative_time_from("2026-05-27 12:00:00", now),
+            "6 months ago"
+        );
+        assert_eq!(
+            format_relative_time_from("2025-11-27 12:00:00", now),
+            "1 year ago"
+        );
+        assert_eq!(
+            format_relative_time_from("2024-11-27 12:00:00", now),
+            "2 years ago"
+        );
+        assert_eq!(
+            format_relative_time_from("not-a-timestamp", now),
+            "not-a-timestamp"
+        );
     }
 }

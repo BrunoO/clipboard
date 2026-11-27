@@ -210,12 +210,16 @@ fn acquire_instance_lock(
     }
 }
 
+/// Initial logical window size (`[width, height]`), wide enough for all quick-filter tabs
+/// to sit on a single row at startup.
+pub(crate) const INITIAL_WINDOW_SIZE: [f32; 2] = [660.0, 580.0];
+
 /// Builds the `eframe::NativeOptions` configuring the initial window dimensions, minimum size,
 /// title bar, platform viewport chrome, and application icon.
 fn build_native_options() -> eframe::NativeOptions {
     let mut viewport = platform::configure_viewport_chrome(
         egui::ViewportBuilder::default()
-            .with_inner_size([440.0, 580.0])
+            .with_inner_size(INITIAL_WINDOW_SIZE)
             .with_min_inner_size([320.0, 400.0])
             .with_title("CipherClipboard"),
     );
@@ -325,11 +329,72 @@ mod tests {
         let options = build_native_options();
         assert_eq!(options.renderer, eframe::Renderer::Wgpu);
         assert_eq!(options.viewport.title, Some("CipherClipboard".to_string()));
-        assert_eq!(options.viewport.inner_size, Some(egui::vec2(440.0, 580.0)));
+        assert_eq!(
+            options.viewport.inner_size,
+            Some(egui::vec2(INITIAL_WINDOW_SIZE[0], INITIAL_WINDOW_SIZE[1]))
+        );
         assert_eq!(
             options.viewport.min_inner_size,
             Some(egui::vec2(320.0, 400.0))
         );
+    }
+
+    #[test]
+    fn test_quick_filters_fit_on_single_row_at_initial_width() {
+        let ctx = egui::Context::default();
+        setup_egui_context(&ctx, settings::AppThemeMode::Dark);
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(INITIAL_WINDOW_SIZE[0], INITIAL_WINDOW_SIZE[1]),
+            )),
+            ..Default::default()
+        };
+
+        let mut tab_rects = Vec::new();
+        let mut output = ctx.run_ui(raw_input, |ui| {
+            egui::Panel::top("top_panel")
+                .frame(
+                    egui::Frame::new()
+                        .fill(theme::panel_background(true))
+                        .inner_margin(egui::Margin::symmetric(10, 5)),
+                )
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 5.0;
+                        let tabs = [
+                            (icons::STACK, "All", 99_usize),
+                            (icons::FILE_TEXT, "Text", 42),
+                            (icons::LINK, "Links", 12),
+                            (icons::CODE, "Code", 15),
+                            (icons::PALETTE, "Colors", 8),
+                            (icons::VAULT, "Vault", 10),
+                            (icons::IMAGE, "Images", 12),
+                        ];
+                        for (idx, (icon, label, count)) in tabs.into_iter().enumerate() {
+                            let resp =
+                                theme::render_segmented_tab(ui, true, idx == 0, icon, label, count);
+                            tab_rects.push((label, resp.rect));
+                        }
+                    });
+                });
+        });
+        output.textures_delta.clear();
+
+        assert_eq!(tab_rects.len(), 7);
+        let first_y = tab_rects[0].1.min.y;
+        let max_x = tab_rects
+            .iter()
+            .map(|(_, rect)| rect.max.x)
+            .fold(0.0_f32, f32::max);
+        for (label, rect) in &tab_rects {
+            assert!(
+                (rect.min.y - first_y).abs() < 1.0,
+                "Filter tab '{label}' wrapped onto a second row (y={} vs first_y={first_y}, max_x={max_x}, window_width={})",
+                rect.min.y,
+                INITIAL_WINDOW_SIZE[0]
+            );
+        }
     }
 
     #[test]
