@@ -63,7 +63,7 @@ pub(crate) fn log_message(level: &str, message: &str) {
         }
     }
     if let Ok(mut file) = crate::platform::fs_security::open_restricted_append_file(path) {
-        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let ts = jiff::ZonedDateTime::now().strftime("%Y-%m-%d %H:%M:%S");
         let _ = writeln!(file, "[{ts}] [{level}] {message}");
     }
 }

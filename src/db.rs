@@ -1,4 +1,4 @@
-use chrono::Local;
+use jiff::ZonedDateTime;
 use rusqlite::{params, Connection, Result};
 use std::fmt;
 use std::path::Path;
@@ -475,7 +475,9 @@ impl Database {
     /// Captures the creation timestamp and prune limit shared by every insert path.
     fn insert_context(&self) -> (String, usize) {
         (
-            Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            ZonedDateTime::now()
+                .strftime("%Y-%m-%d %H:%M:%S")
+                .to_string(),
             self.0.max_history.load(Ordering::Relaxed),
         )
     }

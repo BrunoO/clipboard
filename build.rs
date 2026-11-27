@@ -2,7 +2,7 @@ fn main() {
     // Cargo sets this from the target platform, which is the authoritative gate
     // when cross-compiling to Windows from a non-Windows host.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let mut res = winres::WindowsResource::new();
+        let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icon.ico");
         res.set("ProductName", "CipherClipboard");
         res.set(
