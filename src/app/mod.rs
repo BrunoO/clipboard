@@ -1359,11 +1359,19 @@ impl ClipboardApp {
         ui.horizontal(|ui| {
             ui.add_space(crate::theme::header_left_padding());
 
-            let title_resp = ui.heading(
-                egui::RichText::new(format!("{} Clipboard", icons::LOCK_KEY))
-                    .color(crate::theme::text_primary(is_dark))
-                    .strong(),
-            );
+            let title_resp = if cfg!(target_os = "windows") {
+                ui.label(
+                    egui::RichText::new(icons::LOCK_KEY.to_string())
+                        .color(crate::theme::text_secondary(is_dark))
+                        .size(14.0_f32),
+                )
+            } else {
+                ui.heading(
+                    egui::RichText::new(format!("{} Clipboard", icons::LOCK_KEY))
+                        .color(crate::theme::text_primary(is_dark))
+                        .strong(),
+                )
+            };
             if title_resp.interact(egui::Sense::drag()).drag_started() {
                 self.window_state.last_drag_or_move_instant = Some(Instant::now());
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -2391,6 +2399,30 @@ struct HistoryNavInput {
     copy_shortcut_slot: Option<usize>,
 }
 
+fn consume_key_logical_or_physical(
+    i: &mut egui::InputState,
+    modifiers: egui::Modifiers,
+    key: egui::Key,
+) -> bool {
+    let mut count = 0usize;
+    i.events.retain(|event| {
+        let is_match = matches!(
+            event,
+            egui::Event::Key {
+                key: ev_key,
+                physical_key,
+                modifiers: ev_mods,
+                pressed: true,
+                ..
+            } if (*ev_key == key || *physical_key == Some(key))
+                && ev_mods.matches_logically(modifiers)
+        );
+        count += usize::from(is_match);
+        !is_match
+    });
+    count > 0
+}
+
 fn read_history_nav_input(ctx: &egui::Context) -> HistoryNavInput {
     const NUM_KEYS: [egui::Key; 9] = [
         egui::Key::Num1,
@@ -2407,7 +2439,7 @@ fn read_history_nav_input(ctx: &egui::Context) -> HistoryNavInput {
     let mut nav = HistoryNavInput::default();
     ctx.input_mut(|i| {
         for (idx, &k) in NUM_KEYS.iter().enumerate() {
-            if i.consume_key(egui::Modifiers::COMMAND, k) {
+            if consume_key_logical_or_physical(i, egui::Modifiers::COMMAND, k) {
                 nav.copy_shortcut_slot = Some(idx);
                 return;
             }
