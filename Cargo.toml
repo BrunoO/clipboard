@@ -109,6 +109,7 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 crossbeam-channel = "0.5.17"
 zeroize = "1.9"
+rfd = "0.15"
 
 [dev-dependencies]
 tempfile = "3.17"

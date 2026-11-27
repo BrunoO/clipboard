@@ -163,6 +163,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 key_storage_mode,
                 services,
                 settings,
+                data_dir,
             )))
         }),
     );
@@ -288,6 +289,77 @@ fn spawn_smoke_quit(tray_tx: &std::sync::mpsc::Sender<tray::TrayAction>, ctx: &e
     let _ = (tray_tx, ctx);
 }
 
+const PENDING_RESTORE_FILE: &str = "pending_restore.db";
+const PENDING_RESTORE_MARKER: &str = "pending_restore.marker";
+
+fn pending_restore_paths(data_dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    (
+        data_dir.join(PENDING_RESTORE_FILE),
+        data_dir.join(PENDING_RESTORE_MARKER),
+    )
+}
+
+fn apply_pending_restore_if_any(
+    data_dir: &std::path::Path,
+    db_path: &std::path::Path,
+    encryption_key: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (staged_db, marker) = pending_restore_paths(data_dir);
+    if !marker.exists() {
+        if staged_db.exists() {
+            let _ = fs::remove_file(&staged_db);
+            logging::log_message(
+                "WARN",
+                "Removed staged restore file without marker; restore was not applied.",
+            );
+        }
+        return Ok(());
+    }
+    if !staged_db.exists() {
+        let _ = fs::remove_file(&marker);
+        return Err("Pending restore marker found, but staged backup file is missing.".into());
+    }
+
+    // Validate staged DB can be opened with the current key and has expected schema.
+    let staged_conn = rusqlite::Connection::open(&staged_db)?;
+    staged_conn.pragma_update(None, "key", encryption_key)?;
+    let _: i64 =
+        staged_conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))?;
+    let has_history: i64 = staged_conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='clipboard_history'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_history == 0 {
+        return Err("Staged backup is not a valid CipherClipboard database.".into());
+    }
+    drop(staged_conn);
+
+    if db_path.exists() {
+        let ts = jiff::ZonedDateTime::now()
+            .strftime("%Y%m%d-%H%M%S")
+            .to_string();
+        let pre_restore = data_dir.join(format!("pre-restore-{ts}.db"));
+        let current_db = Database::open(db_path, encryption_key)?;
+        current_db
+            .export_backup(&pre_restore)
+            .map_err(|e| format!("Failed to create pre-restore backup: {e}"))?;
+        logging::log_message(
+            "INFO",
+            &format!("Pre-restore backup created at {}", pre_restore.display()),
+        );
+    }
+
+    let _ = fs::remove_file(db_path.with_extension("db-wal"));
+    let _ = fs::remove_file(db_path.with_extension("db-shm"));
+    fs::copy(&staged_db, db_path)?;
+    let _ = crate::platform::fs_security::set_restricted_permissions(db_path);
+    let _ = fs::remove_file(&staged_db);
+    let _ = fs::remove_file(&marker);
+    logging::log_message("INFO", "Pending backup restore applied successfully");
+    Ok(())
+}
+
 /// Opens or initializes the `SQLCipher` database, ensuring the in-memory encryption key
 /// is zeroized and dropped before returning.
 fn open_encrypted_database(
@@ -296,6 +368,7 @@ fn open_encrypted_database(
     let db_path = data_dir.join("clipboard_history.db");
     let db_exists = db_path.exists();
     let (encryption_key, storage_mode) = crypto::get_or_create_encryption_key(data_dir, db_exists)?;
+    apply_pending_restore_if_any(data_dir, &db_path, &encryption_key)?;
     let db = Database::open(&db_path, &encryption_key)?;
     Ok((db, storage_mode))
 }

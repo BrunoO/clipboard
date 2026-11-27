@@ -151,7 +151,7 @@ Deleting the app data directory — `~/Library/Application Support/cipherclipboa
 
 Use **Settings → Export Encrypted Backup…** to create a consistent encrypted copy of `clipboard_history.db`. The backup stays encrypted with the same SQLCipher key, so restoring it on another machine requires the original encryption key.
 
-**Restore:** quit CipherClipboard, replace `clipboard_history.db` in the app data directory with the backup (keep the filename `clipboard_history.db`), make sure the matching encryption key is available, then restart.
+**Restore:** use **Settings → Restore Backup…** to select an encrypted backup. CipherClipboard validates the backup with the current key, stages it, and applies it on next restart (creating a pre-restore backup of the current DB first). Manual restore is also possible: quit CipherClipboard, replace `clipboard_history.db` in the app data directory, ensure the matching encryption key is available, then restart.
 
 **Locate/copy the encryption key (sensitive — anyone with it can decrypt your DB):**
 

@@ -1123,6 +1123,32 @@ impl Database {
         Ok(())
     }
 
+    /// Validates that `path` is a `SQLCipher` database that can be opened with this
+    /// database's key and contains the expected clipboard schema.
+    ///
+    /// # Errors
+    /// Returns a descriptive error if the file cannot be opened, keyed, or validated.
+    pub(crate) fn validate_backup_file(&self, path: &Path) -> Result<(), String> {
+        let conn =
+            Connection::open(path).map_err(|e| format!("Failed to open backup file: {e}"))?;
+        conn.pragma_update(None, "key", self.0.encryption_key.as_str())
+            .map_err(|e| format!("Failed to decrypt backup (wrong key or invalid file): {e}"))?;
+        let _: i64 = conn
+            .query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to read backup (wrong key or invalid file): {e}"))?;
+        let has_history: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='clipboard_history'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to validate backup schema: {e}"))?;
+        if has_history == 0 {
+            return Err("Backup does not contain a CipherClipboard history table".to_string());
+        }
+        Ok(())
+    }
+
     /// Exports a consistent encrypted backup of the database to `dest`.
     ///
     /// Uses the SQLite Online Backup API against the live `SQLCipher` connection,
@@ -2149,5 +2175,25 @@ mod tests {
 
         let wrong_key = test_hex_key(43);
         assert!(Database::open(&backup_path, &wrong_key).is_err());
+    }
+
+    #[test]
+    fn test_validate_backup_file() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("source.db");
+        let backup_path = dir.path().join("backup.db");
+        let key = test_hex_key(42);
+        let db = Database::open(&db_path, &key).unwrap();
+        db.insert("hello").unwrap();
+        db.export_backup(&backup_path).unwrap();
+
+        db.validate_backup_file(&backup_path).unwrap();
+
+        let other = Database::open(&dir.path().join("other.db"), &test_hex_key(99)).unwrap();
+        assert!(other.validate_backup_file(&backup_path).is_err());
+
+        let not_a_db = dir.path().join("notadb.db");
+        std::fs::write(&not_a_db, b"not a database").unwrap();
+        assert!(db.validate_backup_file(&not_a_db).is_err());
     }
 }

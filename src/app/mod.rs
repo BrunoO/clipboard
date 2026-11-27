@@ -316,6 +316,7 @@ pub(crate) struct ClipboardApp {
     title_bar_dark_mode: Option<bool>,
     is_quitting: bool,
     pub(crate) copied_item_pulse: Option<(i64, Instant)>,
+    data_dir: std::path::PathBuf,
 }
 
 impl ClipboardApp {
@@ -325,6 +326,7 @@ impl ClipboardApp {
         key_storage_mode: crate::crypto::KeyStorageMode,
         services: AppServices,
         settings: AppSettings,
+        data_dir: std::path::PathBuf,
     ) -> Self {
         db.apply_settings(&settings);
 
@@ -396,6 +398,7 @@ impl ClipboardApp {
             title_bar_dark_mode: None,
             is_quitting: false,
             copied_item_pulse: None,
+            data_dir,
         }
     }
 
@@ -512,6 +515,43 @@ impl ClipboardApp {
                 self.show_error_toast(&format!("{} Backup export failed: {error}", icons::WARNING));
             }
         }
+    }
+
+    fn stage_restore_backup(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("CipherClipboard backup", &["db"])
+            .set_title("Select encrypted backup to restore")
+            .pick_file()
+        else {
+            return;
+        };
+
+        if let Err(error) = self.db.validate_backup_file(&path) {
+            self.show_error_toast(&format!("{} {error}", icons::WARNING));
+            return;
+        }
+
+        let staged_db = self.data_dir.join("pending_restore.db");
+        let marker = self.data_dir.join("pending_restore.marker");
+        if let Err(e) = std::fs::copy(&path, &staged_db) {
+            self.show_error_toast(&format!("{} Failed to stage restore: {e}", icons::WARNING));
+            return;
+        }
+        let _ = crate::platform::fs_security::set_restricted_permissions(&staged_db);
+        if let Err(e) = std::fs::write(&marker, b"pending") {
+            let _ = std::fs::remove_file(&staged_db);
+            self.show_error_toast(&format!("{} Failed to mark restore: {e}", icons::WARNING));
+            return;
+        }
+
+        crate::logging::log_message(
+            "INFO",
+            &format!("Staged backup restore from {}", path.display()),
+        );
+        self.show_warning_toast(&format!(
+            "{} Restore staged. Restart CipherClipboard to apply. Current DB will be backed up first.",
+            icons::WARNING
+        ));
     }
 
     const fn keyring_explanation_copy(
@@ -2793,6 +2833,7 @@ mod tests {
             title_bar_dark_mode: None,
             is_quitting: false,
             copied_item_pulse: None,
+            data_dir: dir.path().to_path_buf(),
         };
 
         assert!(!app.is_quitting);
@@ -2920,6 +2961,7 @@ mod tests {
             title_bar_dark_mode: None,
             is_quitting: false,
             copied_item_pulse: None,
+            data_dir: dir.path().to_path_buf(),
         };
 
         let ctx = egui::Context::default();
@@ -2979,6 +3021,7 @@ mod tests {
             title_bar_dark_mode: None,
             is_quitting: false,
             copied_item_pulse: None,
+            data_dir: dir.path().to_path_buf(),
         };
 
         (app, notify_tx, dir)
@@ -3213,6 +3256,7 @@ mod tests {
             title_bar_dark_mode: None,
             is_quitting: false,
             copied_item_pulse: None,
+            data_dir: dir.path().to_path_buf(),
         };
 
         // Enqueue OpenSettings followed by Show: both must execute so OpenSettings is not dropped.
