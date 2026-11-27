@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use objc2::rc::{autoreleasepool, Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject, NSObject};
-use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, ClassType, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSApplicationDidBecomeActiveNotification,
     NSApplicationDidUnhideNotification, NSPasteboard, NSRunningApplication, NSWorkspace,
@@ -317,9 +317,16 @@ pub(super) fn simulate_paste() {
     }
 }
 
+fn general_pasteboard() -> Option<Retained<NSPasteboard>> {
+    // SAFETY: `+[NSPasteboard generalPasteboard]` is a standard AppKit class method.
+    // Receiving `Option<Retained<_>>` avoids panicking when the pasteboard server is
+    // unavailable (e.g. headless/sandboxed test runners or early login sessions).
+    unsafe { msg_send![NSPasteboard::class(), generalPasteboard] }
+}
+
 pub(super) fn clipboard_change_token() -> Option<u64> {
     autoreleasepool(|_| {
-        let pasteboard = NSPasteboard::generalPasteboard();
+        let pasteboard = general_pasteboard()?;
         let count = pasteboard.changeCount();
         Some((count as i64).cast_unsigned())
     })
@@ -327,7 +334,9 @@ pub(super) fn clipboard_change_token() -> Option<u64> {
 
 pub(super) fn is_clipboard_concealed() -> bool {
     autoreleasepool(|_| {
-        let pasteboard = NSPasteboard::generalPasteboard();
+        let Some(pasteboard) = general_pasteboard() else {
+            return false;
+        };
         let Some(types) = pasteboard.types() else {
             return false;
         };
@@ -349,7 +358,9 @@ pub(super) fn is_clipboard_concealed() -> bool {
 
 pub(super) fn mark_clipboard_concealed() {
     autoreleasepool(|_| {
-        let pasteboard = NSPasteboard::generalPasteboard();
+        let Some(pasteboard) = general_pasteboard() else {
+            return;
+        };
         let empty_data = NSData::new();
         for marker in [
             ns_string!("org.nspasteboard.ConcealedType"),

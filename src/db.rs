@@ -149,7 +149,6 @@ struct DatabaseInner {
     ignore_concealed: AtomicBool,
     auto_detect_secrets: AtomicBool,
     transient_text: Mutex<Option<zeroize::Zeroizing<String>>>,
-    encryption_key: zeroize::Zeroizing<String>,
 }
 
 /// Thread-safe handle to the encrypted `SQLCipher` database.
@@ -314,7 +313,6 @@ impl Database {
             ignore_concealed: AtomicBool::new(true),
             auto_detect_secrets: AtomicBool::new(true),
             transient_text: Mutex::new(None),
-            encryption_key: zeroize::Zeroizing::new(encryption_key.to_string()),
         })))
     }
 
@@ -1123,15 +1121,15 @@ impl Database {
         Ok(())
     }
 
-    /// Validates that `path` is a `SQLCipher` database that can be opened with this
-    /// database's key and contains the expected clipboard schema.
+    /// Validates that `path` is a `SQLCipher` database that can be opened with
+    /// `encryption_key` and contains the expected clipboard schema.
     ///
     /// # Errors
     /// Returns a descriptive error if the file cannot be opened, keyed, or validated.
-    pub(crate) fn validate_backup_file(&self, path: &Path) -> Result<(), String> {
+    pub(crate) fn validate_backup_file(path: &Path, encryption_key: &str) -> Result<(), String> {
         let conn =
             Connection::open(path).map_err(|e| format!("Failed to open backup file: {e}"))?;
-        conn.pragma_update(None, "key", self.0.encryption_key.as_str())
+        conn.pragma_update(None, "key", encryption_key)
             .map_err(|e| format!("Failed to decrypt backup (wrong key or invalid file): {e}"))?;
         let _: i64 = conn
             .query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))
@@ -1159,7 +1157,7 @@ impl Database {
     /// # Errors
     /// Returns a descriptive error if the backup cannot be created, keyed,
     /// permission-restricted, or renamed.
-    pub(crate) fn export_backup(&self, dest: &Path) -> Result<(), String> {
+    pub(crate) fn export_backup(&self, dest: &Path, encryption_key: &str) -> Result<(), String> {
         let parent = dest
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -1178,7 +1176,7 @@ impl Database {
             let mut dst_conn = Connection::open(&tmp_path)
                 .map_err(|e| format!("Failed to create backup file: {e}"))?;
             dst_conn
-                .pragma_update(None, "key", self.0.encryption_key.as_str())
+                .pragma_update(None, "key", encryption_key)
                 .map_err(|e| format!("Failed to key backup database: {e}"))?;
             dst_conn
                 .execute_batch("PRAGMA cipher_memory_security = ON;")
@@ -1190,7 +1188,7 @@ impl Database {
             backup
                 .run_to_completion(
                     100,
-                    std::time::Duration::from_millis(10),
+                    std::time::Duration::ZERO,
                     None::<fn(rusqlite::backup::Progress)>,
                 )
                 .map_err(|e| format!("Failed to export backup: {e}"))?;
@@ -1201,7 +1199,7 @@ impl Database {
                 return Err("Failed to set restrictive permissions on backup file".to_string());
             }
 
-            std::fs::rename(&tmp_path, dest)
+            crate::platform::fs_security::replace_file_atomically(&tmp_path, dest)
                 .map_err(|e| format!("Failed to finalize backup file: {e}"))?;
             Ok(())
         })();
@@ -2163,7 +2161,7 @@ mod tests {
 
         db.insert("hello").unwrap();
         db.insert_secret("top-secret").unwrap();
-        db.export_backup(&backup_path).unwrap();
+        db.export_backup(&backup_path, &key).unwrap();
 
         let backup_db = Database::open(&backup_path, &key).unwrap();
         let items = backup_db.get_recent(10, None).unwrap();
@@ -2185,15 +2183,15 @@ mod tests {
         let key = test_hex_key(42);
         let db = Database::open(&db_path, &key).unwrap();
         db.insert("hello").unwrap();
-        db.export_backup(&backup_path).unwrap();
+        db.export_backup(&backup_path, &key).unwrap();
 
-        db.validate_backup_file(&backup_path).unwrap();
+        Database::validate_backup_file(&backup_path, &key).unwrap();
 
-        let other = Database::open(&dir.path().join("other.db"), &test_hex_key(99)).unwrap();
-        assert!(other.validate_backup_file(&backup_path).is_err());
+        let wrong_key = test_hex_key(99);
+        assert!(Database::validate_backup_file(&backup_path, &wrong_key).is_err());
 
         let not_a_db = dir.path().join("notadb.db");
         std::fs::write(&not_a_db, b"not a database").unwrap();
-        assert!(db.validate_backup_file(&not_a_db).is_err());
+        assert!(Database::validate_backup_file(&not_a_db, &key).is_err());
     }
 }

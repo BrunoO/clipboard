@@ -729,13 +729,7 @@ impl ClipboardApp {
 
     fn render_backup_restore_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         ui.horizontal(|ui| {
-            let key_hint = if cfg!(target_os = "macos") {
-                "Key (sensitive): Keychain Access or `security find-generic-password -s cipherclipboard -a db_encryption_key -w`"
-            } else if cfg!(target_os = "windows") {
-                "Key (sensitive): Credential Manager → Windows Credentials → service `cipherclipboard`, account `db_encryption_key`"
-            } else {
-                "Key (sensitive): Secret Service/Seahorse or `secret-tool lookup service cipherclipboard username db_encryption_key`"
-            };
+            let key_hint = crate::platform::KEYRING_RECOVERY_HINT;
             if ui
                 .button(format!("{} Export Encrypted Backup…", icons::DATABASE))
                 .on_hover_text(format!(

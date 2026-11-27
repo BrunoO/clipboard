@@ -556,6 +556,13 @@ pub(crate) const fn header_left_padding() -> f32 {
     platform_select(68.0_f32, 0.0_f32, 0.0_f32)
 }
 
+/// Whether the in-app header should render a compact icon-only title (Windows already
+/// displays the app name in the native window title bar).
+#[must_use]
+pub(crate) const fn use_compact_header_icon() -> bool {
+    platform_select(false, true, false)
+}
+
 /// Top space for the main header panel.
 #[must_use]
 pub(crate) const fn top_padding() -> f32 {

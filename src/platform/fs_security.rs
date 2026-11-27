@@ -170,7 +170,46 @@ pub(crate) fn write_instance_pid_file(path: &Path, pid: u32) -> std::io::Result<
     file.sync_all()
 }
 
-/// Restricts a fallback key file and returns `true` when hardening could not be applied.
+/// Replaces `dst` with `src` (expected to reside in the same directory).
+///
+/// On Unix, `fs::rename` atomically replaces an existing destination file.
+/// On Windows, `fs::rename` fails if `dst` already exists, so `dst` is moved
+/// aside to a temporary backup path and rolled back if moving `src` into place fails.
+///
+/// # Errors
+/// Returns the underlying I/O error if renaming fails.
+pub(crate) fn replace_file_atomically(src: &Path, dst: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::rename(src, dst)
+    }
+    #[cfg(not(unix))]
+    {
+        if !dst.exists() {
+            return fs::rename(src, dst);
+        }
+        let backup_name = format!(
+            ".{}.replacing-{}",
+            dst.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
+            std::process::id()
+        );
+        let backup = dst.with_file_name(backup_name);
+        let _ = fs::remove_file(&backup);
+        fs::rename(dst, &backup)?;
+        match fs::rename(src, dst) {
+            Ok(()) => {
+                let _ = fs::remove_file(&backup);
+                Ok(())
+            }
+            Err(err) => {
+                let _ = fs::rename(&backup, dst);
+                Err(err)
+            }
+        }
+    }
+}
+
+/// Restricts a sensitive file to owner-only permissions and returns `true` when hardening could not be applied.
 #[cfg(unix)]
 pub(crate) fn set_restricted_permissions(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -180,7 +219,10 @@ pub(crate) fn set_restricted_permissions(path: &Path) -> bool {
     } else {
         crate::logging::log_message(
             "WARN",
-            "Could not set 0600 permissions on the local key file. Unlock the OS keyring and restart to migrate the key.",
+            &format!(
+                "Could not set 0600 permissions on sensitive file '{}'.",
+                path.display()
+            ),
         );
         true
     }
@@ -211,7 +253,7 @@ pub(crate) fn windows_icacls_grant(username: &str, domain: Option<&str>) -> Opti
     Some(format!("{user}:(F)"))
 }
 
-/// Restricts a fallback key file with `icacls` and returns `true` when hardening failed.
+/// Restricts a sensitive file with `icacls` and returns `true` when hardening failed.
 #[cfg(target_os = "windows")]
 pub(crate) fn set_restricted_permissions(path: &Path) -> bool {
     use std::os::windows::process::CommandExt;
@@ -222,7 +264,7 @@ pub(crate) fn set_restricted_permissions(path: &Path) -> bool {
     let Some(path_str) = path.to_str() else {
         crate::logging::log_message(
             "WARN",
-            "Skipping key file ACL hardening: key file path is not valid Unicode. Unlock the OS keyring and restart to migrate the key.",
+            "Skipping ACL hardening: sensitive file path is not valid Unicode.",
         );
         return true;
     };
@@ -238,7 +280,7 @@ pub(crate) fn set_restricted_permissions(path: &Path) -> bool {
     if username.trim().is_empty() {
         crate::logging::log_message(
             "WARN",
-            "Skipping key file ACL hardening: USERNAME is empty. Set USERNAME/USERDOMAIN or unlock the OS keyring and restart to migrate the key.",
+            "Skipping ACL hardening: USERNAME is empty. Set USERNAME/USERDOMAIN to enable icacls hardening.",
         );
         return true;
     }
@@ -246,7 +288,7 @@ pub(crate) fn set_restricted_permissions(path: &Path) -> bool {
     let Some(grant) = windows_icacls_grant(&username, domain.as_deref()) else {
         crate::logging::log_message(
             "WARN",
-            "Skipping key file ACL hardening: USERNAME is empty. Set USERNAME/USERDOMAIN or unlock the OS keyring and restart to migrate the key.",
+            "Skipping ACL hardening: USERNAME is empty. Set USERNAME/USERDOMAIN to enable icacls hardening.",
         );
         return true;
     };
@@ -261,7 +303,8 @@ pub(crate) fn set_restricted_permissions(path: &Path) -> bool {
         Ok(output) if output.status.success() => false,
         Ok(output) => {
             let msg = format!(
-                "Failed to restrict key file ACLs via {} (exit {:?}). Check USERDOMAIN\\USERNAME resolution and icacls permissions, or unlock the OS keyring and restart to migrate the key.",
+                "Failed to restrict ACLs on '{}' via {} (exit {:?}). Check USERDOMAIN\\USERNAME resolution and icacls permissions.",
+                path.display(),
                 icacls_path.display(),
                 output.status.code()
             );

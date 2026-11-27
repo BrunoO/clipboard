@@ -367,6 +367,13 @@ pub(crate) const fn platform_select<T: Copy>(macos: T, windows: T, other: T) -> 
     }
 }
 
+/// Platform-specific guidance for locating the `SQLCipher` encryption key in the OS keyring.
+pub(crate) const KEYRING_RECOVERY_HINT: &str = platform_select(
+    "Key (sensitive): Keychain Access or `security find-generic-password -s cipherclipboard -a db_encryption_key -w`",
+    "Key (sensitive): Credential Manager → Windows Credentials → service `cipherclipboard`, account `db_encryption_key`",
+    "Key (sensitive): Secret Service/Seahorse or `secret-tool lookup service cipherclipboard username db_encryption_key`",
+);
+
 /// Human-readable name of the primary shortcut modifier key (`Cmd` on macOS, `Ctrl` elsewhere).
 pub(crate) const PRIMARY_MODIFIER_NAME: &str = if cfg!(target_os = "macos") {
     "Cmd"

@@ -321,19 +321,22 @@ fn apply_pending_restore_if_any(
     }
 
     // Validate staged DB can be opened with the current key and has expected schema.
-    let staged_conn = rusqlite::Connection::open(&staged_db)?;
-    staged_conn.pragma_update(None, "key", encryption_key)?;
-    let _: i64 =
-        staged_conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))?;
-    let has_history: i64 = staged_conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='clipboard_history'",
-        [],
-        |row| row.get(0),
-    )?;
-    if has_history == 0 {
-        return Err("Staged backup is not a valid CipherClipboard database.".into());
+    // On failure, clear the pending marker & staged file so the next launch is not locked out.
+    if let Err(err) = Database::validate_backup_file(&staged_db, encryption_key) {
+        let _ = fs::remove_file(&marker);
+        let _ = fs::remove_file(&staged_db);
+        logging::log_message(
+            "ERROR",
+            &format!("Staged backup validation failed and was discarded: {err}"),
+        );
+        return Err(err.into());
     }
-    drop(staged_conn);
+
+    if crate::platform::fs_security::set_restricted_permissions(&staged_db) {
+        let _ = fs::remove_file(&marker);
+        let _ = fs::remove_file(&staged_db);
+        return Err("Failed to restrict permissions on staged backup; restore aborted.".into());
+    }
 
     if db_path.exists() {
         let ts = jiff::ZonedDateTime::now()
@@ -342,8 +345,9 @@ fn apply_pending_restore_if_any(
         let pre_restore = data_dir.join(format!("pre-restore-{ts}.db"));
         let current_db = Database::open(db_path, encryption_key)?;
         current_db
-            .export_backup(&pre_restore)
+            .export_backup(&pre_restore, encryption_key)
             .map_err(|e| format!("Failed to create pre-restore backup: {e}"))?;
+        drop(current_db);
         logging::log_message(
             "INFO",
             &format!("Pre-restore backup created at {}", pre_restore.display()),
@@ -352,9 +356,7 @@ fn apply_pending_restore_if_any(
 
     let _ = fs::remove_file(db_path.with_extension("db-wal"));
     let _ = fs::remove_file(db_path.with_extension("db-shm"));
-    fs::copy(&staged_db, db_path)?;
-    let _ = crate::platform::fs_security::set_restricted_permissions(db_path);
-    let _ = fs::remove_file(&staged_db);
+    crate::platform::fs_security::replace_file_atomically(&staged_db, db_path)?;
     let _ = fs::remove_file(&marker);
     logging::log_message("INFO", "Pending backup restore applied successfully");
     Ok(())
@@ -474,5 +476,115 @@ mod tests {
     fn test_get_app_data_dir_not_empty() {
         let dir = get_app_data_dir();
         assert!(!dir.as_os_str().is_empty());
+    }
+
+    fn test_hex_key(seed: u64) -> String {
+        format!("{seed:016x}{seed:016x}{seed:016x}{seed:016x}")
+    }
+
+    #[test]
+    fn test_apply_pending_restore_cleans_up_orphan_and_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("clipboard_history.db");
+        let (staged_db, marker) = pending_restore_paths(dir.path());
+        let key = test_hex_key(7);
+
+        // Orphan staged DB without marker is cleaned up silently.
+        fs::write(&staged_db, b"orphan").unwrap();
+        apply_pending_restore_if_any(dir.path(), &db_path, &key).unwrap();
+        assert!(!staged_db.exists());
+
+        // Marker without staged DB removes marker and returns an error.
+        fs::write(&marker, b"pending").unwrap();
+        assert!(apply_pending_restore_if_any(dir.path(), &db_path, &key).is_err());
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn test_apply_pending_restore_discards_invalid_backup_without_lockout() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("clipboard_history.db");
+        let (staged_db, marker) = pending_restore_paths(dir.path());
+        let key = test_hex_key(11);
+
+        let live_db = Database::open(&db_path, &key).unwrap();
+        live_db.insert("intact-entry").unwrap();
+        drop(live_db);
+
+        // Stage a corrupted/wrong-key backup with marker.
+        fs::write(&staged_db, b"not a valid sqlcipher db").unwrap();
+        fs::write(&marker, b"pending").unwrap();
+
+        assert!(apply_pending_restore_if_any(dir.path(), &db_path, &key).is_err());
+        assert!(
+            !marker.exists(),
+            "marker must be cleared to avoid startup lockout"
+        );
+        assert!(!staged_db.exists(), "invalid staged DB must be discarded");
+
+        // Subsequent launch succeeds and existing DB is completely intact.
+        apply_pending_restore_if_any(dir.path(), &db_path, &key).unwrap();
+        let reopened = Database::open(&db_path, &key).unwrap();
+        let items = reopened.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].content, "intact-entry");
+    }
+
+    #[test]
+    fn test_apply_pending_restore_replaces_db_and_creates_pre_restore_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("clipboard_history.db");
+        let backup_src_path = dir.path().join("backup_src.db");
+        let (staged_db, marker) = pending_restore_paths(dir.path());
+        let key = test_hex_key(22);
+
+        // Create live DB with current data.
+        let live_db = Database::open(&db_path, &key).unwrap();
+        live_db.insert("current-live-entry").unwrap();
+        drop(live_db);
+
+        // Create a valid encrypted backup containing restored data.
+        let backup_db = Database::open(&backup_src_path, &key).unwrap();
+        backup_db.insert("restored-entry").unwrap();
+        backup_db.export_backup(&staged_db, &key).unwrap();
+        drop(backup_db);
+        fs::write(&marker, b"pending").unwrap();
+
+        // Create stale WAL/SHM files to verify cleanup.
+        let wal = db_path.with_extension("db-wal");
+        let shm = db_path.with_extension("db-shm");
+        fs::write(&wal, b"stale-wal").unwrap();
+        fs::write(&shm, b"stale-shm").unwrap();
+
+        apply_pending_restore_if_any(dir.path(), &db_path, &key).unwrap();
+
+        assert!(!marker.exists());
+        assert!(!staged_db.exists());
+        assert!(!wal.exists());
+        assert!(!shm.exists());
+
+        // Live DB now contains restored content.
+        let restored = Database::open(&db_path, &key).unwrap();
+        let items = restored.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].content, "restored-entry");
+
+        // A pre-restore backup exists and contains the previous live data.
+        let pre_restore = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("pre-restore-"))
+                    && p.extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("db"))
+            })
+            .expect("pre-restore backup file must be created");
+        let pre_db = Database::open(&pre_restore, &key).unwrap();
+        let pre_items = pre_db.get_recent(10, None).unwrap();
+        assert_eq!(pre_items.len(), 1);
+        assert_eq!(pre_items[0].content, "current-live-entry");
     }
 }

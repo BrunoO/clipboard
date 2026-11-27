@@ -478,27 +478,38 @@ impl ClipboardApp {
             .strftime("%Y%m%d-%H%M%S")
             .to_string();
         let file_name = format!("cipherclipboard-backup-{timestamp}.db");
-        let base_dir = dirs::download_dir().or_else(|| {
-            dirs::data_local_dir().map(|p| {
-                let new_dir = p.join("cipherclipboard");
-                let legacy_dir = p.join("rusty-clipboard");
-                if !new_dir.exists() && legacy_dir.exists() {
-                    legacy_dir
-                } else {
-                    new_dir
-                }
-            })
-        });
-        let Some(base_dir) = base_dir else {
-            self.show_error_toast(&format!(
-                "{} Could not determine a backup directory.",
-                icons::WARNING
-            ));
+        let default_dir = dirs::download_dir().unwrap_or_else(|| self.data_dir.clone());
+
+        let dest = rfd::FileDialog::new()
+            .set_directory(&default_dir)
+            .set_file_name(&file_name)
+            .add_filter("CipherClipboard backup", &["db"])
+            .set_title("Export encrypted backup")
+            .save_file();
+        // Native file dialogs blur the main window; reset the focus grace window so
+        // `hide_on_blur` does not immediately hide the app and swallow the feedback toast.
+        self.window_state.last_show_instant = Some(Instant::now());
+        let Some(dest) = dest else {
             return;
         };
 
-        let dest = base_dir.join(file_name);
-        match self.db.export_backup(&dest) {
+        let (encryption_key, _) =
+            match crate::crypto::get_or_create_encryption_key(&self.data_dir, true) {
+                Ok(key) => key,
+                Err(error) => {
+                    crate::logging::log_message(
+                        "ERROR",
+                        &format!("Backup export failed to load encryption key: {error}"),
+                    );
+                    self.show_error_toast(&format!(
+                        "{} Backup export failed: {error}",
+                        icons::WARNING
+                    ));
+                    return;
+                }
+            };
+
+        match self.db.export_backup(&dest, &encryption_key) {
             Ok(()) => {
                 crate::logging::log_message(
                     "INFO",
@@ -518,18 +529,37 @@ impl ClipboardApp {
     }
 
     fn stage_restore_backup(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
+        let default_dir = dirs::download_dir().unwrap_or_else(|| self.data_dir.clone());
+        let path = rfd::FileDialog::new()
+            .set_directory(&default_dir)
             .add_filter("CipherClipboard backup", &["db"])
             .set_title("Select encrypted backup to restore")
-            .pick_file()
-        else {
+            .pick_file();
+        // Reset the focus grace window after the native dialog closes so `hide_on_blur`
+        // does not immediately hide the app and swallow the confirmation toast.
+        self.window_state.last_show_instant = Some(Instant::now());
+        let Some(path) = path else {
             return;
         };
 
-        if let Err(error) = self.db.validate_backup_file(&path) {
+        let (encryption_key, _) =
+            match crate::crypto::get_or_create_encryption_key(&self.data_dir, true) {
+                Ok(key) => key,
+                Err(error) => {
+                    crate::logging::log_message(
+                        "ERROR",
+                        &format!("Restore validation failed to load encryption key: {error}"),
+                    );
+                    self.show_error_toast(&format!("{} {error}", icons::WARNING));
+                    return;
+                }
+            };
+
+        if let Err(error) = crate::db::Database::validate_backup_file(&path, &encryption_key) {
             self.show_error_toast(&format!("{} {error}", icons::WARNING));
             return;
         }
+        drop(encryption_key);
 
         let staged_db = self.data_dir.join("pending_restore.db");
         let marker = self.data_dir.join("pending_restore.marker");
@@ -537,7 +567,14 @@ impl ClipboardApp {
             self.show_error_toast(&format!("{} Failed to stage restore: {e}", icons::WARNING));
             return;
         }
-        let _ = crate::platform::fs_security::set_restricted_permissions(&staged_db);
+        if crate::platform::fs_security::set_restricted_permissions(&staged_db) {
+            let _ = std::fs::remove_file(&staged_db);
+            self.show_error_toast(&format!(
+                "{} Failed to restrict permissions on staged backup.",
+                icons::WARNING
+            ));
+            return;
+        }
         if let Err(e) = std::fs::write(&marker, b"pending") {
             let _ = std::fs::remove_file(&staged_db);
             self.show_error_toast(&format!("{} Failed to mark restore: {e}", icons::WARNING));
@@ -1443,7 +1480,7 @@ impl ClipboardApp {
         ui.horizontal(|ui| {
             ui.add_space(crate::theme::header_left_padding());
 
-            let title_resp = if cfg!(target_os = "windows") {
+            let title_resp = if crate::theme::use_compact_header_icon() {
                 ui.label(
                     egui::RichText::new(icons::LOCK_KEY.to_string())
                         .color(crate::theme::text_secondary(is_dark))
