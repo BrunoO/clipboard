@@ -711,6 +711,33 @@ impl ClipboardApp {
                 }
             });
 
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let key_hint = if cfg!(target_os = "macos") {
+                    "Key (sensitive): Keychain Access or `security find-generic-password -s cipherclipboard -a db_encryption_key -w`"
+                } else if cfg!(target_os = "windows") {
+                    "Key (sensitive): Credential Manager → Windows Credentials → service `cipherclipboard`, account `db_encryption_key`"
+                } else {
+                    "Key (sensitive): Secret Service/Seahorse or `secret-tool lookup service cipherclipboard username db_encryption_key`"
+                };
+                if ui
+                    .button(format!("{} Export Encrypted Backup…", icons::DATABASE))
+                    .on_hover_text(format!(
+                        "Export a consistent encrypted SQLCipher backup.\nRestore requires the original encryption key on the target machine.\n{key_hint}"
+                    ))
+                    .clicked()
+                {
+                    self.export_encrypted_backup();
+                }
+            });
+            ui.label(
+                egui::RichText::new(
+                    "Backup stays encrypted with the same key. Restoring on another machine requires the original OS keyring key or local key file (service `cipherclipboard`, account `db_encryption_key`).",
+                )
+                .color(crate::theme::text_secondary(is_dark))
+                .size(11.0),
+            );
+
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if ui

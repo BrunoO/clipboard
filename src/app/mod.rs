@@ -470,6 +470,50 @@ impl ClipboardApp {
         });
     }
 
+    fn export_encrypted_backup(&mut self) {
+        let timestamp = jiff::ZonedDateTime::now()
+            .strftime("%Y%m%d-%H%M%S")
+            .to_string();
+        let file_name = format!("cipherclipboard-backup-{timestamp}.db");
+        let base_dir = dirs::download_dir().or_else(|| {
+            dirs::data_local_dir().map(|p| {
+                let new_dir = p.join("cipherclipboard");
+                let legacy_dir = p.join("rusty-clipboard");
+                if !new_dir.exists() && legacy_dir.exists() {
+                    legacy_dir
+                } else {
+                    new_dir
+                }
+            })
+        });
+        let Some(base_dir) = base_dir else {
+            self.show_error_toast(&format!(
+                "{} Could not determine a backup directory.",
+                icons::WARNING
+            ));
+            return;
+        };
+
+        let dest = base_dir.join(file_name);
+        match self.db.export_backup(&dest) {
+            Ok(()) => {
+                crate::logging::log_message(
+                    "INFO",
+                    &format!("Encrypted backup exported to {}", dest.display()),
+                );
+                self.show_toast(&format!(
+                    "{} Backup exported: {}",
+                    icons::CHECK,
+                    dest.display()
+                ));
+            }
+            Err(error) => {
+                crate::logging::log_message("ERROR", &format!("Backup export failed: {error}"));
+                self.show_error_toast(&format!("{} Backup export failed: {error}", icons::WARNING));
+            }
+        }
+    }
+
     const fn keyring_explanation_copy(
         mode: crate::crypto::KeyStorageMode,
     ) -> (&'static str, &'static str, &'static str, &'static str) {

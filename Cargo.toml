@@ -51,7 +51,7 @@ windows = { version = "0.62", features = [
     "Media_Ocr",
     "Storage_Streams",
 ] }
-rusqlite = { version = "0.43", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.43", features = ["bundled-sqlcipher-vendored-openssl", "backup"] }
 raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -90,7 +90,7 @@ arboard = "3.4"
 global-hotkey = "0.10"
 
 # SQLite with bundled SQLCipher (full database encryption)
-rusqlite = { version = "0.43", features = ["bundled-sqlcipher"] }
+rusqlite = { version = "0.43", features = ["bundled-sqlcipher", "backup"] }
 
 # OS Keyring for secure key storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 keyring = "4.2"

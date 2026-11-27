@@ -149,6 +149,7 @@ struct DatabaseInner {
     ignore_concealed: AtomicBool,
     auto_detect_secrets: AtomicBool,
     transient_text: Mutex<Option<zeroize::Zeroizing<String>>>,
+    encryption_key: zeroize::Zeroizing<String>,
 }
 
 /// Thread-safe handle to the encrypted `SQLCipher` database.
@@ -313,6 +314,7 @@ impl Database {
             ignore_concealed: AtomicBool::new(true),
             auto_detect_secrets: AtomicBool::new(true),
             transient_text: Mutex::new(None),
+            encryption_key: zeroize::Zeroizing::new(encryption_key.to_string()),
         })))
     }
 
@@ -1119,6 +1121,69 @@ impl Database {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    /// Exports a consistent encrypted backup of the database to `dest`.
+    ///
+    /// Uses the SQLite Online Backup API against the live `SQLCipher` connection,
+    /// so the app can remain running. The backup is written to a temporary file
+    /// in the destination directory, permissions are restricted, then it is
+    /// atomically renamed into place.
+    ///
+    /// # Errors
+    /// Returns a descriptive error if the backup cannot be created, keyed,
+    /// permission-restricted, or renamed.
+    pub(crate) fn export_backup(&self, dest: &Path) -> Result<(), String> {
+        let parent = dest
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .ok_or_else(|| "Backup destination must have a parent directory".to_string())?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create backup directory: {e}"))?;
+
+        let file_name = dest
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| "Backup destination filename is invalid".to_string())?;
+        let tmp_path = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
+        let _ = std::fs::remove_file(&tmp_path);
+
+        let result = (|| -> Result<(), String> {
+            let mut dst_conn = Connection::open(&tmp_path)
+                .map_err(|e| format!("Failed to create backup file: {e}"))?;
+            dst_conn
+                .pragma_update(None, "key", self.0.encryption_key.as_str())
+                .map_err(|e| format!("Failed to key backup database: {e}"))?;
+            dst_conn
+                .execute_batch("PRAGMA cipher_memory_security = ON;")
+                .map_err(|e| format!("Failed to configure backup database: {e}"))?;
+
+            let src_conn = self.lock_conn();
+            let backup = rusqlite::backup::Backup::new(&src_conn, &mut dst_conn)
+                .map_err(|e| format!("Failed to initialize backup: {e}"))?;
+            backup
+                .run_to_completion(
+                    100,
+                    std::time::Duration::from_millis(10),
+                    None::<fn(rusqlite::backup::Progress)>,
+                )
+                .map_err(|e| format!("Failed to export backup: {e}"))?;
+            drop(backup);
+            drop(dst_conn);
+
+            if crate::platform::fs_security::set_restricted_permissions(&tmp_path) {
+                return Err("Failed to set restrictive permissions on backup file".to_string());
+            }
+
+            std::fs::rename(&tmp_path, dest)
+                .map_err(|e| format!("Failed to finalize backup file: {e}"))?;
+            Ok(())
+        })();
+
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp_path);
+        }
+        result
     }
 }
 
@@ -2060,5 +2125,29 @@ mod tests {
         assert_eq!(item.label.as_deref(), Some("New"));
         assert_eq!(item.notes.as_deref(), Some("keep"));
         assert!(item.is_pinned);
+    }
+
+    #[test]
+    fn test_export_backup_creates_encrypted_restoreable_copy() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("source.db");
+        let backup_path = dir.path().join("backup.db");
+        let key = test_hex_key(42);
+        let db = Database::open(&db_path, &key).unwrap();
+
+        db.insert("hello").unwrap();
+        db.insert_secret("top-secret").unwrap();
+        db.export_backup(&backup_path).unwrap();
+
+        let backup_db = Database::open(&backup_path, &key).unwrap();
+        let items = backup_db.get_recent(10, None).unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|i| i.content == "hello"));
+        assert!(items
+            .iter()
+            .any(|i| i.kind == ItemKind::Secret && i.content == "top-secret"));
+
+        let wrong_key = test_hex_key(43);
+        assert!(Database::open(&backup_path, &wrong_key).is_err());
     }
 }

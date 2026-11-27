@@ -147,6 +147,25 @@ If an encrypted database already exists but its key cannot be found, startup **f
 
 Deleting the app data directory — `~/Library/Application Support/cipherclipboard/` (macOS), `%LOCALAPPDATA%\cipherclipboard\` (Windows), or `~/.local/share/cipherclipboard/` (Linux) — removes the database and fallback key and **permanently destroys your history**. Do this only when you intentionally want to start fresh.
 
+#### Backup & Restore
+
+Use **Settings → Export Encrypted Backup…** to create a consistent encrypted copy of `clipboard_history.db`. The backup stays encrypted with the same SQLCipher key, so restoring it on another machine requires the original encryption key.
+
+**Restore:** quit CipherClipboard, replace `clipboard_history.db` in the app data directory with the backup (keep the filename `clipboard_history.db`), make sure the matching encryption key is available, then restart.
+
+**Locate/copy the encryption key (sensitive — anyone with it can decrypt your DB):**
+
+- **Service:** `cipherclipboard`
+- **Account:** `db_encryption_key`
+
+| Platform | Where to find it | CLI (prints secret; use carefully) |
+|---|---|---|
+| macOS | Keychain Access → search `cipherclipboard` / `db_encryption_key` | `security find-generic-password -s cipherclipboard -a db_encryption_key -w` |
+| Windows | Credential Manager → Windows Credentials → `cipherclipboard` / `db_encryption_key` | No built-in safe export; view in Credential Manager or recreate the entry on the target machine |
+| Linux | Seahorse/GNOME Passwords and Keys, or your Secret Service backend | `secret-tool lookup service cipherclipboard username db_encryption_key` |
+
+If CipherClipboard used the local-key fallback, back up the restricted `.encryption_key` file from the app data directory together with the DB. Treat both the backup and key as secrets.
+
 ---
 
 ## Development & CI Guardrails
