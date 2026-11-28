@@ -759,6 +759,7 @@ dependencies = [
  "arboard",
  "crossbeam-channel",
  "dirs",
+ "dispatch2",
  "eframe",
  "egui_extras",
  "egui_material_icons",

@@ -42,6 +42,7 @@ fn request_repaint() {
 }
 
 static REOPEN_REQUESTED: AtomicBool = AtomicBool::new(false);
+static APP_HIDDEN: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn take_reopen_requested() -> bool {
     REOPEN_REQUESTED.swap(false, Ordering::AcqRel)
@@ -59,6 +60,7 @@ pub(super) fn hide_app() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
+    APP_HIDDEN.store(true, Ordering::Release);
     let ns_app = NSApplication::sharedApplication(mtm);
     ns_app.hide(None);
 }
@@ -67,6 +69,7 @@ pub(super) fn order_front_main_window() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
+    APP_HIDDEN.store(false, Ordering::Release);
     autoreleasepool(|_| {
         let ns_app = NSApplication::sharedApplication(mtm);
         if ns_app.isHidden() {
@@ -88,6 +91,18 @@ pub(super) fn order_front_main_window() {
     });
 }
 
+/// Immediately unhides and orders the main window front on the macOS main queue when
+/// the app is currently hidden, so `NSWindow.isVisible` becomes `YES` before `eframe`
+/// processes `UserEvent::RequestRepaint` (bypassing its 100 ms invisible-window throttle).
+pub(super) fn wake_hidden_window_for_hotkey() {
+    if APP_HIDDEN.swap(false, Ordering::AcqRel) {
+        dispatch2::DispatchQueue::main().exec_async(|| {
+            order_front_main_window();
+            request_repaint();
+        });
+    }
+}
+
 define_class!(
     // SAFETY:
     // - `NSObject` has no subclassing requirements.
@@ -103,6 +118,7 @@ define_class!(
             // Defer window ordering to the next egui frame (ClipboardApp::update checks
             // take_reopen_requested()) instead of mutating AppKit windows re-entrantly
             // inside NSNotificationCenter activation/unhide callbacks.
+            APP_HIDDEN.store(false, Ordering::Release);
             REOPEN_REQUESTED.store(true, Ordering::Release);
             request_repaint();
         }

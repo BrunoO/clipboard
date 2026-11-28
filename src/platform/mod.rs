@@ -705,11 +705,18 @@ pub(crate) fn hide_window_viewport(
     }
 }
 
-/// Whether `show_window` should let `App::ui()` paint and present one fresh frame before
-/// ordering the OS window front (macOS hides via `NSApp.hide`, so painting first eliminates
-/// the blank-frame flash when unhiding).
+/// Wakes a hidden window immediately on the OS main thread when the Toggle Window hotkey
+/// fires, bypassing `eframe`'s 100 ms `INVISIBLE_WINDOW_REPAINT_INTERVAL` throttle on macOS.
+pub(crate) fn wake_hidden_window_for_hotkey() {
+    #[cfg(target_os = "macos")]
+    macos::wake_hidden_window_for_hotkey();
+}
+
+/// Whether `App::ui()` should avoid early-returning a blank frame when `hide_window()` runs
+/// (macOS hides at the OS level via `NSApp.hide`, so preserving the last Metal drawable prevents
+/// a blank-frame flash when unhiding).
 #[must_use]
-pub(crate) const fn defer_order_front_until_painted() -> bool {
+pub(crate) const fn preserve_surface_on_hide() -> bool {
     cfg!(target_os = "macos")
 }
 

@@ -157,6 +157,7 @@ impl HotkeyService {
                         };
                         match action {
                             Some(HotkeyAction::ToggleWindow) => {
+                                #[cfg(debug_assertions)]
                                 crate::logging::log_message(
                                     "INFO",
                                     "Toggle Window hotkey pressed; queued wakeup for UI thread",
@@ -164,6 +165,7 @@ impl HotkeyService {
                                 crate::platform::capture_active_window();
                                 // Best-effort coalesced wakeup; a full or closed channel needs no action.
                                 let _ = hotkey_tx.try_send(());
+                                crate::platform::wake_hidden_window_for_hotkey();
                                 ctx.request_repaint();
                             }
                             Some(HotkeyAction::PasteNext) => {
