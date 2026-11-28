@@ -2,6 +2,16 @@ use super::{ActiveView, ClipboardApp};
 use crate::icons;
 use eframe::egui;
 
+#[derive(Clone, Copy)]
+enum HotkeyRowAction {
+    None,
+    StartRecording,
+    Cancel,
+    Clear,
+    Reset,
+    ManualEdit,
+}
+
 impl ClipboardApp {
     fn settings_card<R>(
         ui: &mut egui::Ui,
@@ -146,7 +156,7 @@ impl ClipboardApp {
                     .size(10.5),
             );
             ui.add_space(4.0);
-            self.render_toggle_hotkey_editor(ui, is_dark);
+            self.render_hotkey_editor_row(ui, is_dark, crate::hotkey::HotkeyAction::ToggleWindow);
             if let Some(warn) = self
                 .settings
                 .toggle_hotkey_parsed()
@@ -178,7 +188,7 @@ impl ClipboardApp {
                 .size(10.5),
             );
             ui.add_space(4.0);
-            self.render_paste_next_hotkey_editor(ui, is_dark);
+            self.render_hotkey_editor_row(ui, is_dark, crate::hotkey::HotkeyAction::PasteNext);
             if let Some(warn) = self
                 .settings
                 .paste_next_hotkey_parsed()
@@ -250,23 +260,54 @@ impl ClipboardApp {
             });
     }
 
-    fn render_manual_toggle_hotkey_editor(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+    fn render_manual_hotkey_editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        is_dark: bool,
+        action: crate::hotkey::HotkeyAction,
+    ) {
+        let is_paste_next = action == crate::hotkey::HotkeyAction::PasteNext;
+        let hint = if is_paste_next {
+            "e.g. Cmd+Option+V or Ctrl+Alt+V"
+        } else {
+            "e.g. Ctrl+Shift+V or Ctrl+ù"
+        };
+        let mut should_apply = false;
+        let mut should_cancel = false;
         ui.horizontal(|ui| {
+            let pending = if is_paste_next {
+                &mut self.dialogs.pending_paste_next_hotkey
+            } else {
+                &mut self.dialogs.pending_toggle_hotkey
+            };
             let response = ui.add(
-                egui::TextEdit::singleline(&mut self.dialogs.pending_toggle_hotkey)
-                    .hint_text("e.g. Ctrl+Shift+V or Ctrl+ù")
+                egui::TextEdit::singleline(pending)
+                    .hint_text(hint)
                     .desired_width(190.0),
             );
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.apply_toggle_hotkey();
+                should_apply = true;
             }
             if ui.button("Save").clicked() {
-                self.apply_toggle_hotkey();
+                should_apply = true;
             }
             if ui.button("Cancel").clicked() {
-                self.cancel_recording_toggle_hotkey();
+                should_cancel = true;
             }
         });
+        if should_apply {
+            if is_paste_next {
+                self.apply_paste_next_hotkey();
+            } else {
+                self.apply_toggle_hotkey();
+            }
+        } else if should_cancel {
+            if is_paste_next {
+                self.cancel_recording_paste_next_hotkey();
+            } else {
+                self.cancel_recording_toggle_hotkey();
+            }
+        }
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new("Format: Modifier+Key (Ctrl, Alt, Shift, Cmd)")
@@ -332,13 +373,44 @@ impl ClipboardApp {
         });
     }
 
-    fn render_toggle_hotkey_editor(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        if self.dialogs.manual_toggle_hotkey_edit {
-            self.render_manual_toggle_hotkey_editor(ui, is_dark);
+    fn render_hotkey_editor_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        is_dark: bool,
+        action: crate::hotkey::HotkeyAction,
+    ) {
+        let is_paste_next = action == crate::hotkey::HotkeyAction::PasteNext;
+        let is_manual = if is_paste_next {
+            self.dialogs.manual_paste_next_hotkey_edit
+        } else {
+            self.dialogs.manual_toggle_hotkey_edit
+        };
+        if is_manual {
+            self.render_manual_hotkey_editor(ui, is_dark, action);
             return;
         }
 
-        let is_recording = self.dialogs.recording_toggle_hotkey;
+        let is_recording = if is_paste_next {
+            self.dialogs.recording_paste_next_hotkey
+        } else {
+            self.dialogs.recording_toggle_hotkey
+        };
+        let current_binding = if is_paste_next {
+            self.settings.paste_next_hotkey.clone()
+        } else {
+            self.settings.toggle_hotkey.clone()
+        };
+        let default_binding = if is_paste_next {
+            crate::settings::default_paste_next_hotkey()
+        } else {
+            crate::settings::default_toggle_hotkey()
+        };
+        let box_id = if is_paste_next {
+            "paste_next_hotkey_recorder_box"
+        } else {
+            "toggle_hotkey_recorder_box"
+        };
+
         let accent = crate::theme::accent_color(is_dark);
         let box_fill = if is_recording {
             accent.gamma_multiply(if is_dark { 0.12 } else { 0.07 })
@@ -351,9 +423,8 @@ impl ClipboardApp {
             crate::theme::card_stroke(is_dark, false)
         };
 
-        let mut start_recording = false;
-        let default_binding = crate::settings::default_toggle_hotkey();
-        let is_default = self.settings.toggle_hotkey == default_binding;
+        let mut row_action = HotkeyRowAction::None;
+        let is_default = current_binding == default_binding;
         ui.horizontal(|ui| {
             let frame_resp = egui::Frame::new()
                 .corner_radius(egui::CornerRadius::same(7))
@@ -363,7 +434,7 @@ impl ClipboardApp {
                 .show(ui, |ui| {
                     Self::render_hotkey_recorder_box_contents(
                         ui,
-                        &self.settings.toggle_hotkey,
+                        &current_binding,
                         is_dark,
                         is_recording,
                     );
@@ -373,7 +444,7 @@ impl ClipboardApp {
             let click_resp = ui
                 .interact(
                     frame_resp.rect,
-                    ui.scope_id().with("toggle_hotkey_recorder_box"),
+                    ui.scope_id().with(box_id),
                     egui::Sense::click(),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -384,30 +455,114 @@ impl ClipboardApp {
                 });
 
             if click_resp.clicked() && !is_recording {
-                start_recording = true;
+                row_action = HotkeyRowAction::StartRecording;
             }
 
-            if is_recording {
-                if ui.button("Cancel").clicked() {
+            let btn_action = Self::render_hotkey_row_buttons(
+                ui,
+                is_recording,
+                !current_binding.is_empty(),
+                is_default,
+                &default_binding,
+            );
+            if !matches!(btn_action, HotkeyRowAction::None) {
+                row_action = btn_action;
+            }
+        });
+
+        self.apply_hotkey_row_ui_action(is_paste_next, row_action);
+
+        let still_recording = if is_paste_next {
+            self.dialogs.recording_paste_next_hotkey
+        } else {
+            self.dialogs.recording_toggle_hotkey
+        };
+        Self::render_hotkey_recorder_hint(
+            ui,
+            is_dark,
+            still_recording,
+            self.dialogs.hotkey_recording_hint.as_deref(),
+        );
+    }
+
+    fn render_hotkey_row_buttons(
+        ui: &mut egui::Ui,
+        is_recording: bool,
+        has_binding: bool,
+        is_default: bool,
+        default_binding: &str,
+    ) -> HotkeyRowAction {
+        if is_recording {
+            return if ui.button("Cancel").clicked() {
+                HotkeyRowAction::Cancel
+            } else {
+                HotkeyRowAction::None
+            };
+        }
+        let clear_clicked = has_binding && ui.button("Clear").clicked();
+        let reset_clicked = !is_default
+            && ui
+                .button("Reset")
+                .on_hover_text(format!("Reset to default ({default_binding})"))
+                .clicked();
+        let manual_clicked = ui
+            .button("Type")
+            .on_hover_text("Enter shortcut text manually")
+            .clicked();
+
+        if clear_clicked {
+            HotkeyRowAction::Clear
+        } else if reset_clicked {
+            HotkeyRowAction::Reset
+        } else if manual_clicked {
+            HotkeyRowAction::ManualEdit
+        } else {
+            HotkeyRowAction::None
+        }
+    }
+
+    fn apply_hotkey_row_ui_action(&mut self, is_paste_next: bool, row_action: HotkeyRowAction) {
+        match row_action {
+            HotkeyRowAction::None => {}
+            HotkeyRowAction::StartRecording => {
+                if is_paste_next {
+                    self.start_recording_paste_next_hotkey();
+                } else {
+                    self.start_recording_toggle_hotkey();
+                }
+            }
+            HotkeyRowAction::Cancel => {
+                if is_paste_next {
+                    self.cancel_recording_paste_next_hotkey();
+                } else {
                     self.cancel_recording_toggle_hotkey();
                 }
-            } else {
-                if !self.settings.toggle_hotkey.is_empty() && ui.button("Clear").clicked() {
+            }
+            HotkeyRowAction::Clear => {
+                if is_paste_next {
+                    self.clear_paste_next_hotkey();
+                } else {
                     self.clear_toggle_hotkey();
                 }
-                if !is_default
-                    && ui
-                        .button("Reset")
-                        .on_hover_text(format!("Reset to default ({default_binding})"))
-                        .clicked()
-                {
+            }
+            HotkeyRowAction::Reset => {
+                if is_paste_next {
+                    self.reset_paste_next_hotkey();
+                } else {
                     self.reset_toggle_hotkey();
                 }
-                if ui
-                    .button("Type")
-                    .on_hover_text("Enter shortcut text manually")
-                    .clicked()
-                {
+            }
+            HotkeyRowAction::ManualEdit => {
+                if is_paste_next {
+                    self.cancel_recording_toggle_hotkey();
+                    self.dialogs.manual_paste_next_hotkey_edit = true;
+                    self.dialogs.recording_paste_next_hotkey = false;
+                    self.dialogs.hotkey_recording_hint = None;
+                    self.dialogs
+                        .pending_paste_next_hotkey
+                        .clone_from(&self.settings.paste_next_hotkey);
+                } else {
+                    self.cancel_recording_paste_next_hotkey();
                     self.dialogs.manual_toggle_hotkey_edit = true;
                     self.dialogs.recording_toggle_hotkey = false;
                     self.dialogs.hotkey_recording_hint = None;
@@ -416,18 +571,7 @@ impl ClipboardApp {
                         .clone_from(&self.settings.toggle_hotkey);
                 }
             }
-        });
-
-        if start_recording {
-            self.start_recording_toggle_hotkey();
         }
-
-        Self::render_hotkey_recorder_hint(
-            ui,
-            is_dark,
-            self.dialogs.recording_toggle_hotkey,
-            self.dialogs.hotkey_recording_hint.as_deref(),
-        );
     }
 
     fn render_hotkey_recorder_hint(
@@ -582,130 +726,6 @@ impl ClipboardApp {
             ));
         }
         self.cancel_recording_toggle_hotkey();
-    }
-
-    fn render_manual_paste_next_hotkey_editor(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        ui.horizontal(|ui| {
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.dialogs.pending_paste_next_hotkey)
-                    .hint_text("e.g. Cmd+Option+V or Ctrl+Alt+V")
-                    .desired_width(190.0),
-            );
-            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.apply_paste_next_hotkey();
-            }
-            if ui.button("Save").clicked() {
-                self.apply_paste_next_hotkey();
-            }
-            if ui.button("Cancel").clicked() {
-                self.cancel_recording_paste_next_hotkey();
-            }
-        });
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new("Format: Modifier+Key (Ctrl, Alt, Shift, Cmd)")
-                .color(crate::theme::text_secondary(is_dark))
-                .size(10.0),
-        );
-    }
-
-    fn render_paste_next_hotkey_editor(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        if self.dialogs.manual_paste_next_hotkey_edit {
-            self.render_manual_paste_next_hotkey_editor(ui, is_dark);
-            return;
-        }
-
-        let is_recording = self.dialogs.recording_paste_next_hotkey;
-        let accent = crate::theme::accent_color(is_dark);
-        let box_fill = if is_recording {
-            accent.gamma_multiply(if is_dark { 0.12 } else { 0.07 })
-        } else {
-            crate::theme::card_fill(is_dark, false)
-        };
-        let box_stroke = if is_recording {
-            egui::Stroke::new(1.5, accent)
-        } else {
-            crate::theme::card_stroke(is_dark, false)
-        };
-
-        let mut start_recording = false;
-        let default_binding = crate::settings::default_paste_next_hotkey();
-        let is_default = self.settings.paste_next_hotkey == default_binding;
-        ui.horizontal(|ui| {
-            let frame_resp = egui::Frame::new()
-                .corner_radius(egui::CornerRadius::same(7))
-                .fill(box_fill)
-                .stroke(box_stroke)
-                .inner_margin(egui::Margin::symmetric(10, 6))
-                .show(ui, |ui| {
-                    Self::render_hotkey_recorder_box_contents(
-                        ui,
-                        &self.settings.paste_next_hotkey,
-                        is_dark,
-                        is_recording,
-                    );
-                })
-                .response;
-
-            let click_resp = ui
-                .interact(
-                    frame_resp.rect,
-                    ui.scope_id().with("paste_next_hotkey_recorder_box"),
-                    egui::Sense::click(),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(if is_recording {
-                    "Listening for a key combination…"
-                } else {
-                    "Click to record a new shortcut"
-                });
-
-            if click_resp.clicked() && !is_recording {
-                start_recording = true;
-            }
-
-            if is_recording {
-                if ui.button("Cancel").clicked() {
-                    self.cancel_recording_paste_next_hotkey();
-                }
-            } else {
-                if !self.settings.paste_next_hotkey.is_empty() && ui.button("Clear").clicked() {
-                    self.clear_paste_next_hotkey();
-                }
-                if !is_default
-                    && ui
-                        .button("Reset")
-                        .on_hover_text(format!("Reset to default ({default_binding})"))
-                        .clicked()
-                {
-                    self.reset_paste_next_hotkey();
-                }
-                if ui
-                    .button("Type")
-                    .on_hover_text("Enter shortcut text manually")
-                    .clicked()
-                {
-                    self.cancel_recording_toggle_hotkey();
-                    self.dialogs.manual_paste_next_hotkey_edit = true;
-                    self.dialogs.recording_paste_next_hotkey = false;
-                    self.dialogs.hotkey_recording_hint = None;
-                    self.dialogs
-                        .pending_paste_next_hotkey
-                        .clone_from(&self.settings.paste_next_hotkey);
-                }
-            }
-        });
-
-        if start_recording {
-            self.start_recording_paste_next_hotkey();
-        }
-
-        Self::render_hotkey_recorder_hint(
-            ui,
-            is_dark,
-            self.dialogs.recording_paste_next_hotkey,
-            self.dialogs.hotkey_recording_hint.as_deref(),
-        );
     }
 
     /// Starts recording a Paste Next hotkey (cancels any active Toggle Window recorder).

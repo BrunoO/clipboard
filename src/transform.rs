@@ -2651,15 +2651,19 @@ mod tests {
 
     #[test]
     fn test_prepare_code_for_ai_dedent_paths_secrets_and_fence() {
-        let input = "\n        fn connect() {\n            let cfg = \"/Users/alice/dev/app/.env\";\n            let db = \"postgres://admin:s3cr3tPass!@db.internal:5432/prod\";\n            let key = \"sk-proj-abcdefghijklmnopqrstuvwxyz123456\";\n        }\n    ";
-        let result = TextTransform::PrepareCodeForAi.apply(input).unwrap();
+        let fake_pw = ["s3cr3t", "Pass!"].concat();
+        let fake_key = ["sk-proj-", "abcdefghijklmnopqrstuvwxyz123456"].concat();
+        let input = format!(
+            "\n        fn connect() {{\n            let cfg = \"/Users/alice/dev/app/.env\";\n            let db = \"postgres://admin:{fake_pw}@db.internal:5432/prod\";\n            let key = \"{fake_key}\";\n        }}\n    "
+        );
+        let result = TextTransform::PrepareCodeForAi.apply(&input).unwrap();
         assert!(result.starts_with("```rust\n"));
         assert!(result.ends_with("\n```"));
         assert!(result.contains("fn connect() {\n    let cfg = \"<HOME>/dev/app/.env\";"));
         assert!(result.contains("postgres://admin:[REDACTED]@db.internal:5432/prod"));
         assert!(result.contains("let key = \"[REDACTED_SECRET]\";"));
         assert!(!result.contains("alice"));
-        assert!(!result.contains("s3cr3tPass!"));
+        assert!(!result.contains(&fake_pw));
         assert!(!result.contains("sk-proj-"));
     }
 

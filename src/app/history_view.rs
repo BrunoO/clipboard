@@ -1661,6 +1661,27 @@ impl ClipboardApp {
         action
     }
 
+    fn render_basic_color_copy_buttons(
+        ui: &mut egui::Ui,
+        color: crate::color::ParsedColor,
+    ) -> ItemAction {
+        let mut action = ItemAction::None;
+        for (btn_label, value, kind_label) in [
+            ("# HEX", color.to_hex(), "HEX"),
+            ("RGB", color.to_rgb_string(), "RGB"),
+            ("HSL", color.to_hsl_string(), "HSL"),
+        ] {
+            if ui
+                .small_button(btn_label)
+                .on_hover_text(format!("Copy {value}"))
+                .clicked()
+            {
+                action = ItemAction::CopyColor(value, kind_label.to_string());
+            }
+        }
+        action
+    }
+
     fn render_color_format_buttons(
         ui: &mut egui::Ui,
         parsed: crate::color::ParsedColor,
@@ -1668,27 +1689,7 @@ impl ClipboardApp {
     ) -> ItemAction {
         let mut action = ItemAction::None;
         ui.horizontal(|ui| {
-            if ui
-                .small_button("# HEX")
-                .on_hover_text("Copy HEX code (RGBA order)")
-                .clicked()
-            {
-                action = ItemAction::CopyColor(parsed.to_hex(), "HEX".to_string());
-            }
-            if ui
-                .small_button("RGB")
-                .on_hover_text("Copy RGB / RGBA values")
-                .clicked()
-            {
-                action = ItemAction::CopyColor(parsed.to_rgb_string(), "RGB".to_string());
-            }
-            if ui
-                .small_button("HSL")
-                .on_hover_text("Copy HSL / HSLA values")
-                .clicked()
-            {
-                action = ItemAction::CopyColor(parsed.to_hsl_string(), "HSL".to_string());
-            }
+            action = Self::render_basic_color_copy_buttons(ui, parsed);
 
             if crate::color::is_eight_digit_hex(raw_content) {
                 if let Some(argb) = crate::color::parse_argb_hex(raw_content) {
@@ -1940,26 +1941,9 @@ impl ClipboardApp {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
                     }
 
-                    if ui
-                        .small_button("# HEX")
-                        .on_hover_text(format!("Copy {}", color.to_hex()))
-                        .clicked()
-                    {
-                        action = ItemAction::CopyColor(color.to_hex(), "HEX".to_string());
-                    }
-                    if ui
-                        .small_button("RGB")
-                        .on_hover_text(format!("Copy {}", color.to_rgb_string()))
-                        .clicked()
-                    {
-                        action = ItemAction::CopyColor(color.to_rgb_string(), "RGB".to_string());
-                    }
-                    if ui
-                        .small_button("HSL")
-                        .on_hover_text(format!("Copy {}", color.to_hsl_string()))
-                        .clicked()
-                    {
-                        action = ItemAction::CopyColor(color.to_hsl_string(), "HSL".to_string());
+                    let format_action = Self::render_basic_color_copy_buttons(ui, color);
+                    if !matches!(format_action, ItemAction::None) {
+                        action = format_action;
                     }
                     if color.a < 255
                         && ui

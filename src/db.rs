@@ -519,17 +519,13 @@ impl Database {
         }
     }
 
-    fn existing_text_metadata(
+    fn query_annotation_meta(
         tx: &rusqlite::Transaction<'_>,
-        content: &str,
+        sql: &str,
+        params: impl rusqlite::Params,
     ) -> Result<Option<AnnotationMeta>> {
-        let mut stmt = tx.prepare(
-            "SELECT label, notes, is_pinned
-             FROM clipboard_history
-             WHERE content = ?1 AND kind IN ('text', 'url', 'code', 'color', 'secret')
-             ORDER BY id DESC LIMIT 1",
-        )?;
-        let mut rows = stmt.query(params![content])?;
+        let mut stmt = tx.prepare(sql)?;
+        let mut rows = stmt.query(params)?;
         match rows.next()? {
             Some(row) => Ok(Some((
                 row.get(0)?,
@@ -540,25 +536,32 @@ impl Database {
         }
     }
 
+    fn existing_text_metadata(
+        tx: &rusqlite::Transaction<'_>,
+        content: &str,
+    ) -> Result<Option<AnnotationMeta>> {
+        Self::query_annotation_meta(
+            tx,
+            "SELECT label, notes, is_pinned
+             FROM clipboard_history
+             WHERE content = ?1 AND kind IN ('text', 'url', 'code', 'color', 'secret')
+             ORDER BY id DESC LIMIT 1",
+            params![content],
+        )
+    }
+
     fn existing_secret_metadata(
         tx: &rusqlite::Transaction<'_>,
         content: &str,
     ) -> Result<Option<AnnotationMeta>> {
-        let mut stmt = tx.prepare(
+        Self::query_annotation_meta(
+            tx,
             "SELECT label, notes, is_pinned
              FROM clipboard_history
              WHERE content = ?1 AND kind = 'secret'
              ORDER BY id DESC LIMIT 1",
-        )?;
-        let mut rows = stmt.query(params![content])?;
-        match rows.next()? {
-            Some(row) => Ok(Some((
-                row.get(0)?,
-                row.get(1)?,
-                row.get::<_, i64>(2).unwrap_or(0) != 0,
-            ))),
-            None => Ok(None),
-        }
+            params![content],
+        )
     }
 
     fn existing_image_metadata(
@@ -567,21 +570,14 @@ impl Database {
         height: u32,
         png_bytes: &[u8],
     ) -> Result<Option<AnnotationMeta>> {
-        let mut stmt = tx.prepare(
+        Self::query_annotation_meta(
+            tx,
             "SELECT label, notes, is_pinned
              FROM clipboard_history
              WHERE kind = 'image' AND width = ?1 AND height = ?2 AND image_data = ?3
              ORDER BY id DESC LIMIT 1",
-        )?;
-        let mut rows = stmt.query(params![width, height, png_bytes])?;
-        match rows.next()? {
-            Some(row) => Ok(Some((
-                row.get(0)?,
-                row.get(1)?,
-                row.get::<_, i64>(2).unwrap_or(0) != 0,
-            ))),
-            None => Ok(None),
-        }
+            params![width, height, png_bytes],
+        )
     }
 
     /// Inserts a new text clipboard entry, deduplicating against history.
@@ -1193,7 +1189,7 @@ impl Database {
 
         let file_name = dest
             .file_name()
-            .and_then(|n| n.to_str())
+            .and_then(std::ffi::OsStr::to_str)
             .ok_or_else(|| "Backup destination filename is invalid".to_string())?;
         let tmp_path = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
         let _ = std::fs::remove_file(&tmp_path);
