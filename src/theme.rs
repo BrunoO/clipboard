@@ -661,6 +661,42 @@ pub(crate) const fn category_pill_colors(
     }
 }
 
+/// High-contrast `(text, background, stroke)` palette for Paste Stack badges, header chip,
+/// and directional hover buttons (`is_fifo == false` → LIFO blue, `is_fifo == true` → FIFO green).
+#[must_use]
+pub(crate) const fn paste_stack_pill_colors(
+    is_dark: bool,
+    is_fifo: bool,
+) -> (Color32, Color32, Color32) {
+    if is_fifo {
+        if is_dark {
+            (
+                Color32::from_rgb(95, 228, 138),
+                Color32::from_rgb(16, 52, 30),
+                Color32::from_rgb(45, 145, 80),
+            )
+        } else {
+            (
+                Color32::from_rgb(12, 110, 48),
+                Color32::from_rgb(220, 248, 228),
+                Color32::from_rgb(120, 200, 145),
+            )
+        }
+    } else if is_dark {
+        (
+            Color32::from_rgb(110, 195, 255),
+            Color32::from_rgb(18, 44, 75),
+            Color32::from_rgb(40, 110, 190),
+        )
+    } else {
+        (
+            Color32::from_rgb(0, 82, 175),
+            Color32::from_rgb(225, 240, 255),
+            Color32::from_rgb(145, 195, 250),
+        )
+    }
+}
+
 /// Computes (`text_color`, `bg_fill`, `stroke_color`) for shortcut pills (Cmd+1..9).
 #[must_use]
 pub(crate) const fn shortcut_badge_colors(

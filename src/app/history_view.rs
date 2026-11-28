@@ -719,34 +719,31 @@ impl ClipboardApp {
         hotkey_badge: &str,
         is_dark: bool,
     ) {
-        let (label, color, tip) = match mode {
-            super::StackMode::Lifo => (
-                "↓ NEXT",
-                crate::theme::accent_color(is_dark),
-                format!(
-                    "Next to paste with {hotkey_badge} — pasting downward (newest → oldest)"
-                ),
-            ),
-            super::StackMode::Fifo => (
+        let is_fifo = mode == super::StackMode::Fifo;
+        let (text_c, bg_c, stroke_c) = crate::theme::paste_stack_pill_colors(is_dark, is_fifo);
+        let (label, tip) = if is_fifo {
+            (
                 "↑ NEXT",
-                crate::theme::success_color(is_dark),
                 format!(
                     "Next to paste with {hotkey_badge} — pasting upward (oldest → newest, then back to LIFO)"
                 ),
-            ),
+            )
+        } else {
+            (
+                "↓ NEXT",
+                format!("Next to paste with {hotkey_badge} — pasting downward (newest → oldest)"),
+            )
         };
-        let bg = color.gamma_multiply(if is_dark { 0.22 } else { 0.13 });
-        let stroke = egui::Stroke::new(1.0, color.gamma_multiply(0.75));
         egui::Frame::new()
             .corner_radius(crate::theme::pill_rounding())
-            .fill(bg)
-            .stroke(stroke)
+            .fill(bg_c)
+            .stroke(egui::Stroke::new(1.0, stroke_c))
             .inner_margin(egui::Margin::symmetric(6, 2))
             .show(ui, |ui| {
                 ui.label(
                     egui::RichText::new(label)
                         .size(9.5_f32)
-                        .color(color)
+                        .color(text_c)
                         .strong(),
                 );
             })
@@ -940,6 +937,9 @@ impl ClipboardApp {
         if !(state.paste_next_enabled && !state.is_next_marker && show_quick_actions) {
             return ItemAction::None;
         }
+        let is_fifo_target = !state.is_newest_item;
+        let (text_c, bg_c, stroke_c) =
+            crate::theme::paste_stack_pill_colors(state.is_dark, is_fifo_target);
         let (arrow, tip) = if state.is_newest_item {
             (
                 "↓",
@@ -957,11 +957,12 @@ impl ClipboardApp {
                 ),
             )
         };
-        if ui
-            .small_button(egui::RichText::new(arrow).strong())
-            .on_hover_text(tip)
-            .clicked()
-        {
+        let btn = egui::Button::new(egui::RichText::new(arrow).size(11.0).color(text_c).strong())
+            .fill(bg_c)
+            .stroke(egui::Stroke::new(1.0, stroke_c))
+            .corner_radius(crate::theme::pill_rounding())
+            .small();
+        if ui.add(btn).on_hover_text(tip).clicked() {
             ItemAction::SetPasteNextMarker(item.id)
         } else {
             ItemAction::None

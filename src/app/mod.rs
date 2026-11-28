@@ -1960,17 +1960,14 @@ impl ClipboardApp {
         });
         let hidden_by_filter = self.paste_stack.next_marker.is_some() && !marker_visible;
 
-        let (base_label, color) = match self.paste_stack.mode {
-            StackMode::Lifo => ("LIFO ↓", crate::theme::accent_color(is_dark)),
-            StackMode::Fifo => ("FIFO ↑", crate::theme::success_color(is_dark)),
-        };
+        let is_fifo = self.paste_stack.mode == StackMode::Fifo;
+        let (text_c, bg_c, stroke_c) = crate::theme::paste_stack_pill_colors(is_dark, is_fifo);
+        let base_label = if is_fifo { "FIFO ↑" } else { "LIFO ↓" };
         let label = if hidden_by_filter {
             format!("{base_label} · hidden")
         } else {
             base_label.to_string()
         };
-        let bg = color.gamma_multiply(if is_dark { 0.20 } else { 0.12 });
-        let stroke = egui::Stroke::new(1.0, color.gamma_multiply(0.65));
         let hotkey_badge = self.settings.paste_next_hotkey_badge();
         let tip = if hidden_by_filter {
             format!(
@@ -1982,14 +1979,14 @@ impl ClipboardApp {
 
         let chip_resp = egui::Frame::new()
             .corner_radius(crate::theme::pill_rounding())
-            .fill(bg)
-            .stroke(stroke)
+            .fill(bg_c)
+            .stroke(egui::Stroke::new(1.0, stroke_c))
             .inner_margin(egui::Margin::symmetric(6, 2))
             .show(ui, |ui| {
                 ui.label(
                     egui::RichText::new(label)
                         .size(10.0_f32)
-                        .color(color)
+                        .color(text_c)
                         .strong(),
                 );
             })
