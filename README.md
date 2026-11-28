@@ -30,6 +30,7 @@ Open the `⋯` menu on any text clipboard card to copy a transformed version wit
   * **Prepare Code for AI:** Dedents common indentation, replaces local home paths (`/Users/<name>`, `/home/<name>`, `C:\Users\<name>`) with `<HOME>`, redacts PEM keys, tokens, URL credentials, and sensitive assignments, and wraps the snippet in an auto-tagged Markdown code fence.
   * **Prepare Log for AI:** Strips ANSI escape codes, replaces local home paths, redacts secrets and non-loopback IPv4 addresses, collapses repeated consecutive lines (`... (repeated Nx)`), and wraps the result in `<log>...</log>`.
   * **Prepare Table for AI:** Converts copied TSV (Excel/Sheets/SQL), CSV, or semicolon-separated rows into a clean Markdown pipe table.
+  * **Add Line Numbers:** Prefixes each line with right-aligned 1-based line numbers (`1: ...`) so you can reference exact lines in an AI chat.
 * **Cleanup:** Strip formatting (HTML, Markdown, ANSI, zero-width chars), unwrap hard line breaks, collapse whitespace.
 * **Case & Lines:** `UPPERCASE`, `lowercase`, `Title Case`, `camelCase`, `snake_case`, `kebab-case`, sort, deduplicate, remove empty lines, join with commas.
 * **Developer & URL:** Prettify/minify JSON, Base64 encode/decode, OS-aware **Quote Path for Shell** (POSIX single quotes on macOS/Linux, double quotes on Windows), and strip URL tracking parameters (`utm_*`, `fbclid`, `gclid`, etc.).

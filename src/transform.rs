@@ -95,6 +95,7 @@ pub(crate) enum TextTransform {
     PrepareCodeForAi,
     PrepareLogForAi,
     PrepareTableForAi,
+    AddLineNumbers,
 
     // Cleanup
     StripFormatting,
@@ -133,6 +134,7 @@ impl TextTransform {
         Self::PrepareCodeForAi,
         Self::PrepareLogForAi,
         Self::PrepareTableForAi,
+        Self::AddLineNumbers,
         // Cleanup
         Self::StripFormatting,
         Self::UnwrapLines,
@@ -165,6 +167,7 @@ impl TextTransform {
             Self::PrepareCodeForAi => ("prepare_code_for_ai", "Prepare Code for AI"),
             Self::PrepareLogForAi => ("prepare_log_for_ai", "Prepare Log for AI"),
             Self::PrepareTableForAi => ("prepare_table_for_ai", "Prepare Table for AI"),
+            Self::AddLineNumbers => ("add_line_numbers", "Add Line Numbers"),
             Self::StripFormatting => ("strip_formatting", "Strip Formatting"),
             Self::UnwrapLines => ("unwrap_lines", "Unwrap Hard Line Breaks"),
             Self::CollapseWhitespace => ("collapse_whitespace", "Collapse Whitespace"),
@@ -204,9 +207,10 @@ impl TextTransform {
     #[must_use]
     pub(crate) const fn category(self) -> TransformCategory {
         match self {
-            Self::PrepareCodeForAi | Self::PrepareLogForAi | Self::PrepareTableForAi => {
-                TransformCategory::AiPrompt
-            }
+            Self::PrepareCodeForAi
+            | Self::PrepareLogForAi
+            | Self::PrepareTableForAi
+            | Self::AddLineNumbers => TransformCategory::AiPrompt,
             Self::StripFormatting | Self::UnwrapLines | Self::CollapseWhitespace => {
                 TransformCategory::Cleanup
             }
@@ -241,6 +245,9 @@ impl TextTransform {
             }
             Self::PrepareTableForAi => {
                 "Convert tab-separated (TSV) or comma-separated (CSV) rows into a Markdown table"
+            }
+            Self::AddLineNumbers => {
+                "Prefix each line with a 1-based line number (1: ...) for easy reference in AI chats"
             }
             Self::StripFormatting => {
                 "Strip HTML tags, Markdown syntax, ANSI escape codes, and zero-width characters"
@@ -289,6 +296,9 @@ impl TextTransform {
             }
             Self::PrepareTableForAi => {
                 format!("{} Copied Markdown table to clipboard!", icons::CHECK)
+            }
+            Self::AddLineNumbers => {
+                format!("{} Copied numbered lines to clipboard!", icons::CHECK)
             }
             Self::StripFormatting => {
                 format!("{} Copied raw plain text to clipboard!", icons::CHECK)
@@ -339,7 +349,8 @@ impl TextTransform {
             Self::PrepareLogForAi => text.contains('\n') || text.contains('\x1b'),
             Self::PrepareTableForAi => is_likely_tabular(text),
             Self::StripFormatting => has_strippable_formatting(item),
-            Self::UnwrapLines
+            Self::AddLineNumbers
+            | Self::UnwrapLines
             | Self::SortLinesAsc
             | Self::DeduplicateLines
             | Self::RemoveEmptyLines
@@ -379,6 +390,9 @@ impl TextTransform {
             Self::PrepareTableForAi => {
                 format!("{} Copied Markdown table ({summary})", icons::CHECK)
             }
+            Self::AddLineNumbers => {
+                format!("{} Copied numbered lines ({summary})", icons::CHECK)
+            }
             Self::QuotePathForShell => {
                 format!("{} Copied shell-quoted path ({summary})", icons::CHECK)
             }
@@ -392,6 +406,7 @@ impl TextTransform {
             Self::PrepareCodeForAi => Ok(prepare_code_for_ai_detailed(input)),
             Self::PrepareLogForAi => Ok(prepare_log_for_ai_detailed(input)),
             Self::PrepareTableForAi => prepare_table_for_ai_detailed(input),
+            Self::AddLineNumbers => Ok(add_line_numbers_detailed(input)),
             Self::QuotePathForShell => Ok(quote_paths_for_shell_detailed(
                 input,
                 crate::platform::DEFAULT_SHELL_PATH_STYLE,
@@ -409,6 +424,7 @@ impl TextTransform {
             Self::PrepareCodeForAi => Ok(prepare_code_for_ai_detailed(input).text),
             Self::PrepareLogForAi => Ok(prepare_log_for_ai_detailed(input).text),
             Self::PrepareTableForAi => prepare_table_for_ai_detailed(input).map(|o| o.text),
+            Self::AddLineNumbers => Ok(add_line_numbers_detailed(input).text),
             Self::StripFormatting => Ok(strip_source_formatting(input)),
             Self::UnwrapLines => Ok(unwrap_lines(input)),
             Self::CollapseWhitespace => Ok(collapse_whitespace(input)),
@@ -1594,6 +1610,37 @@ fn prepare_table_for_ai_detailed(input: &str) -> Result<TransformOutput, Transfo
             format_count(max_cols, "col", "cols")
         )),
     })
+}
+
+/// Prefixes each line with a right-aligned 1-based line number (`1: ...`).
+fn add_line_numbers_detailed(input: &str) -> TransformOutput {
+    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<&str> = normalized.lines().collect();
+    if lines.is_empty() {
+        return TransformOutput {
+            text: String::new(),
+            summary: None,
+        };
+    }
+
+    let width = lines.len().to_string().len();
+    let numbered: Vec<String> = lines
+        .iter()
+        .enumerate()
+        .map(|(idx, line)| {
+            let num = idx + 1;
+            if line.is_empty() {
+                format!("{num:>width$}:")
+            } else {
+                format!("{num:>width$}: {line}")
+            }
+        })
+        .collect();
+
+    TransformOutput {
+        text: numbered.join("\n"),
+        summary: Some(format_count(lines.len(), "line", "lines")),
+    }
 }
 
 /// Strips the common leading whitespace prefix across all non-empty lines and trims outer blank lines.
@@ -2913,5 +2960,49 @@ API_KEY=<YOUR_KEY_HERE>";
             !TextTransform::QuotePathForShell.applies_to(&make_item("plain sentence with spaces"))
         );
         assert!(!TextTransform::QuotePathForShell.applies_to(&make_item("// a C++ comment")));
+    }
+
+    #[test]
+    fn test_add_line_numbers_alignment_empty_lines_and_applicability() {
+        let short = "fn main() {\r\n\r\n    println!(\"hi\");\r\n}";
+        let short_out = TextTransform::AddLineNumbers
+            .apply_with_summary(short)
+            .unwrap();
+        assert_eq!(
+            short_out.text,
+            "1: fn main() {\n2:\n3:     println!(\"hi\");\n4: }"
+        );
+        assert_eq!(short_out.summary.as_deref(), Some("4 lines"));
+        assert!(TextTransform::AddLineNumbers
+            .toast_for_output(short_out.summary.as_deref())
+            .contains("4 lines"));
+
+        let ten_lines = (1..=10)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let ten_out = TextTransform::AddLineNumbers.apply(&ten_lines).unwrap();
+        assert!(ten_out.starts_with(" 1: line 1\n 2: line 2\n"));
+        assert!(ten_out.ends_with("\n10: line 10"));
+
+        let single_item = ClipboardItem {
+            id: 30,
+            kind: ItemKind::Text,
+            content: "single line".to_string(),
+            width: None,
+            height: None,
+            created_at: "2026-01-01".to_string(),
+            embedded_colors: vec![],
+            label: None,
+            notes: None,
+            is_pinned: false,
+        };
+        assert!(!TextTransform::AddLineNumbers.applies_to(&single_item));
+
+        let multi_item = ClipboardItem {
+            content: "line 1\nline 2".to_string(),
+            ..single_item
+        };
+        assert!(TextTransform::AddLineNumbers.applies_to(&multi_item));
     }
 }
