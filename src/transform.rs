@@ -47,7 +47,9 @@ impl TransformCategory {
                 "Convert text or identifiers between uppercase, lowercase, title, camel, snake, and kebab case"
             }
             Self::Lines => "Sort, deduplicate, remove blank lines, or join lines with commas",
-            Self::Developer => "Prettify or minify JSON and encode or decode Base64",
+            Self::Developer => {
+                "Prettify or minify JSON, encode or decode Base64, or quote file paths for your shell"
+            }
             Self::Url => "Remove analytics and tracking query parameters from copied URLs",
         }
     }
@@ -118,6 +120,7 @@ pub(crate) enum TextTransform {
     JsonMinify,
     Base64Encode,
     Base64Decode,
+    QuotePathForShell,
 
     // URL
     StripTrackingParams,
@@ -151,6 +154,7 @@ impl TextTransform {
         Self::JsonMinify,
         Self::Base64Encode,
         Self::Base64Decode,
+        Self::QuotePathForShell,
         // URL
         Self::StripTrackingParams,
     ];
@@ -178,6 +182,7 @@ impl TextTransform {
             Self::JsonMinify => ("json_minify", "Minify JSON"),
             Self::Base64Encode => ("base64_encode", "Base64 Encode"),
             Self::Base64Decode => ("base64_decode", "Base64 Decode"),
+            Self::QuotePathForShell => ("quote_path_for_shell", "Quote Path for Shell"),
             Self::StripTrackingParams => ("strip_tracking_params", "Strip Tracking Parameters"),
         }
     }
@@ -215,9 +220,11 @@ impl TextTransform {
             | Self::DeduplicateLines
             | Self::RemoveEmptyLines
             | Self::JoinWithComma => TransformCategory::Lines,
-            Self::JsonPrettify | Self::JsonMinify | Self::Base64Encode | Self::Base64Decode => {
-                TransformCategory::Developer
-            }
+            Self::JsonPrettify
+            | Self::JsonMinify
+            | Self::Base64Encode
+            | Self::Base64Decode
+            | Self::QuotePathForShell => TransformCategory::Developer,
             Self::StripTrackingParams => TransformCategory::Url,
         }
     }
@@ -256,6 +263,14 @@ impl TextTransform {
             Self::JsonMinify => "Compress JSON into a single compact line",
             Self::Base64Encode => "Encode plain text as Base64",
             Self::Base64Decode => "Decode Base64 sequence back into plain text",
+            Self::QuotePathForShell => match crate::platform::DEFAULT_SHELL_PATH_STYLE {
+                crate::platform::ShellPathStyle::Posix => {
+                    "Wrap file path(s) in shell-safe single quotes (escaping embedded quotes)"
+                }
+                crate::platform::ShellPathStyle::Windows => {
+                    "Wrap file path(s) in shell-safe double quotes for PowerShell / cmd"
+                }
+            },
             Self::StripTrackingParams => {
                 "Remove analytics query parameters (utm_*, fbclid, gclid, etc.) from URL"
             }
@@ -306,6 +321,9 @@ impl TextTransform {
             Self::Base64Decode => {
                 format!("{} Copied Base64 decoded text to clipboard!", icons::CHECK)
             }
+            Self::QuotePathForShell => {
+                format!("{} Copied shell-quoted path to clipboard!", icons::CHECK)
+            }
             Self::StripTrackingParams => format!("{} Copied clean URL to clipboard!", icons::CHECK),
         }
     }
@@ -340,6 +358,7 @@ impl TextTransform {
                     || is_json_heuristic(text)
             }
             Self::Base64Decode => is_likely_base64_text(text),
+            Self::QuotePathForShell => is_likely_file_path_list(text),
             Self::StripTrackingParams => has_tracking_params(text),
         }
     }
@@ -360,6 +379,9 @@ impl TextTransform {
             Self::PrepareTableForAi => {
                 format!("{} Copied Markdown table ({summary})", icons::CHECK)
             }
+            Self::QuotePathForShell => {
+                format!("{} Copied shell-quoted path ({summary})", icons::CHECK)
+            }
             _ => self.toast_success(),
         }
     }
@@ -370,6 +392,10 @@ impl TextTransform {
             Self::PrepareCodeForAi => Ok(prepare_code_for_ai_detailed(input)),
             Self::PrepareLogForAi => Ok(prepare_log_for_ai_detailed(input)),
             Self::PrepareTableForAi => prepare_table_for_ai_detailed(input),
+            Self::QuotePathForShell => Ok(quote_paths_for_shell_detailed(
+                input,
+                crate::platform::DEFAULT_SHELL_PATH_STYLE,
+            )),
             other => Ok(TransformOutput {
                 text: other.apply(input)?,
                 summary: None,
@@ -405,6 +431,11 @@ impl TextTransform {
                 let bytes = base64_decode(input.trim())?;
                 String::from_utf8(bytes).map_err(|_| TransformError::InvalidUtf8)
             }
+            Self::QuotePathForShell => Ok(quote_paths_for_shell_detailed(
+                input,
+                crate::platform::DEFAULT_SHELL_PATH_STYLE,
+            )
+            .text),
             Self::StripTrackingParams => strip_url_tracking_params(input),
         }
     }
@@ -2262,6 +2293,137 @@ fn parse_delimited_line(line: &str, delimiter: char) -> Vec<String> {
     fields
 }
 
+// ============================================================================
+// Shell Path Quoting
+// ============================================================================
+
+/// Returns true if every non-empty line in `text` looks like a Unix or Windows file path.
+fn is_likely_file_path_list(text: &str) -> bool {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.is_empty() || lines.len() > 200 {
+        return false;
+    }
+    lines.iter().all(|line| is_likely_single_file_path(line))
+}
+
+fn is_likely_single_file_path(raw: &str) -> bool {
+    let unquoted = strip_outer_shell_quotes(raw);
+    let path = unquoted.as_str();
+    if path.len() < 2 || path.contains("://") || path.chars().any(char::is_control) {
+        return false;
+    }
+
+    // Unix absolute: /foo/bar (exclude //comment or / followed by whitespace)
+    if let Some(rest) = path.strip_prefix('/') {
+        return rest
+            .chars()
+            .next()
+            .is_some_and(|c| !c.is_whitespace() && c != '/');
+    }
+
+    // Unix home or relative: ~/..., ./..., ../...
+    if let Some(rest) = path
+        .strip_prefix("~/")
+        .or_else(|| path.strip_prefix("./"))
+        .or_else(|| path.strip_prefix("../"))
+    {
+        return rest.chars().next().is_some_and(|c| !c.is_whitespace());
+    }
+
+    // Windows drive path: C:\... or C:/...
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return true;
+    }
+
+    // Windows UNC path: \\server\share
+    if let Some(rest) = path.strip_prefix("\\\\") {
+        if let Some((host, share)) = rest.split_once('\\') {
+            return !host.is_empty() && !share.is_empty() && !host.chars().any(char::is_whitespace);
+        }
+    }
+
+    false
+}
+
+/// Strips one layer of matching outer quotes (`"..."`, `'...'`, or POSIX `~/'...'`) so quoting is idempotent.
+fn strip_outer_shell_quotes(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        if let Some(inner) = rest.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+            return format!("~/{}", inner.replace("'\\''", "'"));
+        }
+    }
+    if trimmed.len() >= 2 {
+        if let Some(inner) = trimmed
+            .strip_prefix('\'')
+            .and_then(|s| s.strip_suffix('\''))
+        {
+            return inner.replace("'\\''", "'");
+        }
+        if let Some(inner) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            return inner.replace("\"\"", "\"");
+        }
+    }
+    trimmed.to_string()
+}
+
+/// Quotes one or more newline-separated file paths for the given shell style.
+/// Multiple paths are joined with spaces so pasting into a terminal never executes intermediate lines.
+fn quote_paths_for_shell_detailed(
+    input: &str,
+    style: crate::platform::ShellPathStyle,
+) -> TransformOutput {
+    let quoted: Vec<String> = input
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let clean = strip_outer_shell_quotes(line);
+            quote_single_path(&clean, style)
+        })
+        .collect();
+
+    let style_label = match style {
+        crate::platform::ShellPathStyle::Posix => "POSIX",
+        crate::platform::ShellPathStyle::Windows => "Windows",
+    };
+
+    let summary = if quoted.len() > 1 {
+        Some(format!(
+            "{style_label} · {}",
+            format_count(quoted.len(), "path", "paths")
+        ))
+    } else {
+        Some(style_label.to_string())
+    };
+
+    TransformOutput {
+        text: quoted.join(" "),
+        summary,
+    }
+}
+
+fn quote_single_path(path: &str, style: crate::platform::ShellPathStyle) -> String {
+    match style {
+        crate::platform::ShellPathStyle::Posix => path.strip_prefix("~/").map_or_else(
+            || format!("'{}'", path.replace('\'', "'\\''")),
+            |rest| format!("~/'{}'", rest.replace('\'', "'\\''")),
+        ),
+        crate::platform::ShellPathStyle::Windows => {
+            format!("\"{}\"", path.replace('"', "\"\""))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2668,5 +2830,84 @@ API_KEY=<YOUR_KEY_HERE>";
         let text = "short\n123456789012345\nline3\nline4";
         let preview = format_preview_snippet(text, 2, 10);
         assert_eq!(preview, "short\n123456789…\n… (+2 more lines)");
+    }
+
+    #[test]
+    fn test_quote_path_for_shell_posix_and_windows() {
+        use crate::platform::ShellPathStyle;
+
+        let posix_path = "/Users/alice/My Docs/Q4 (Final) O'Reilly.pdf";
+        let posix_out = quote_paths_for_shell_detailed(posix_path, ShellPathStyle::Posix);
+        assert_eq!(
+            posix_out.text,
+            "'/Users/alice/My Docs/Q4 (Final) O'\\''Reilly.pdf'"
+        );
+        // Idempotent when applied to an already-quoted POSIX path
+        assert_eq!(
+            quote_paths_for_shell_detailed(&posix_out.text, ShellPathStyle::Posix).text,
+            posix_out.text
+        );
+
+        // Preserves tilde expansion on POSIX ~/ paths
+        let tilde_out =
+            quote_paths_for_shell_detailed("~/My Projects/app.rs", ShellPathStyle::Posix);
+        assert_eq!(tilde_out.text, "~/'My Projects/app.rs'");
+        assert_eq!(
+            quote_paths_for_shell_detailed(&tilde_out.text, ShellPathStyle::Posix).text,
+            "~/'My Projects/app.rs'"
+        );
+
+        // Windows double-quoting and Explorer already-quoted idempotency
+        let win_path = r"C:\Program Files (x86)\My App\config.toml";
+        let win_out = quote_paths_for_shell_detailed(win_path, ShellPathStyle::Windows);
+        assert_eq!(
+            win_out.text,
+            r#""C:\Program Files (x86)\My App\config.toml""#
+        );
+        assert_eq!(
+            quote_paths_for_shell_detailed(&win_out.text, ShellPathStyle::Windows).text,
+            win_out.text
+        );
+
+        // Multi-line paths joined safely with spaces
+        let multi = "/tmp/first file.txt\n/tmp/second file.txt";
+        let multi_out = quote_paths_for_shell_detailed(multi, ShellPathStyle::Posix);
+        assert_eq!(
+            multi_out.text,
+            "'/tmp/first file.txt' '/tmp/second file.txt'"
+        );
+        assert_eq!(multi_out.summary.as_deref(), Some("POSIX · 2 paths"));
+    }
+
+    #[test]
+    fn test_quote_path_for_shell_applicability() {
+        let make_item = |content: &str| ClipboardItem {
+            id: 20,
+            kind: ItemKind::Text,
+            content: content.to_string(),
+            width: None,
+            height: None,
+            created_at: "2026-01-01".to_string(),
+            embedded_colors: vec![],
+            label: None,
+            notes: None,
+            is_pinned: false,
+        };
+
+        assert!(TextTransform::QuotePathForShell.applies_to(&make_item("/Users/alice/my file.txt")));
+        assert!(TextTransform::QuotePathForShell.applies_to(&make_item("~/Documents/notes.md")));
+        assert!(TextTransform::QuotePathForShell.applies_to(&make_item(r"C:\Program Files\App")));
+        assert!(
+            TextTransform::QuotePathForShell.applies_to(&make_item(r#""C:\Program Files\App""#))
+        );
+        assert!(
+            TextTransform::QuotePathForShell.applies_to(&make_item(r"\\fileserver\shared\doc.pdf"))
+        );
+
+        assert!(!TextTransform::QuotePathForShell.applies_to(&make_item("https://example.com/a/b")));
+        assert!(
+            !TextTransform::QuotePathForShell.applies_to(&make_item("plain sentence with spaces"))
+        );
+        assert!(!TextTransform::QuotePathForShell.applies_to(&make_item("// a C++ comment")));
     }
 }

@@ -27,6 +27,22 @@ use windows as backend;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::QuoteHotkeyFallback;
 
+/// Native shell path quoting style for the current operating system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum ShellPathStyle {
+    /// POSIX `sh`/`zsh`/`bash` single-quoted path (`'...'`, escaping `'` as `'\''`).
+    Posix,
+    /// Windows `cmd` / PowerShell double-quoted path (`"..."`).
+    Windows,
+}
+
+/// Default shell path quoting style for the current operating system.
+#[cfg(target_os = "windows")]
+pub(crate) const DEFAULT_SHELL_PATH_STYLE: ShellPathStyle = ShellPathStyle::Windows;
+#[cfg(not(target_os = "windows"))]
+pub(crate) const DEFAULT_SHELL_PATH_STYLE: ShellPathStyle = ShellPathStyle::Posix;
+
 /// No-op Quote-key global hotkey fallback on non-Linux platforms.
 #[cfg(not(target_os = "linux"))]
 pub(crate) struct QuoteHotkeyFallback;
@@ -1055,7 +1071,8 @@ impl PasteNextExecutor for OsPasteNextExecutor {
         const MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_millis(500);
 
         let seq = job.seq;
-        let settle_ms = job.settle_ms.clamp(20, 1000);
+        // Paste Next never switches window focus, so only a brief clipboard-settle delay is needed.
+        let settle_ms = job.settle_ms.clamp(15, 40);
         let release_modifiers = job.release_modifiers;
         let db = job.db;
         let ctx = job.ctx;

@@ -31,7 +31,7 @@ Open the `⋯` menu on any text clipboard card to copy a transformed version wit
   * **Prepare Table for AI:** Converts copied TSV (Excel/Sheets/SQL), CSV, or semicolon-separated rows into a clean Markdown pipe table.
 * **Cleanup:** Strip formatting (HTML, Markdown, ANSI, zero-width chars), unwrap hard line breaks, collapse whitespace.
 * **Case & Lines:** `UPPERCASE`, `lowercase`, `Title Case`, `camelCase`, `snake_case`, `kebab-case`, sort, deduplicate, remove empty lines, join with commas.
-* **Developer & URL:** Prettify/minify JSON, Base64 encode/decode, strip URL tracking parameters (`utm_*`, `fbclid`, `gclid`, etc.).
+* **Developer & URL:** Prettify/minify JSON, Base64 encode/decode, OS-aware **Quote Path for Shell** (POSIX single quotes on macOS/Linux, double quotes on Windows), and strip URL tracking parameters (`utm_*`, `fbclid`, `gclid`, etc.).
 
 ---
 
