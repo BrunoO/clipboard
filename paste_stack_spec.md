@@ -46,8 +46,8 @@
 | History UI | [`src/app/history_view.rs`](src/app/history_view.rs) | `NEXT` badge, `LIFO ↓` / `FIFO ↑` mode chip, and "Paste next from here" row action + `Cmd/Ctrl+Shift+M` shortcut (§7.6). |
 | Paste dispatch | [`src/platform/mod.rs`](src/platform/mod.rs) (safe) | New ordered `paste-next-worker` with an OS-agnostic API (§4). |
 | OS keystrokes | [`src/platform/macos.rs`](src/platform/macos.rs), [`src/platform/windows.rs`](src/platform/windows.rs), [`src/platform/linux.rs`](src/platform/linux.rs) | Modifier-safe paste simulation (§5). `unsafe` only in `macos.rs` / `windows.rs`. |
-| Image fingerprint | [`src/media.rs`](src/media.rs) (moved from [`src/monitor.rs`](src/monitor.rs)) | Shared `pub(crate) fn image_fingerprint(...)` (§6.2). |
-| Skip markers | [`src/db.rs`](src/db.rs), [`src/monitor.rs`](src/monitor.rs) | Image skip marker on par with the text marker. Monitor honours it before insert and notify (§6.2). |
+| Image fingerprint | [`src/media.rs`](src/media.rs) (moved from [`src/monitor.rs`](src/monitor.rs)) | Shared `pub(crate) fn image_fingerprint(...)` (§6.1). |
+| Skip markers | [`src/db.rs`](src/db.rs), [`src/monitor.rs`](src/monitor.rs) | Unified `SkipCaptureTarget` (`Text` / `Image`) single-slot skip API. Monitor honours it before insert and notify (§6.1). |
 
 ---
 
@@ -147,17 +147,20 @@ When the user presses `Ctrl+Alt+V`, Alt (and Ctrl) are typically **still physica
 
 ## 6. Feedback-loop prevention and secret handling
 
-### 6.1 Text (all text kinds)
-- **Single-slot marker set inside the worker:** `transient_text` in [`src/db.rs`](src/db.rs) holds only one value. Because jobs are serialized, the worker calls `db.skip_next_capture(&text)` **inside the job immediately before writing to the clipboard** (via a `Database` handle or a callback), **not at submit time**. This prevents queued jobs from overwriting each other's markers.
-- When the monitor sees that write, `take_if_skipped` swallows it: it is not re-inserted, does not move to the top, does not notify, and does **not reset the marker or mode**.
+### 6.1 Unified `SkipCaptureTarget` (text, images, and future types)
+- Replace the text-only `transient_text` slot in [`src/db.rs`](src/db.rs) with a **single unified slot** holding:
+  ```rust
+  pub(crate) enum SkipCaptureTarget {
+      Text(zeroize::Zeroizing<String>),
+      Image(u64), // image_fingerprint(width, height, rgba)
+  }
+  ```
+  exposed via `db.skip_next_capture(target)`, `db.take_if_skipped(candidate: &SkipCaptureTarget) -> bool`, and `db.clear_skip_capture()`. Using one enum guarantees that setting a new skip target replaces any previous one, `clear_skip_capture()` clears all types in one call, and adding future clipboard payload types is compiler-checked via exhaustive `match`.
+- **Set inside the worker, not at submit time:** because jobs are serialized and there is one slot, the worker calls `db.skip_next_capture(...)` **inside the job immediately before writing to the clipboard** (via a `Database` handle or callback). This prevents queued jobs from overwriting each other's markers.
+- **Text (all text kinds):** when the monitor sees a text write matching `SkipCaptureTarget::Text`, `take_if_skipped` swallows it: it is not re-inserted, does not move to the top, does not notify, and does **not reset the marker or mode**.
+- **Images:** move `compute_image_fingerprint` from [`src/monitor.rs`](src/monitor.rs) into [`src/media.rs`](src/media.rs) as `pub(crate) fn image_fingerprint(width, height, rgba) -> u64` so monitor and writer share one implementation. In [`src/monitor.rs`](src/monitor.rs), check `take_if_skipped(&SkipCaptureTarget::Image(fp))` **before** `rgba_to_png` / `insert_image`. When it matches: update `last_copied_image_hash` and `change_token` (so the fast path stays consistent), clear `last_copied_text`, and **do not insert, promote, or notify**.
 
-### 6.2 Images
-- Move `compute_image_fingerprint` from [`src/monitor.rs`](src/monitor.rs) into [`src/media.rs`](src/media.rs) as `pub(crate) fn image_fingerprint(width, height, rgba) -> u64`. The monitor and the writer then share one implementation.
-- Add to [`src/db.rs`](src/db.rs): `skip_next_image_capture(fp: u64)` / `take_if_image_skipped(fp: u64) -> bool` / `clear_image_skip()`. These mirror the text API, with a single slot set inside the job right before the write.
-- In [`src/monitor.rs`](src/monitor.rs), check `take_if_image_skipped(fp)` **before** `rgba_to_png` / `insert_image`. When it matches: update `last_copied_image_hash` and `change_token` (so the fast path stays consistent), clear `last_copied_text`, and **do not insert or notify**.
-- Validate against `insert_image` promotion semantics: a skipped write must never promote an older duplicate.
-
-### 6.3 Secrets (`ItemKind::Secret`)
+### 6.2 Secrets (`ItemKind::Secret`)
 A secret pasted by Paste Next gets the **same protections** as `copy_secret_to_clipboard` in [`src/app/mod.rs`](src/app/mod.rs):
 1. Skip capture (§6.1).
 2. Mark the clipboard as concealed (`platform::mark_clipboard_concealed()`), done in the worker right after the write (`conceal: true`).
@@ -201,8 +204,8 @@ A secret pasted by Paste Next gets the **same protections** as `copy_secret_to_c
 - `Pasted { seq }`: pop the matching `in_flight` entry and advance `next_marker` relative to the **completed job's `submitted_id`** (not the prior `next_marker`, so an earlier failed job cannot cause a double-paste):
   - In `Lifo`: move `next_marker` to the next older entry after `submitted_id` (or `None` if `submitted_id` was the oldest).
   - In `Fifo`: if `submitted_id` was the newest entry, switch to `StackMode::Lifo` with `next_marker` on the newest entry (Rule 3); otherwise move `next_marker` to the next newer entry (remaining in `Fifo`).
-  - Also trigger `schedule_secret_clipboard_clear` for secrets or cancel any pending secret clear for non-secrets (§6.3).
-- `Failed { seq, .. }`: pop the entry and **leave `next_marker` where it is** (do not advance). Clear any pending skip markers (`clear_skip_capture` / `clear_image_skip`), log the reason without content, and record a toast if the window is visible. Jobs already queued behind it keep their own submitted targets, so a failure means that entry is not pasted (no automatic retry). The user can press again.
+  - Also trigger `schedule_secret_clipboard_clear` for secrets or cancel any pending secret clear for non-secrets (§6.2).
+- `Failed { seq, .. }`: pop the entry and **leave `next_marker` where it is** (do not advance). Clear any pending skip marker (`clear_skip_capture`), log the reason without content, and record a toast if the window is visible. Jobs already queued behind it keep their own submitted targets, so a failure means that entry is not pasted (no automatic retry). The user can press again.
 - `Failed` with reason "Accessibility permission missing" (macOS) shows the existing auto-paste permission hint the next time the window is shown.
 
 ### 7.5 Reset and validity rules
