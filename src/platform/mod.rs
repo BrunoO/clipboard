@@ -43,6 +43,46 @@ pub(crate) const DEFAULT_SHELL_PATH_STYLE: ShellPathStyle = ShellPathStyle::Wind
 #[cfg(not(target_os = "windows"))]
 pub(crate) const DEFAULT_SHELL_PATH_STYLE: ShellPathStyle = ShellPathStyle::Posix;
 
+/// Opens an existing local directory in the OS file manager (Finder, File Explorer, or `xdg-open`).
+///
+/// Refuses non-directory paths so this helper can never execute arbitrary files.
+pub(crate) fn open_directory(path: &std::path::Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("Directory does not exist: {}", path.display()));
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(path);
+        c
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("explorer");
+        c.arg(path);
+        c
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(path);
+        c
+    };
+
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        return Err("Opening folders is not supported on this platform".to_string());
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to open folder: {e}"))
+}
+
 /// No-op Quote-key global hotkey fallback on non-Linux platforms.
 #[cfg(not(target_os = "linux"))]
 pub(crate) struct QuoteHotkeyFallback;

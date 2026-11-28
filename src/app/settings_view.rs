@@ -1302,6 +1302,19 @@ impl ClipboardApp {
             }
 
             if ui
+                .button(format!("{} Open Folder", icons::ARROW_SQUARE_OUT))
+                .on_hover_text("Open the transforms folder in your file manager")
+                .clicked()
+            {
+                let dir = self.script_registry.scripts_dir().to_path_buf();
+                let _ = std::fs::create_dir_all(&dir);
+                crate::platform::fs_security::set_restricted_dir_permissions(&dir);
+                if let Err(e) = crate::platform::open_directory(&dir) {
+                    self.show_warning_toast(&format!("{} {e}", icons::WARNING));
+                }
+            }
+
+            if ui
                 .button(format!("{} Copy Folder Path", icons::COPY))
                 .on_hover_text("Copy the transforms folder path to clipboard")
                 .clicked()
