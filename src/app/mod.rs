@@ -9,7 +9,7 @@ use crate::hotkey::HotkeyService;
 use crate::icons;
 use crate::media;
 use crate::platform;
-use crate::settings::{AppSettings, HotkeyPreset};
+use crate::settings::AppSettings;
 use crate::tray::{TrayAction, TrayService};
 use arboard::Clipboard;
 use eframe::egui;
@@ -283,9 +283,9 @@ impl AppServices {
 pub(crate) struct DialogState {
     pub(crate) show_clear_confirm_dialog: bool,
     pub(crate) show_keyring_explanation: bool,
-    pub(crate) recording_custom_hotkey: bool,
-    pub(crate) manual_custom_hotkey_edit: bool,
-    pub(crate) pending_custom_hotkey: String,
+    pub(crate) recording_toggle_hotkey: bool,
+    pub(crate) manual_toggle_hotkey_edit: bool,
+    pub(crate) pending_toggle_hotkey: String,
     pub(crate) hotkey_recording_hint: Option<String>,
     pub(crate) show_new_secret_dialog: bool,
     pub(crate) new_secret_label: String,
@@ -345,14 +345,12 @@ impl ClipboardApp {
                 severity: ToastSeverity::Error,
                 shown_at: Instant::now(),
             })
-        } else if services.hotkey_service.is_none()
-            && settings.hotkey != crate::settings::HotkeyPreset::None
-        {
+        } else if services.hotkey_service.is_none() && !settings.toggle_hotkey.is_empty() {
             Some(Toast {
                 message: format!(
                     "{} Global hotkey ({}) is unavailable or in use by another app",
                     icons::WARNING,
-                    settings.hotkey.display_name(),
+                    settings.toggle_hotkey,
                 ),
                 severity: ToastSeverity::Warning,
                 shown_at: Instant::now(),
@@ -958,7 +956,7 @@ impl ClipboardApp {
     }
 
     fn handle_escape_key(&mut self, ctx: &egui::Context) {
-        if self.dialogs.recording_custom_hotkey {
+        if self.dialogs.recording_toggle_hotkey {
             return;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -976,9 +974,9 @@ impl ClipboardApp {
         }
     }
 
-    /// Handles key input during custom hotkey recording mode.
+    /// Handles key input during toggle hotkey recording mode.
     /// Uses raw events to reliably capture modifier+key combinations.
-    fn handle_custom_hotkey_recording(&mut self, ctx: &egui::Context) {
+    fn handle_toggle_hotkey_recording(&mut self, ctx: &egui::Context) {
         ctx.input(|i| {
             for event in &i.events {
                 let egui::Event::Key {
@@ -993,13 +991,13 @@ impl ClipboardApp {
                 };
 
                 if *key == egui::Key::Escape {
-                    self.cancel_recording_custom_hotkey();
+                    self.cancel_recording_toggle_hotkey();
                     return;
                 }
 
                 let active_mods = active_modifier_labels(*modifiers);
                 if *key == egui::Key::Backspace && active_mods.is_empty() {
-                    self.clear_custom_hotkey();
+                    self.clear_toggle_hotkey();
                     return;
                 }
 
@@ -1010,8 +1008,8 @@ impl ClipboardApp {
                 }
 
                 if let Some(combo) = format_recorded_hotkey(*modifiers, *key) {
-                    self.dialogs.pending_custom_hotkey = combo;
-                    self.apply_custom_hotkey();
+                    self.dialogs.pending_toggle_hotkey = combo;
+                    self.apply_toggle_hotkey();
                     return;
                 }
             }
@@ -1019,8 +1017,8 @@ impl ClipboardApp {
     }
 
     fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
-        if self.dialogs.recording_custom_hotkey {
-            self.handle_custom_hotkey_recording(ctx);
+        if self.dialogs.recording_toggle_hotkey {
+            self.handle_toggle_hotkey_recording(ctx);
             return;
         }
 
@@ -1528,13 +1526,7 @@ impl ClipboardApp {
             }
 
             if ui.available_width() > 220.0 {
-                let badge = if self.settings.hotkey == HotkeyPreset::Custom
-                    && !self.settings.custom_hotkey.is_empty()
-                {
-                    self.settings.custom_hotkey.as_str()
-                } else {
-                    self.settings.hotkey.badge()
-                };
+                let badge = self.settings.toggle_hotkey_badge();
                 ui.label(
                     egui::RichText::new(format!("({badge})"))
                         .color(crate::theme::text_secondary(is_dark))

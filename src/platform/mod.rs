@@ -388,16 +388,6 @@ pub(crate) const META_MODIFIER_NAME: &str = if cfg!(target_os = "macos") {
     "Win"
 };
 
-/// Returns the default global-hotkey primary modifier for presets (`META` on macOS, `CONTROL` elsewhere).
-#[must_use]
-pub(crate) const fn primary_hotkey_modifier() -> global_hotkey::hotkey::Modifiers {
-    if cfg!(target_os = "macos") {
-        global_hotkey::hotkey::Modifiers::META
-    } else {
-        global_hotkey::hotkey::Modifiers::CONTROL
-    }
-}
-
 /// Returns the platform default for `hide_on_blur` (`false` on Windows where clicking outside
 /// while interacting with the taskbar/tray is common, `true` elsewhere).
 #[must_use]

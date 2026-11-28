@@ -1,6 +1,5 @@
 use super::{ActiveView, ClipboardApp};
 use crate::icons;
-use crate::settings::HotkeyPreset;
 use eframe::egui;
 
 impl ClipboardApp {
@@ -122,77 +121,35 @@ impl ClipboardApp {
     fn render_hotkey_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         Self::settings_card(ui, is_dark, |ui| {
             ui.label(
-                egui::RichText::new(format!("{} Global Shortcut", icons::KEYBOARD))
+                egui::RichText::new(format!("{} Global Shortcuts", icons::KEYBOARD))
                     .color(crate::theme::text_primary(is_dark))
                     .strong(),
             );
             ui.label(
                 egui::RichText::new(
-                    "Select the keyboard shortcut used to summon the clipboard manager from anywhere.",
+                    "Click a shortcut box to record a new combination, or clear it to disable.",
                 )
                 .color(crate::theme::text_secondary(is_dark))
                 .size(11.0),
             );
-            ui.add_space(6.0);
+            ui.add_space(8.0);
 
-            self.render_hotkey_preset_selector(ui);
-
-            if self.settings.hotkey == HotkeyPreset::Custom {
-                ui.add_space(4.0);
-                ui.indent("custom_hotkey_editor_indent", |ui| {
-                    self.render_custom_hotkey_editor(ui, is_dark);
-                });
-            }
+            ui.label(
+                egui::RichText::new("Toggle Window")
+                    .color(crate::theme::text_primary(is_dark))
+                    .size(12.0)
+                    .strong(),
+            );
+            ui.label(
+                egui::RichText::new("Summon or hide the clipboard manager from anywhere.")
+                    .color(crate::theme::text_secondary(is_dark))
+                    .size(10.5),
+            );
+            ui.add_space(4.0);
+            self.render_toggle_hotkey_editor(ui, is_dark);
 
             self.render_hotkey_registration_status(ui, is_dark);
         });
-    }
-
-    fn render_hotkey_preset_selector(&mut self, ui: &mut egui::Ui) {
-        let current_preset = self.settings.hotkey;
-        for &preset in HotkeyPreset::all_presets() {
-            let is_selected = current_preset == preset;
-            let mut selected = is_selected;
-            if ui
-                .radio_value(&mut selected, true, preset.display_name())
-                .clicked()
-                && !is_selected
-            {
-                self.settings.hotkey = preset;
-                if preset == HotkeyPreset::Custom {
-                    let _ = self.persist_settings();
-                    if self.settings.custom_hotkey.is_empty() {
-                        self.start_recording_custom_hotkey();
-                    } else {
-                        let registered = self.update_hotkeys_from_settings();
-                        if !registered {
-                            self.show_warning_toast(&format!(
-                                "{} Could not register {} (may be in use by OS)",
-                                icons::WARNING,
-                                self.settings.custom_hotkey
-                            ));
-                        }
-                    }
-                } else {
-                    self.cancel_recording_custom_hotkey();
-                    let saved = self.persist_settings();
-                    let registered = self.update_hotkeys_from_settings();
-                    if !registered {
-                        self.show_warning_toast(&format!(
-                            "{} Could not register {} (may be in use by OS)",
-                            icons::WARNING,
-                            preset.badge()
-                        ));
-                    } else if saved {
-                        self.show_toast(&format!(
-                            "{} Shortcut set to {}",
-                            icons::CHECK,
-                            preset.badge()
-                        ));
-                    }
-                }
-            }
-        }
     }
 
     fn render_keycap_pill(ui: &mut egui::Ui, label: &str, is_dark: bool, accented: bool) {
@@ -230,21 +187,21 @@ impl ClipboardApp {
             });
     }
 
-    fn render_manual_custom_hotkey_editor(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+    fn render_manual_toggle_hotkey_editor(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         ui.horizontal(|ui| {
             let response = ui.add(
-                egui::TextEdit::singleline(&mut self.dialogs.pending_custom_hotkey)
-                    .hint_text("e.g. Ctrl+Shift+X or Ctrl+ù")
+                egui::TextEdit::singleline(&mut self.dialogs.pending_toggle_hotkey)
+                    .hint_text("e.g. Ctrl+Shift+V or Ctrl+ù")
                     .desired_width(190.0),
             );
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.apply_custom_hotkey();
+                self.apply_toggle_hotkey();
             }
             if ui.button("Save").clicked() {
-                self.apply_custom_hotkey();
+                self.apply_toggle_hotkey();
             }
             if ui.button("Cancel").clicked() {
-                self.cancel_recording_custom_hotkey();
+                self.cancel_recording_toggle_hotkey();
             }
         });
         ui.add_space(4.0);
@@ -256,8 +213,8 @@ impl ClipboardApp {
     }
 
     fn render_hotkey_recorder_box_contents(
-        &self,
         ui: &mut egui::Ui,
+        current_binding: &str,
         is_dark: bool,
         is_recording: bool,
     ) {
@@ -286,16 +243,14 @@ impl ClipboardApp {
                     }
                     Self::render_keycap_pill(ui, "…", is_dark, true);
                 }
-            } else if self.settings.custom_hotkey.is_empty() {
+            } else if current_binding.is_empty() {
                 ui.label(
-                    egui::RichText::new("Click to record shortcut…")
+                    egui::RichText::new("Disabled — click to record…")
                         .color(crate::theme::text_secondary(is_dark))
                         .size(12.0),
                 );
             } else {
-                for (idx, part) in self
-                    .settings
-                    .custom_hotkey
+                for (idx, part) in current_binding
                     .split('+')
                     .map(str::trim)
                     .filter(|p| !p.is_empty())
@@ -314,13 +269,13 @@ impl ClipboardApp {
         });
     }
 
-    fn render_custom_hotkey_editor(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        if self.dialogs.manual_custom_hotkey_edit {
-            self.render_manual_custom_hotkey_editor(ui, is_dark);
+    fn render_toggle_hotkey_editor(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        if self.dialogs.manual_toggle_hotkey_edit {
+            self.render_manual_toggle_hotkey_editor(ui, is_dark);
             return;
         }
 
-        let is_recording = self.dialogs.recording_custom_hotkey;
+        let is_recording = self.dialogs.recording_toggle_hotkey;
         let accent = crate::theme::accent_color(is_dark);
         let box_fill = if is_recording {
             accent.gamma_multiply(if is_dark { 0.12 } else { 0.07 })
@@ -334,6 +289,8 @@ impl ClipboardApp {
         };
 
         let mut start_recording = false;
+        let default_binding = crate::settings::default_toggle_hotkey();
+        let is_default = self.settings.toggle_hotkey == default_binding;
         ui.horizontal(|ui| {
             let frame_resp = egui::Frame::new()
                 .corner_radius(egui::CornerRadius::same(7))
@@ -341,14 +298,19 @@ impl ClipboardApp {
                 .stroke(box_stroke)
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    self.render_hotkey_recorder_box_contents(ui, is_dark, is_recording);
+                    Self::render_hotkey_recorder_box_contents(
+                        ui,
+                        &self.settings.toggle_hotkey,
+                        is_dark,
+                        is_recording,
+                    );
                 })
                 .response;
 
             let click_resp = ui
                 .interact(
                     frame_resp.rect,
-                    ui.scope_id().with("custom_hotkey_recorder_box"),
+                    ui.scope_id().with("toggle_hotkey_recorder_box"),
                     egui::Sense::click(),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -364,41 +326,64 @@ impl ClipboardApp {
 
             if is_recording {
                 if ui.button("Cancel").clicked() {
-                    self.cancel_recording_custom_hotkey();
+                    self.cancel_recording_toggle_hotkey();
                 }
             } else {
-                if !self.settings.custom_hotkey.is_empty() && ui.button("Clear").clicked() {
-                    self.clear_custom_hotkey();
+                if !self.settings.toggle_hotkey.is_empty() && ui.button("Clear").clicked() {
+                    self.clear_toggle_hotkey();
+                }
+                if !is_default
+                    && ui
+                        .button("Reset")
+                        .on_hover_text(format!("Reset to default ({default_binding})"))
+                        .clicked()
+                {
+                    self.reset_toggle_hotkey();
                 }
                 if ui
                     .button("Type")
                     .on_hover_text("Enter shortcut text manually")
                     .clicked()
                 {
-                    self.dialogs.manual_custom_hotkey_edit = true;
-                    self.dialogs.recording_custom_hotkey = false;
+                    self.dialogs.manual_toggle_hotkey_edit = true;
+                    self.dialogs.recording_toggle_hotkey = false;
                     self.dialogs.hotkey_recording_hint = None;
                     self.dialogs
-                        .pending_custom_hotkey
-                        .clone_from(&self.settings.custom_hotkey);
+                        .pending_toggle_hotkey
+                        .clone_from(&self.settings.toggle_hotkey);
                 }
             }
         });
 
         if start_recording {
-            self.start_recording_custom_hotkey();
+            self.start_recording_toggle_hotkey();
         }
 
+        Self::render_hotkey_recorder_hint(
+            ui,
+            is_dark,
+            self.dialogs.recording_toggle_hotkey,
+            self.dialogs.hotkey_recording_hint.as_deref(),
+        );
+    }
+
+    fn render_hotkey_recorder_hint(
+        ui: &mut egui::Ui,
+        is_dark: bool,
+        is_recording: bool,
+        recording_hint: Option<&str>,
+    ) {
         ui.add_space(4.0);
-        if self.dialogs.recording_custom_hotkey {
-            let (hint_text, hint_color) = self.dialogs.hotkey_recording_hint.as_ref().map_or_else(
+        if is_recording {
+            let accent = crate::theme::accent_color(is_dark);
+            let (hint_text, hint_color) = recording_hint.map_or_else(
                 || {
                     (
                         "Esc to cancel · Backspace to clear",
                         crate::theme::text_secondary(is_dark),
                     )
                 },
-                |hint| (hint.as_str(), accent),
+                |hint| (hint, accent),
             );
             ui.label(egui::RichText::new(hint_text).color(hint_color).size(10.5));
         } else {
@@ -449,7 +434,7 @@ impl ClipboardApp {
         }
     }
 
-    /// Updates hotkeys from current settings (handles Custom preset).
+    /// Updates hotkeys from current settings.
     /// Returns `true` if all requested hotkeys registered successfully (or none were requested).
     pub(super) fn update_hotkeys_from_settings(&mut self) -> bool {
         if let Some(service) = &mut self.services.hotkey_service {
@@ -461,55 +446,61 @@ impl ClipboardApp {
         }
     }
 
-    /// Starts recording a custom hotkey.
-    pub(super) fn start_recording_custom_hotkey(&mut self) {
-        self.dialogs.recording_custom_hotkey = true;
-        self.dialogs.manual_custom_hotkey_edit = false;
+    /// Starts recording a toggle hotkey.
+    pub(super) fn start_recording_toggle_hotkey(&mut self) {
+        self.dialogs.recording_toggle_hotkey = true;
+        self.dialogs.manual_toggle_hotkey_edit = false;
         self.dialogs.hotkey_recording_hint = None;
-        self.dialogs.pending_custom_hotkey.clear();
+        self.dialogs.pending_toggle_hotkey.clear();
     }
 
-    /// Cancels custom hotkey recording or manual text editing.
-    pub(super) fn cancel_recording_custom_hotkey(&mut self) {
-        self.dialogs.recording_custom_hotkey = false;
-        self.dialogs.manual_custom_hotkey_edit = false;
+    /// Cancels toggle hotkey recording or manual text editing.
+    pub(super) fn cancel_recording_toggle_hotkey(&mut self) {
+        self.dialogs.recording_toggle_hotkey = false;
+        self.dialogs.manual_toggle_hotkey_edit = false;
         self.dialogs.hotkey_recording_hint = None;
-        self.dialogs.pending_custom_hotkey.clear();
+        self.dialogs.pending_toggle_hotkey.clear();
     }
 
-    /// Clears the saved custom hotkey and unregisters it.
-    pub(super) fn clear_custom_hotkey(&mut self) {
-        self.settings.custom_hotkey.clear();
+    /// Clears the saved toggle hotkey and unregisters it.
+    pub(super) fn clear_toggle_hotkey(&mut self) {
+        self.settings.toggle_hotkey.clear();
         let _ = self.persist_settings();
         self.update_hotkeys_from_settings();
-        self.cancel_recording_custom_hotkey();
+        self.cancel_recording_toggle_hotkey();
     }
 
-    /// Applies the pending custom hotkey.
-    pub(super) fn apply_custom_hotkey(&mut self) {
+    /// Resets the toggle hotkey back to the platform default.
+    pub(super) fn reset_toggle_hotkey(&mut self) {
+        self.dialogs.pending_toggle_hotkey = crate::settings::default_toggle_hotkey();
+        self.apply_toggle_hotkey();
+    }
+
+    /// Applies the pending toggle hotkey.
+    pub(super) fn apply_toggle_hotkey(&mut self) {
         if let Some(parsed) =
-            crate::settings::ParsedHotkey::parse(&self.dialogs.pending_custom_hotkey)
+            crate::settings::ParsedHotkey::parse(&self.dialogs.pending_toggle_hotkey)
         {
-            self.settings.custom_hotkey = parsed.format();
+            self.settings.toggle_hotkey = parsed.format();
             let saved = self.persist_settings();
             let registered = self.update_hotkeys_from_settings();
             if !registered {
                 self.show_warning_toast(&format!(
                     "{} Could not register {} (may be in use by OS)",
                     icons::WARNING,
-                    self.settings.custom_hotkey
+                    self.settings.toggle_hotkey
                 ));
             } else if saved {
                 self.show_toast(&format!(
-                    "{} Custom shortcut set to {}",
+                    "{} Shortcut set to {}",
                     icons::CHECK,
-                    self.settings.custom_hotkey
+                    self.settings.toggle_hotkey
                 ));
             }
         } else {
             self.show_warning_toast(&format!("{} Invalid hotkey format", icons::WARNING));
         }
-        self.cancel_recording_custom_hotkey();
+        self.cancel_recording_toggle_hotkey();
     }
 
     fn render_behavior_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {

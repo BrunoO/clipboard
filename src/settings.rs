@@ -3,106 +3,10 @@ use crate::password::PasswordConfig;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use serde::{Deserialize, Serialize};
 
-/// Preconfigured global shortcut choices available to the user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum HotkeyPreset {
-    /// Universal standard: Cmd+Shift+V (macOS) / Ctrl+Shift+V (Win/Linux)
-    Universal,
-    /// French AZERTY keyboard quote key: Cmd+ù (macOS) / Ctrl+ù (Win/Linux)
-    AzertyQuote,
-    /// Secondary copy shortcut: Cmd+Shift+C (macOS) / Ctrl+Shift+C (Win/Linux)
-    CtrlShiftC,
-    /// Spotlight style: Option+Space (macOS) / Alt+Space (Win/Linux)
-    AltSpace,
-    /// Compact: Cmd+Space (macOS) / Ctrl+Space (Win/Linux)
-    CtrlSpace,
-    /// No global shortcut
-    None,
-    /// User-defined custom shortcut (stored separately in settings)
-    Custom,
-}
-
-impl HotkeyPreset {
-    /// Returns `(display_macos, display_other, badge_macos, badge_other)`.
-    const fn platform_labels(self) -> (&'static str, &'static str, &'static str, &'static str) {
-        match self {
-            Self::Universal => (
-                "Cmd + Shift + V (Universal recommended)",
-                "Ctrl + Shift + V (Universal recommended)",
-                "Cmd+Shift+V",
-                "Ctrl+Shift+V",
-            ),
-            Self::AzertyQuote => (
-                "Cmd + ù (French AZERTY)",
-                "Ctrl + ù (French AZERTY)",
-                "Cmd+ù",
-                "Ctrl+ù",
-            ),
-            Self::CtrlShiftC => (
-                "Cmd + Shift + C",
-                "Ctrl + Shift + C",
-                "Cmd+Shift+C",
-                "Ctrl+Shift+C",
-            ),
-            Self::AltSpace => ("Option + Space", "Alt + Space", "Option+Space", "Alt+Space"),
-            Self::CtrlSpace => ("Cmd + Space", "Ctrl + Space", "Cmd+Space", "Ctrl+Space"),
-            Self::None => ("Disabled", "Disabled", "Disabled", "Disabled"),
-            Self::Custom => ("Custom…", "Custom…", "Custom", "Custom"),
-        }
-    }
-
-    /// Human-readable label for settings UI.
-    #[must_use]
-    pub(crate) const fn display_name(self) -> &'static str {
-        let labels = self.platform_labels();
-        crate::platform::platform_select(labels.0, labels.1, labels.1)
-    }
-
-    /// Short badge for header display.
-    #[must_use]
-    pub(crate) const fn badge(self) -> &'static str {
-        let labels = self.platform_labels();
-        crate::platform::platform_select(labels.2, labels.3, labels.3)
-    }
-
-    /// Converts this preset into the corresponding `global_hotkey::hotkey::HotKey` objects.
-    /// Returns empty vec for `None` or `Custom` (custom hotkeys are resolved via settings).
-    #[must_use]
-    pub(crate) fn to_hotkeys(self) -> Vec<HotKey> {
-        let base_mod = crate::platform::primary_hotkey_modifier();
-
-        match self {
-            Self::Universal => vec![HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyV)],
-            Self::AzertyQuote => {
-                let code = if crate::platform::quote_key_is_ugrave() {
-                    Code::Backquote
-                } else {
-                    Code::Quote
-                };
-                vec![
-                    HotKey::new(Some(base_mod), code),
-                    HotKey::new(Some(base_mod | Modifiers::SHIFT), code),
-                ]
-            }
-            Self::CtrlShiftC => vec![HotKey::new(Some(base_mod | Modifiers::SHIFT), Code::KeyC)],
-            Self::AltSpace => vec![HotKey::new(Some(Modifiers::ALT), Code::Space)],
-            Self::CtrlSpace => vec![HotKey::new(Some(base_mod), Code::Space)],
-            Self::None | Self::Custom => vec![],
-        }
-    }
-
-    /// All presets available in the Settings selector.
-    #[must_use]
-    pub(crate) const fn all_presets() -> &'static [Self] {
-        &[
-            Self::Universal,
-            Self::CtrlShiftC,
-            Self::AltSpace,
-            Self::CtrlSpace,
-            Self::None,
-            Self::Custom,
-        ]
-    }
+/// Default platform global shortcut for toggling the clipboard window.
+#[must_use]
+pub(crate) fn default_toggle_hotkey() -> String {
+    crate::platform::platform_select("Cmd+Shift+V", "Ctrl+Shift+V", "Ctrl+Shift+V").to_string()
 }
 
 /// User's preferred color theme.
@@ -423,9 +327,8 @@ impl ParsedHotkey {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AppSettings {
-    pub(crate) hotkey: HotkeyPreset,
-    #[serde(default)]
-    pub(crate) custom_hotkey: String, // Stores custom hotkey string like "Ctrl+Shift+X"
+    #[serde(default = "default_toggle_hotkey")]
+    pub(crate) toggle_hotkey: String, // e.g. "Cmd+Shift+V" / "Ctrl+Shift+V"; empty means disabled
     #[serde(default)]
     pub(crate) theme: AppThemeMode,
     pub(crate) hide_on_copy: bool,
@@ -503,8 +406,7 @@ const fn default_keyring_explanation_shown() -> bool {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            hotkey: HotkeyPreset::Universal,
-            custom_hotkey: String::new(),
+            toggle_hotkey: default_toggle_hotkey(),
             theme: AppThemeMode::System,
             hide_on_copy: true,
             max_history: 100,
@@ -527,23 +429,12 @@ impl Default for AppSettings {
 impl AppSettings {
     const SETTINGS_KEY: &str = "app_config";
 
-    fn migrate_legacy_presets(&mut self) {
-        if self.hotkey == HotkeyPreset::AzertyQuote {
-            self.hotkey = HotkeyPreset::Custom;
-            self.custom_hotkey =
-                crate::platform::platform_select("Cmd+ù", "Ctrl+ù", "Ctrl+ù").to_string();
-        }
-    }
-
     /// Loads settings from the database, falling back to default if unset or corrupted.
     #[must_use]
     pub(crate) fn load(db: &Database) -> Self {
         match db.get_setting(Self::SETTINGS_KEY) {
             Ok(Some(json)) => match serde_json::from_str::<Self>(&json) {
-                Ok(mut settings) => {
-                    settings.migrate_legacy_presets();
-                    settings
-                }
+                Ok(settings) => settings,
                 Err(e) => {
                     crate::logging::log_message(
                         "WARN",
@@ -575,12 +466,19 @@ impl AppSettings {
         Ok(())
     }
 
-    /// Returns the effective hotkeys for the current preset, including custom hotkey resolution.
+    /// Returns the effective hotkeys for toggling the window (empty when disabled/unparseable).
     pub(crate) fn effective_hotkeys(&self) -> Vec<HotKey> {
-        match self.hotkey {
-            HotkeyPreset::Custom => ParsedHotkey::parse(&self.custom_hotkey)
-                .map_or_else(Vec::new, |parsed| vec![parsed.to_hotkey()]),
-            _ => self.hotkey.to_hotkeys(),
+        ParsedHotkey::parse(&self.toggle_hotkey)
+            .map_or_else(Vec::new, |parsed| vec![parsed.to_hotkey()])
+    }
+
+    /// Short badge label for header display.
+    #[must_use]
+    pub(crate) fn toggle_hotkey_badge(&self) -> &str {
+        if self.toggle_hotkey.is_empty() {
+            "Disabled"
+        } else {
+            &self.toggle_hotkey
         }
     }
 }
@@ -645,7 +543,7 @@ mod tests {
 
         // Modify and save
         let mut modified = loaded;
-        modified.hotkey = HotkeyPreset::AltSpace;
+        modified.toggle_hotkey = "Alt+Space".to_string();
         modified.hide_on_copy = false;
         modified.hide_on_blur = false;
         modified.restore_focus = false;
@@ -663,7 +561,7 @@ mod tests {
 
         // Reload
         let reloaded = AppSettings::load(&db);
-        assert_eq!(reloaded.hotkey, HotkeyPreset::AltSpace);
+        assert_eq!(reloaded.toggle_hotkey, "Alt+Space");
         assert!(!reloaded.hide_on_copy);
         assert!(!reloaded.hide_on_blur);
         assert!(!reloaded.restore_focus);
@@ -681,26 +579,27 @@ mod tests {
         assert_eq!(reloaded.password_config.word_count, 6);
         assert!(reloaded.password_config.capitalize);
 
-        // Legacy configs containing the removed `preserve_secrets_on_prune` field still deserialize.
+        // Legacy configs containing removed fields still deserialize with default toggle_hotkey.
         let legacy: AppSettings =
             serde_json::from_str(r#"{"hotkey":"Universal","hide_on_copy":true,"max_history":50,"preserve_secrets_on_prune":true}"#)
                 .expect("Legacy settings with removed fields should deserialize");
         assert_eq!(legacy.max_history, 50);
+        assert_eq!(legacy.toggle_hotkey, default_toggle_hotkey());
     }
 
     #[test]
-    fn test_hotkey_preset_conversions() {
-        for preset in HotkeyPreset::all_presets() {
-            let hotkeys = preset.to_hotkeys();
-            if *preset != HotkeyPreset::None && *preset != HotkeyPreset::Custom {
-                assert!(
-                    !hotkeys.is_empty(),
-                    "Preset must generate at least 1 hotkey"
-                );
-            }
-            assert_ne!(preset.display_name(), "");
-            assert_ne!(preset.badge(), "");
-        }
+    fn test_default_toggle_hotkey_is_valid() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.toggle_hotkey, default_toggle_hotkey());
+        assert_eq!(settings.effective_hotkeys().len(), 1);
+        assert_eq!(settings.toggle_hotkey_badge(), default_toggle_hotkey());
+
+        let disabled = AppSettings {
+            toggle_hotkey: String::new(),
+            ..AppSettings::default()
+        };
+        assert_eq!(disabled.effective_hotkeys().len(), 0);
+        assert_eq!(disabled.toggle_hotkey_badge(), "Disabled");
     }
 
     #[test]
@@ -831,7 +730,6 @@ mod tests {
 
         // JSON with explicit minimize_to_taskbar: false
         let tray_only_json = r#"{
-            "hotkey": "Universal",
             "hide_on_copy": true,
             "max_history": 100,
             "minimize_to_taskbar": false
@@ -839,25 +737,5 @@ mod tests {
         let parsed_tray_only: AppSettings =
             serde_json::from_str(tray_only_json).expect("Tray-only JSON should deserialize");
         assert!(!parsed_tray_only.minimize_to_taskbar);
-    }
-
-    #[test]
-    fn test_azerty_quote_removed_from_presets_and_migrates_to_custom() {
-        assert!(!HotkeyPreset::all_presets().contains(&HotkeyPreset::AzertyQuote));
-
-        let legacy_json = r#"{
-            "hotkey": "AzertyQuote",
-            "hide_on_copy": true,
-            "max_history": 100
-        }"#;
-        let mut settings: AppSettings =
-            serde_json::from_str(legacy_json).expect("Legacy AzertyQuote JSON should deserialize");
-        settings.migrate_legacy_presets();
-        assert_eq!(settings.hotkey, HotkeyPreset::Custom);
-        assert_eq!(
-            settings.custom_hotkey,
-            crate::platform::platform_select("Cmd+ù", "Ctrl+ù", "Ctrl+ù")
-        );
-        assert_eq!(settings.effective_hotkeys().len(), 1);
     }
 }

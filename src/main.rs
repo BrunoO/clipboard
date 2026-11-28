@@ -89,7 +89,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         logging::log_message("WARN", &format!("Startup history prune failed: {e}"));
     }
     #[cfg(debug_assertions)]
-    println!("⚙️  Loaded settings: hotkey preset {:?}", settings.hotkey);
+    println!(
+        "⚙️  Loaded settings: toggle hotkey {:?}",
+        settings.toggle_hotkey_badge()
+    );
 
     // 6. Configure window options for eframe
     let native_options = build_native_options();
