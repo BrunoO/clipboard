@@ -111,6 +111,7 @@ serde = { version = "1.0", features = ["derive"] }
 crossbeam-channel = "0.5.17"
 zeroize = "1.9"
 rfd = "0.15"
+rhai = { version = "1", features = ["sync", "serde"] }
 
 [dev-dependencies]
 tempfile = "3.17"

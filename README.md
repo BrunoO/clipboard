@@ -34,6 +34,40 @@ Open the `⋯` menu on any text clipboard card to copy a transformed version wit
 * **Cleanup:** Strip formatting (HTML, Markdown, ANSI, zero-width chars), unwrap hard line breaks, collapse whitespace.
 * **Case & Lines:** `UPPERCASE`, `lowercase`, `Title Case`, `camelCase`, `snake_case`, `kebab-case`, sort, deduplicate, remove empty lines, join with commas.
 * **Developer & URL:** Prettify/minify JSON, Base64 encode/decode, OS-aware **Quote Path for Shell** (POSIX single quotes on macOS/Linux, double quotes on Windows), and strip URL tracking parameters (`utm_*`, `fbclid`, `gclid`, etc.).
+* **Custom Scripts (Rhai):** Drop sandboxed `*.rhai` scripts into `<app_data>/transforms/` (owner-only permissions, no filesystem/network/env access, bounded operation/memory limits) and reload them live from **Settings → Custom Transform Scripts (Rhai)**. Scripts declare `fn transform(text)` (and optional `fn applies_to(text)` plus `// @name:`, `// @category:`, `// @tooltip:` headers) and can call built-in helpers (`strip_ansi`, `strip_formatting`, `dedent`, `strip_local_paths`, `redact_secrets`, `redact_secrets_and_ips`, `add_line_numbers`, `unwrap_lines`, `collapse_whitespace`, `parse_json`, `to_json_pretty`, `to_json_compact`). A bundled demo script (`filter_errors.rhai` — *"Filter Errors (±2 lines)"*) is seeded automatically on first launch.
+
+### Generating Custom Rhai Scripts with an AI Assistant
+
+You can paste the prompt below into Copilot, ChatGPT, Claude, or Gemini and replace the last line with your requirement to generate a ready-to-drop `.rhai` file for `<app_data>/transforms/`:
+
+````text
+Write a Rhai script (`.rhai`) for CipherClipboard's sandboxed text transformation engine.
+
+Requirements & API contract:
+1. Start the file with metadata comment headers:
+   // @name: <Short menu label>
+   // @category: <One of: AI & Prompt | Cleanup | Case | Lines | Developer & Encode | URL & Web | Custom>
+   // @tooltip: <One-line description shown on hover>
+2. Required entry point:
+   fn transform(text) -> String
+3. Optional applicability predicate (omit if it applies to all non-empty text):
+   fn applies_to(text) -> bool
+4. Built-in helper functions available (callable as `helper(s)` or `s.helper()`):
+   - strip_ansi(s), strip_formatting(s), dedent(s), strip_local_paths(s)
+   - redact_secrets(s), redact_secrets_and_ips(s), add_line_numbers(s)
+   - unwrap_lines(s), collapse_whitespace(s)
+   - parse_json(s) -> Dynamic, to_json_pretty(val) -> String, to_json_compact(val) -> String
+5. Sandbox & Rhai rules to follow strictly:
+   - Pure text transformation only (no file I/O, network, env vars, imports, or regex crate).
+   - Keep execution well under 50,000 operations and 1 MiB output (runs on hover previews too).
+   - Remember Rhai's `s.trim()` mutates `s` in place and returns `()`, NOT a String (do `s.trim(); s`).
+   - Backtick template strings `` `${x}` `` do NOT expand `\n`; concatenate `"\n"` with double quotes.
+   - Normalize `\r\n` if splitting lines (`text.replace("\r\n", "\n")`).
+   - Return only the complete `.rhai` file contents, ready to save in the transforms folder.
+
+Transformation I want:
+<DESCRIBE YOUR TRANSFORMATION AND EXAMPLE INPUT/OUTPUT HERE>
+````
 
 ---
 
@@ -102,6 +136,7 @@ cipherclipboard/
 │   ├── logging.rs        # In-memory diagnostics ring-buffer & file logging
 │   ├── tray.rs           # Windows system tray icon & context menu lifecycle
 │   ├── secret.rs         # Heuristic detection & masking for credentials and API keys
+│   ├── script.rs         # Sandboxed Rhai engine for user-defined text transformations
 │   ├── transform.rs      # Deterministic text transformations & AI prompt preparation presets
 │   ├── code.rs           # Multi-language syntax detection & highlighting sections
 │   ├── color.rs          # Hex/RGB/HSL color parsing & swatch previews

@@ -19,6 +19,7 @@ pub(crate) enum TransformCategory {
     Lines,
     Developer,
     Url,
+    Custom,
 }
 
 impl TransformCategory {
@@ -31,6 +32,7 @@ impl TransformCategory {
             Self::Lines => "Lines",
             Self::Developer => "Developer & Encode",
             Self::Url => "URL & Web",
+            Self::Custom => "Custom Scripts",
         }
     }
 
@@ -51,6 +53,7 @@ impl TransformCategory {
                 "Prettify or minify JSON, encode or decode Base64, or quote file paths for your shell"
             }
             Self::Url => "Remove analytics and tracking query parameters from copied URLs",
+            Self::Custom => "User-defined sandboxed Rhai transformation scripts",
         }
     }
 }
@@ -514,7 +517,7 @@ pub(crate) fn has_strippable_formatting(item: &ClipboardItem) -> bool {
 }
 
 /// Joins single newlines within paragraphs while preserving paragraph breaks (`\n\n`).
-fn unwrap_lines(input: &str) -> String {
+pub(crate) fn unwrap_lines(input: &str) -> String {
     let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
     let paragraphs = normalized.split("\n\n");
     let mut out_paragraphs = Vec::new();
@@ -542,7 +545,7 @@ fn unwrap_lines(input: &str) -> String {
 }
 
 /// Collapses runs of whitespace and newlines into a single line.
-fn collapse_whitespace(input: &str) -> String {
+pub(crate) fn collapse_whitespace(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -839,7 +842,7 @@ fn has_tracking_params(text: &str) -> bool {
 }
 
 /// Strips ANSI CSI and OSC escape sequences from `input`.
-fn strip_ansi(input: &str) -> String {
+pub(crate) fn strip_ansi(input: &str) -> String {
     if !input.contains('\x1b') {
         return input.to_string();
     }
@@ -1613,6 +1616,11 @@ fn prepare_table_for_ai_detailed(input: &str) -> Result<TransformOutput, Transfo
 }
 
 /// Prefixes each line with a right-aligned 1-based line number (`1: ...`).
+pub(crate) fn add_line_numbers(input: &str) -> String {
+    add_line_numbers_detailed(input).text
+}
+
+/// Prefixes each line with a right-aligned 1-based line number (`1: ...`).
 fn add_line_numbers_detailed(input: &str) -> TransformOutput {
     let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = normalized.lines().collect();
@@ -1641,6 +1649,11 @@ fn add_line_numbers_detailed(input: &str) -> TransformOutput {
         text: numbered.join("\n"),
         summary: Some(format_count(lines.len(), "line", "lines")),
     }
+}
+
+/// Strips the common leading whitespace prefix across all non-empty lines and trims outer blank lines.
+pub(crate) fn dedent(input: &str) -> String {
+    dedent_with_flag(input).0
 }
 
 /// Strips the common leading whitespace prefix across all non-empty lines and trims outer blank lines.
@@ -1712,8 +1725,7 @@ fn wrap_in_code_fence(body: &str, lang: Option<crate::code::CodeLanguage>) -> St
 
 /// Replaces local macOS (`/Users/<user>`), Linux (`/home/<user>`), and Windows
 /// (`C:\Users\<user>`, `C:/Users/<user>`, `C:\\Users\\<user>`) home directory prefixes with `<HOME>`.
-#[cfg(test)]
-fn strip_local_paths(input: &str) -> String {
+pub(crate) fn strip_local_paths(input: &str) -> String {
     strip_local_paths_counted(input).0
 }
 
@@ -1830,8 +1842,7 @@ struct RedactionStats {
 
 /// Redacts PEM private keys, sensitive key-value assignments, URL credentials, Bearer tokens,
 /// known API key/JWT formats, and (optionally) non-loopback IPv4 addresses.
-#[cfg(test)]
-fn redact_secrets(input: &str, redact_ips: bool) -> String {
+pub(crate) fn redact_secrets(input: &str, redact_ips: bool) -> String {
     redact_secrets_counted(input, redact_ips).0
 }
 

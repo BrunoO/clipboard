@@ -66,6 +66,9 @@ impl ClipboardApp {
                 self.render_security_settings_group(ui, is_dark);
                 ui.add_space(10.0);
 
+                self.render_scripts_settings_group(ui, is_dark);
+                ui.add_space(10.0);
+
                 self.render_logging_settings_group(ui, is_dark);
                 ui.add_space(10.0);
 
@@ -1177,6 +1180,141 @@ impl ClipboardApp {
                     );
                 }
             });
+        });
+    }
+
+    fn render_scripts_settings_group(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        Self::settings_card(ui, is_dark, |ui| {
+            ui.label(
+                egui::RichText::new(format!("{} Custom Transform Scripts (Rhai)", icons::CODE))
+                    .color(crate::theme::text_primary(is_dark))
+                    .strong(),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Drop sandboxed .rhai scripts into the transforms folder to add custom menu actions. Scripts cannot access disk, network, or environment variables.",
+                )
+                .color(crate::theme::text_secondary(is_dark))
+                .size(11.0),
+            );
+            ui.add_space(6.0);
+
+            let dir_str = self.script_registry.scripts_dir().display().to_string();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new("Folder:")
+                        .size(11.0)
+                        .color(crate::theme::text_secondary(is_dark)),
+                );
+                ui.label(
+                    egui::RichText::new(&dir_str)
+                        .monospace()
+                        .size(10.5)
+                        .color(crate::theme::text_primary(is_dark)),
+                );
+            });
+            ui.add_space(4.0);
+
+            let loaded_count = self.script_registry.scripts().len();
+            let err_count = self.script_registry.errors().len();
+            ui.label(
+                egui::RichText::new(format!(
+                    "Loaded: {loaded_count} script(s){}",
+                    if err_count > 0 {
+                        format!(" · {err_count} error(s)")
+                    } else {
+                        String::new()
+                    }
+                ))
+                .size(11.0)
+                .color(crate::theme::text_secondary(is_dark)),
+            );
+
+            for script in self.script_registry.scripts() {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "• {} [{}] ({})",
+                        script.name,
+                        script.category.label(),
+                        script.filename
+                    ))
+                    .size(10.5)
+                    .color(crate::theme::text_primary(is_dark)),
+                );
+            }
+
+            for err in self.script_registry.errors() {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} {}: {}",
+                        icons::WARNING,
+                        err.filename,
+                        err.message
+                    ))
+                    .size(10.5)
+                    .color(crate::theme::warning_color(is_dark)),
+                );
+            }
+
+            ui.add_space(6.0);
+            self.render_scripts_settings_actions(ui, &dir_str);
+        });
+    }
+
+    fn render_scripts_settings_actions(&mut self, ui: &mut egui::Ui, dir_str: &str) {
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button("Reload Scripts")
+                .on_hover_text("Rescan and recompile all .rhai scripts in the transforms folder")
+                .clicked()
+            {
+                self.script_registry.reload();
+                let count = self.script_registry.scripts().len();
+                let errs = self.script_registry.errors().len();
+                if errs > 0 {
+                    self.show_warning_toast(&format!(
+                        "{} Loaded {count} script(s) with {errs} error(s).",
+                        icons::WARNING
+                    ));
+                } else {
+                    self.show_toast(&format!(
+                        "{} Reloaded {count} custom script(s)!",
+                        icons::CHECK
+                    ));
+                }
+            }
+
+            if ui
+                .button("Restore Demo Script")
+                .on_hover_text("Write the bundled filter_errors.rhai demo script and reload")
+                .clicked()
+            {
+                match self.script_registry.restore_demo_script() {
+                    Ok(_) => self.show_toast(&format!(
+                        "{} Restored filter_errors.rhai demo script!",
+                        icons::CHECK
+                    )),
+                    Err(e) => self.show_warning_toast(&format!(
+                        "{} Failed to restore demo script: {e}",
+                        icons::WARNING
+                    )),
+                }
+            }
+
+            if ui
+                .button(format!("{} Copy Folder Path", icons::COPY))
+                .on_hover_text("Copy the transforms folder path to clipboard")
+                .clicked()
+            {
+                self.copy_plain_text(
+                    dir_str,
+                    &format!(
+                        "{} Copied transforms folder path to clipboard!",
+                        icons::CHECK
+                    ),
+                    ui.ctx(),
+                );
+            }
         });
     }
 

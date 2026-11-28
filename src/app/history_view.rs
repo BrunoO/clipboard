@@ -238,6 +238,7 @@ impl ClipboardApp {
                             &mut image_decode_budget,
                             ctx,
                             &paste_next_badge,
+                            Some(&self.script_registry),
                             ItemRenderState {
                                 is_selected,
                                 shortcut_num,
@@ -401,6 +402,7 @@ impl ClipboardApp {
         image_decode_budget: &mut usize,
         ctx: &egui::Context,
         paste_next_badge: &str,
+        scripts: Option<&crate::script::ScriptRegistry>,
         state: ItemRenderState,
     ) -> (ItemAction, bool) {
         let mut action = ItemAction::None;
@@ -418,7 +420,7 @@ impl ClipboardApp {
             .inner_margin(8)
             .show(ui, |ui| {
                 let header_action =
-                    Self::render_item_header_with_stack(ui, item, paste_next_badge, state);
+                    Self::render_item_header_with_stack(ui, item, paste_next_badge, scripts, state);
                 if !matches!(header_action, ItemAction::None) {
                     action = header_action;
                 }
@@ -493,7 +495,7 @@ impl ClipboardApp {
                 }
                 ui.separator();
             }
-            let menu_act = Self::render_card_transform_menu(ui, item, state.is_revealed);
+            let menu_act = Self::render_card_transform_menu(ui, item, state.is_revealed, scripts);
             if !matches!(menu_act, ItemAction::None) {
                 context_action = menu_act;
             }
@@ -697,6 +699,7 @@ impl ClipboardApp {
             ui,
             item,
             "",
+            None,
             ItemRenderState {
                 is_selected,
                 shortcut_num,
@@ -755,6 +758,7 @@ impl ClipboardApp {
         ui: &mut egui::Ui,
         item: &ClipboardItem,
         paste_next_badge: &str,
+        scripts: Option<&crate::script::ScriptRegistry>,
         state: ItemRenderState,
     ) -> ItemAction {
         let mut action = ItemAction::None;
@@ -777,7 +781,7 @@ impl ClipboardApp {
                     );
                 }
 
-                action = Self::render_item_header_actions(ui, item, state);
+                action = Self::render_item_header_actions(ui, item, scripts, state);
 
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     if item.is_pinned {
@@ -833,6 +837,7 @@ impl ClipboardApp {
     fn render_item_header_actions(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
+        scripts: Option<&crate::script::ScriptRegistry>,
         state: ItemRenderState,
     ) -> ItemAction {
         let mut action = ItemAction::None;
@@ -853,7 +858,8 @@ impl ClipboardApp {
                 }
                 ui.separator();
             }
-            let menu_action = Self::render_card_transform_menu(ui, item, state.is_revealed);
+            let menu_action =
+                Self::render_card_transform_menu(ui, item, state.is_revealed, scripts);
             if !matches!(menu_action, ItemAction::None) {
                 overflow_action = menu_action;
             }
@@ -1093,6 +1099,7 @@ impl ClipboardApp {
         ui: &mut egui::Ui,
         item: &ClipboardItem,
         is_revealed: bool,
+        scripts: Option<&crate::script::ScriptRegistry>,
     ) -> ItemAction {
         let mut action = ItemAction::None;
 
@@ -1101,7 +1108,8 @@ impl ClipboardApp {
             action = image_action;
         }
 
-        let transform_action = Self::render_transform_menu_text_sections(ui, item, is_revealed);
+        let transform_action =
+            Self::render_transform_menu_text_sections(ui, item, is_revealed, scripts);
         if !matches!(transform_action, ItemAction::None) {
             action = transform_action;
         }
@@ -1142,6 +1150,7 @@ impl ClipboardApp {
         ui: &mut egui::Ui,
         item: &ClipboardItem,
         is_revealed: bool,
+        scripts: Option<&crate::script::ScriptRegistry>,
     ) -> ItemAction {
         if item.kind == ItemKind::Image {
             return ItemAction::None;
@@ -1161,11 +1170,18 @@ impl ClipboardApp {
             crate::transform::TransformCategory::Lines,
             crate::transform::TransformCategory::Developer,
             crate::transform::TransformCategory::Url,
+            crate::transform::TransformCategory::Custom,
         ];
 
         for cat in categories {
-            let cat_action =
-                Self::render_transform_menu_category(ui, item, &applicable, cat, is_revealed);
+            let cat_action = Self::render_transform_menu_category(
+                ui,
+                item,
+                &applicable,
+                scripts,
+                cat,
+                is_revealed,
+            );
             if !matches!(cat_action, ItemAction::None) {
                 action = cat_action;
             }
@@ -1179,6 +1195,7 @@ impl ClipboardApp {
         ui: &mut egui::Ui,
         item: &ClipboardItem,
         applicable: &[crate::transform::TextTransform],
+        scripts: Option<&crate::script::ScriptRegistry>,
         cat: crate::transform::TransformCategory,
         is_revealed: bool,
     ) -> ItemAction {
@@ -1188,21 +1205,118 @@ impl ClipboardApp {
             .filter(|t| t.category() == cat)
             .collect();
 
-        if cat_transforms.is_empty() {
+        let cat_scripts: Vec<&crate::script::CustomScript> = scripts
+            .map(|reg| {
+                reg.scripts()
+                    .iter()
+                    .filter(|s| s.category == cat && reg.applies_to(s, item))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if cat_transforms.is_empty() && cat_scripts.is_empty() {
             return ItemAction::None;
         }
 
         let mut action = ItemAction::None;
         let menu_resp = ui.menu_button(cat.label(), |ui| {
-            for t in cat_transforms {
-                let transform_action = Self::render_transform_menu_item(ui, item, t, is_revealed);
+            for t in &cat_transforms {
+                let transform_action = Self::render_transform_menu_item(ui, item, *t, is_revealed);
                 if !matches!(transform_action, ItemAction::None) {
                     action = transform_action;
+                }
+            }
+            if !cat_transforms.is_empty() && !cat_scripts.is_empty() {
+                ui.separator();
+            }
+            if let Some(reg) = scripts {
+                for script in cat_scripts {
+                    let script_action =
+                        Self::render_custom_script_menu_item(ui, item, reg, script, is_revealed);
+                    if !matches!(script_action, ItemAction::None) {
+                        action = script_action;
+                    }
                 }
             }
         });
         menu_resp.response.on_hover_text(cat.tooltip());
         action
+    }
+
+    fn render_custom_script_menu_item(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        registry: &crate::script::ScriptRegistry,
+        script: &crate::script::CustomScript,
+        is_revealed: bool,
+    ) -> ItemAction {
+        const MAX_HOVER_PREVIEW_BYTES: usize = 32_768;
+
+        let resp = ui.button(format!("{} {}", icons::CODE, script.name));
+        let clicked = resp.clicked();
+
+        resp.on_hover_ui(|ui| {
+            ui.set_max_width(360.0);
+            ui.label(&script.tooltip);
+            ui.label(
+                egui::RichText::new(format!("Rhai script · {}", script.filename))
+                    .small()
+                    .weak(),
+            );
+
+            if item.kind == ItemKind::Secret && !is_revealed {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Preview hidden while secret is masked.")
+                        .small()
+                        .weak()
+                        .italics(),
+                );
+                return;
+            }
+
+            if item.content.len() > MAX_HOVER_PREVIEW_BYTES {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Preview omitted for large clipboard entries.")
+                        .small()
+                        .weak()
+                        .italics(),
+                );
+                return;
+            }
+
+            match registry.execute(script, &item.content) {
+                Ok(output) => {
+                    ui.add_space(4.0);
+                    ui.separator();
+                    let preview = crate::transform::format_preview_snippet(&output, 6, 72);
+                    ui.label(egui::RichText::new(preview).monospace().small());
+                }
+                Err(err) => {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(format!("Script error: {err}"))
+                            .small()
+                            .italics(),
+                    );
+                }
+            }
+        });
+
+        if !clicked {
+            return ItemAction::None;
+        }
+
+        ui.close();
+        match registry.execute(script, &item.content) {
+            Ok(content) => ItemAction::CopyTransformed {
+                toast: script.toast_success(),
+                content,
+                is_secret: item.kind == ItemKind::Secret,
+            },
+            Err(err) => ItemAction::ShowWarning(format!("Script '{}' failed: {err}", script.name)),
+        }
     }
 
     fn render_transform_menu_item(

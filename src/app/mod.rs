@@ -505,6 +505,7 @@ pub(crate) struct ClipboardApp {
     pub(crate) copied_item_pulse: Option<(i64, Instant)>,
     pub(crate) paste_stack: PasteStackState,
     data_dir: std::path::PathBuf,
+    script_registry: crate::script::ScriptRegistry,
 }
 
 impl ClipboardApp {
@@ -567,6 +568,7 @@ impl ClipboardApp {
         let initial_ids: Vec<i64> = initial_items.iter().map(|i| i.id).collect();
         let mut paste_stack = PasteStackState::default();
         paste_stack.reset_to_newest(&initial_ids);
+        let script_registry = crate::script::ScriptRegistry::load_from_data_dir(&data_dir);
         Self {
             db,
             key_storage_mode,
@@ -596,6 +598,7 @@ impl ClipboardApp {
             copied_item_pulse: None,
             paste_stack,
             data_dir,
+            script_registry,
         }
     }
 
@@ -3333,6 +3336,7 @@ mod tests {
             copied_item_pulse: None,
             paste_stack: PasteStackState::default(),
             data_dir: dir.path().to_path_buf(),
+            script_registry: crate::script::ScriptRegistry::empty_for_tests(),
         };
 
         assert!(!app.is_quitting);
@@ -3463,6 +3467,7 @@ mod tests {
             copied_item_pulse: None,
             paste_stack: PasteStackState::default(),
             data_dir: dir.path().to_path_buf(),
+            script_registry: crate::script::ScriptRegistry::empty_for_tests(),
         };
 
         let ctx = egui::Context::default();
@@ -3525,6 +3530,7 @@ mod tests {
             copied_item_pulse: None,
             paste_stack: PasteStackState::default(),
             data_dir: dir.path().to_path_buf(),
+            script_registry: crate::script::ScriptRegistry::empty_for_tests(),
         };
 
         (app, notify_tx, dir)
@@ -3762,6 +3768,7 @@ mod tests {
             copied_item_pulse: None,
             paste_stack: PasteStackState::default(),
             data_dir: dir.path().to_path_buf(),
+            script_registry: crate::script::ScriptRegistry::empty_for_tests(),
         };
 
         // Enqueue OpenSettings followed by Show: both must execute so OpenSettings is not dropped.

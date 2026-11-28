@@ -13,6 +13,7 @@ mod media;
 mod monitor;
 mod password;
 mod platform;
+mod script;
 mod secret;
 mod settings;
 mod theme;
