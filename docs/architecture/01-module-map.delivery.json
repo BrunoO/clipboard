@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "receiptId": "659f5e11-9a41-4928-b9cb-e3c601030587",
+  "receiptId": "e30ae27d-19de-4bad-9ea7-ba3f82f483ad",
   "status": "current",
   "command": "deliver",
   "type": "architecture",
-  "input": "/tmp/arch-01-module-map.json",
+  "input": "/Users/brunoorsier/.gemini/antigravity/brain/a69da31c-13ce-44cb-accc-1fce116a49da/scratch/01-module-map.json",
   "output": "/Users/brunoorsier/dev/clipboard/docs/architecture/01-module-map.html",
   "specification": {
-    "sha256": "d0775fefe37d3c67c5620f6deef1d896a887a5ff93b522f690837844127cb07d",
-    "bytes": 2484
+    "sha256": "66b3a2e973de301768c38082b56ce8a021783f8d7d9866d6b9f19dd30af8ef04",
+    "bytes": 5359
   },
   "artifact": {
-    "sha256": "9edb134eba38d671fafb4b2cecd43ec21cd0c27eb693b00a8b7f9063ede5d257",
-    "bytes": 842686
+    "sha256": "888b2fe798df3ea762d1064106ee096ba6f06ea85e998d2a847d689570ae6c20",
+    "bytes": 853198
   }
 }

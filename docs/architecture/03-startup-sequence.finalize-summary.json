@@ -6,14 +6,14 @@
   "type": "sequence",
   "quality": "showcase",
   "specification": {
-    "path": "/tmp/arch-03-startup.json",
-    "sha256": "f9b80bf38a8d89b14575ea2628e9acefba03a09a60df7f0a419d01e5118ffc93",
-    "bytes": 3490
+    "path": "/Users/brunoorsier/.gemini/antigravity/brain/a69da31c-13ce-44cb-accc-1fce116a49da/scratch/03-startup-sequence.json",
+    "sha256": "cfedd3018ae4bf1d98d830440d37d4c95959bb53da6304f60457b97659ba82e5",
+    "bytes": 4373
   },
   "artifact": {
     "path": "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.html",
-    "sha256": "ef93798a1fd8a8679bf640baa13e42427888a2136ef4a3ad9f6f2127908dcbe8",
-    "bytes": 834897
+    "sha256": "c3f42a7b3302242eabacae5a28b693181334dd746c4afae0190f917f4cba9c35",
+    "bytes": 841689
   },
   "gates": {
     "validate": "pass",
@@ -43,7 +43,7 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 2902,
+  "durationMs": 4774,
   "browserCheck": {
     "requested": true,
     "ran": true

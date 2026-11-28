@@ -6,14 +6,14 @@
   "type": "architecture",
   "quality": "showcase",
   "specification": {
-    "path": "/tmp/arch-01-module-map.json",
-    "sha256": "d0775fefe37d3c67c5620f6deef1d896a887a5ff93b522f690837844127cb07d",
-    "bytes": 2484
+    "path": "/Users/brunoorsier/.gemini/antigravity/brain/a69da31c-13ce-44cb-accc-1fce116a49da/scratch/01-module-map.json",
+    "sha256": "66b3a2e973de301768c38082b56ce8a021783f8d7d9866d6b9f19dd30af8ef04",
+    "bytes": 5359
   },
   "artifact": {
     "path": "/Users/brunoorsier/dev/clipboard/docs/architecture/01-module-map.html",
-    "sha256": "9edb134eba38d671fafb4b2cecd43ec21cd0c27eb693b00a8b7f9063ede5d257",
-    "bytes": 842686
+    "sha256": "888b2fe798df3ea762d1064106ee096ba6f06ea85e998d2a847d689570ae6c20",
+    "bytes": 853198
   },
   "gates": {
     "validate": "pass",
@@ -43,101 +43,9 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 4653,
+  "durationMs": 7397,
   "browserCheck": {
     "requested": true,
     "ran": true
-  },
-  "visualReviewRecommendation": {
-    "action": "inspect-route-readability",
-    "signals": {
-      "resolvedCrossovers": 2,
-      "routesOverSuggestedBends": 2
-    },
-    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
-    "affectedRoutes": {
-      "crossings": [
-        {
-          "left": {
-            "id": "c2",
-            "from": "main",
-            "to": "db",
-            "label": "",
-            "collectionIndex": 1,
-            "artifactIndex": 2
-          },
-          "right": {
-            "id": "c8",
-            "from": "app",
-            "to": "tray",
-            "label": "",
-            "collectionIndex": 7,
-            "artifactIndex": 8
-          },
-          "point": [
-            320,
-            316
-          ]
-        },
-        {
-          "left": {
-            "id": "c2",
-            "from": "main",
-            "to": "db",
-            "label": "",
-            "collectionIndex": 1,
-            "artifactIndex": 2
-          },
-          "right": {
-            "id": "c10",
-            "from": "app",
-            "to": "settings",
-            "label": "",
-            "collectionIndex": 9,
-            "artifactIndex": 10
-          },
-          "point": [
-            384,
-            316
-          ]
-        }
-      ],
-      "detours": [
-        {
-          "relationship": {
-            "id": "c4",
-            "from": "main",
-            "to": "monitor",
-            "label": "",
-            "collectionIndex": 3,
-            "artifactIndex": 4
-          },
-          "bends": 4,
-          "stretch": 1
-        },
-        {
-          "relationship": {
-            "id": "c5",
-            "from": "app",
-            "to": "monitor",
-            "label": "",
-            "collectionIndex": 4,
-            "artifactIndex": 5
-          },
-          "bends": 3,
-          "stretch": 1
-        }
-      ],
-      "truncated": false
-    },
-    "hints": [
-      "main has 4 relationships facing its right side, which fits 2 ports: make that side at least 74px, or move some of those neighbours so they face another side of main.",
-      "app has 4 relationships facing its right side, which fits 2 ports: make that side at least 74px, or move some of those neighbours so they face another side of app.",
-      "main → db crosses app → tray: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
-      "main → db crosses app → settings: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
-      "main → monitor needs 4 bends: move node main or monitor so they share a row or column with matching centers, or sit diagonally with a clear corner.",
-      "app → monitor needs 3 bends: move node app or monitor so they share a row or column with matching centers, or sit diagonally with a clear corner."
-    ],
-    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
   }
 }

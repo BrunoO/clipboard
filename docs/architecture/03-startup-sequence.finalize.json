@@ -5,16 +5,16 @@
   "status": "pass",
   "type": "sequence",
   "quality": "showcase",
-  "startedAt": "2026-11-21T08:30:18.486Z",
+  "startedAt": "2026-11-28T10:39:46.801Z",
   "specification": {
-    "path": "/tmp/arch-03-startup.json",
-    "sha256": "f9b80bf38a8d89b14575ea2628e9acefba03a09a60df7f0a419d01e5118ffc93",
-    "bytes": 3490
+    "path": "/Users/brunoorsier/.gemini/antigravity/brain/a69da31c-13ce-44cb-accc-1fce116a49da/scratch/03-startup-sequence.json",
+    "sha256": "cfedd3018ae4bf1d98d830440d37d4c95959bb53da6304f60457b97659ba82e5",
+    "bytes": 4373
   },
   "artifact": {
     "path": "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.html",
-    "sha256": "ef93798a1fd8a8679bf640baa13e42427888a2136ef4a3ad9f6f2127908dcbe8",
-    "bytes": 834897
+    "sha256": "c3f42a7b3302242eabacae5a28b693181334dd746c4afae0190f917f4cba9c35",
+    "bytes": 841689
   },
   "stages": {
     "validate": {
@@ -23,11 +23,11 @@
       "durationMs": null,
       "execution": "embedded-in-deliver",
       "command": [
-        "/opt/homebrew/Cellar/node/26.13.1_2/bin/node",
+        "/opt/homebrew/Cellar/node/26.13.1_3/bin/node",
         "/Users/brunoorsier/dev/clipboard/.agents/skills/archify/bin/archify.mjs",
         "deliver",
         "sequence",
-        "/tmp/arch-03-startup.json",
+        "/Users/brunoorsier/.gemini/antigravity/brain/a69da31c-13ce-44cb-accc-1fce116a49da/scratch/03-startup-sequence.json",
         "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.html",
         "--quality",
         "showcase",
@@ -40,8 +40,8 @@
         "ok": true,
         "command": "validate",
         "specification": {
-          "sha256": "f9b80bf38a8d89b14575ea2628e9acefba03a09a60df7f0a419d01e5118ffc93",
-          "bytes": 3490
+          "sha256": "cfedd3018ae4bf1d98d830440d37d4c95959bb53da6304f60457b97659ba82e5",
+          "bytes": 4373
         },
         "validation": {
           "checksPassed": 9,
@@ -56,13 +56,13 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 381,
+      "durationMs": 670,
       "command": [
-        "/opt/homebrew/Cellar/node/26.13.1_2/bin/node",
+        "/opt/homebrew/Cellar/node/26.13.1_3/bin/node",
         "/Users/brunoorsier/dev/clipboard/.agents/skills/archify/bin/archify.mjs",
         "deliver",
         "sequence",
-        "/tmp/arch-03-startup.json",
+        "/Users/brunoorsier/.gemini/antigravity/brain/a69da31c-13ce-44cb-accc-1fce116a49da/scratch/03-startup-sequence.json",
         "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.html",
         "--quality",
         "showcase",
@@ -72,19 +72,19 @@
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "7959c6ee-79c4-43b2-b7b1-a98877232a96",
+        "receiptId": "c5033d6a-8dc7-45b7-9aff-00a5bb7a6276",
         "ok": true,
         "command": "deliver",
         "type": "sequence",
-        "input": "/tmp/arch-03-startup.json",
+        "input": "/Users/brunoorsier/.gemini/antigravity/brain/a69da31c-13ce-44cb-accc-1fce116a49da/scratch/03-startup-sequence.json",
         "output": "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.html",
         "specification": {
-          "sha256": "f9b80bf38a8d89b14575ea2628e9acefba03a09a60df7f0a419d01e5118ffc93",
-          "bytes": 3490
+          "sha256": "cfedd3018ae4bf1d98d830440d37d4c95959bb53da6304f60457b97659ba82e5",
+          "bytes": 4373
         },
         "artifact": {
-          "sha256": "ef93798a1fd8a8679bf640baa13e42427888a2136ef4a3ad9f6f2127908dcbe8",
-          "bytes": 834897
+          "sha256": "c3f42a7b3302242eabacae5a28b693181334dd746c4afae0190f917f4cba9c35",
+          "bytes": 841689
         },
         "validation": {
           "checksPassed": 9,
@@ -97,8 +97,8 @@
         "evidence": {
           "verified": true,
           "repository": "https://github.com/BrunoO/clipboard",
-          "revision": "aa9c9e60132dae19bc468d5c0c1c0557e18c0627",
-          "references": 5
+          "revision": "7288bd47d43b6414f59e1b4d3b85281dc241923e",
+          "references": 6
         },
         "update": {
           "status": "unavailable",
@@ -116,9 +116,9 @@
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 186,
+      "durationMs": 252,
       "command": [
-        "/opt/homebrew/Cellar/node/26.13.1_2/bin/node",
+        "/opt/homebrew/Cellar/node/26.13.1_3/bin/node",
         "/Users/brunoorsier/dev/clipboard/.agents/skills/archify/bin/archify.mjs",
         "check",
         "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.html",
@@ -128,8 +128,8 @@
         "ok": true,
         "file": "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.html",
         "artifact": {
-          "sha256": "ef93798a1fd8a8679bf640baa13e42427888a2136ef4a3ad9f6f2127908dcbe8",
-          "bytes": 834897
+          "sha256": "c3f42a7b3302242eabacae5a28b693181334dd746c4afae0190f917f4cba9c35",
+          "bytes": 841689
         },
         "checks": [
           {
@@ -196,7 +196,7 @@
             "containerBorderRuns": 0,
             "labelRouteClearanceIssues": 0,
             "labelCanvasOverflowIssues": 0,
-            "minLabelRouteClearance": 20,
+            "minLabelRouteClearance": 10,
             "desktopReadabilityIssues": 0,
             "viewportHeightIssues": 0,
             "minProjectedNodeTextPx": 7,
@@ -204,7 +204,7 @@
             "routesOverSuggestedBends": 0,
             "maxStretch": 1,
             "routesOverSuggestedStretch": 0,
-            "minSegmentPx": 156.8,
+            "minSegmentPx": 127.8,
             "minInteriorSegmentPx": null,
             "shortSegmentCount": 0,
             "shortEndpointSegmentCount": 0,
@@ -228,13 +228,13 @@
           "sequenceColumnSpace": {
             "measured": true,
             "columnFit": "spread",
-            "participantCount": 5,
+            "participantCount": 6,
             "occupiedRight": 880,
             "viewBoxLeft": 0,
             "canvasWidth": 920,
             "emptyRightPx": 40,
             "emptyRightRatio": 0.043,
-            "typicalParticipantWidth": 135,
+            "typicalParticipantWidth": 109,
             "reviewSuggested": false
           },
           "desktopReadability": {
@@ -248,27 +248,25 @@
             "hardFloorPx": 6,
             "hardFloorMet": true,
             "minimumOwner": {
-              "kind": "edge",
-              "id": "m1",
-              "from": "os",
-              "to": "main"
+              "kind": "node",
+              "id": "os"
             },
             "minimumSourceTextPx": 7,
             "minimumProjectedTextPx": 7,
-            "semanticTextCount": 20
+            "semanticTextCount": 25
           },
           "issues": []
         },
         "provenance": "current",
-        "deliveryReceiptId": "7959c6ee-79c4-43b2-b7b1-a98877232a96"
+        "deliveryReceiptId": "c5033d6a-8dc7-45b7-9aff-00a5bb7a6276"
       }
     },
     "browser-check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 2181,
+      "durationMs": 3665,
       "command": [
-        "/opt/homebrew/Cellar/node/26.13.1_2/bin/node",
+        "/opt/homebrew/Cellar/node/26.13.1_3/bin/node",
         "/Users/brunoorsier/dev/clipboard/.agents/skills/archify/bin/archify.mjs",
         "browser-check",
         "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.html",
@@ -284,11 +282,11 @@
         "status": "pass",
         "visualReview": "not-requested",
         "provenance": "current",
-        "deliveryReceiptId": "7959c6ee-79c4-43b2-b7b1-a98877232a96",
+        "deliveryReceiptId": "c5033d6a-8dc7-45b7-9aff-00a5bb7a6276",
         "artifact": {
           "path": "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.html",
-          "sha256": "ef93798a1fd8a8679bf640baa13e42427888a2136ef4a3ad9f6f2127908dcbe8",
-          "bytes": 834897
+          "sha256": "c3f42a7b3302242eabacae5a28b693181334dd746c4afae0190f917f4cba9c35",
+          "bytes": 841689
         },
         "state": {
           "detail": "read",
@@ -310,36 +308,34 @@
               "innerWidth": 1440,
               "innerHeight": 900,
               "scrollWidth": 1440,
-              "scrollHeight": 1277,
+              "scrollHeight": 900,
               "overflowX": false,
-              "overflowY": true,
-              "verticalScrollAccepted": true,
-              "overflowDisposition": "readable-vertical-scroll",
+              "overflowY": false,
+              "verticalScrollAccepted": false,
+              "overflowDisposition": "contained",
               "readerLayout": "adaptive",
-              "readerOverflow": "authored",
+              "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 1376,
-              "diagramWidth": 1346,
+              "readerWidth": 1035,
+              "diagramWidth": 1005,
               "pageComposition": {
                 "bodyPaddingPx": 12,
-                "headerPx": 78,
+                "headerPx": 52,
                 "diagramChromePx": 78,
-                "svgPx": 1109,
+                "svgPx": 746,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -371,27 +367,25 @@
               "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 960,
-              "diagramWidth": 927,
+              "readerWidth": 1081,
+              "diagramWidth": 1051,
               "pageComposition": {
                 "bodyPaddingPx": 64,
-                "headerPx": 86,
+                "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 764,
+                "svgPx": 780,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -423,27 +417,25 @@
               "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 1043,
-              "diagramWidth": 1013,
+              "readerWidth": 1188,
+              "diagramWidth": 1158,
               "pageComposition": {
                 "bodyPaddingPx": 64,
-                "headerPx": 86,
+                "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 835,
+                "svgPx": 860,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -475,27 +467,25 @@
               "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 1332,
-              "diagramWidth": 1282,
+              "readerWidth": 1567,
+              "diagramWidth": 1380,
               "pageComposition": {
                 "bodyPaddingPx": 64,
-                "headerPx": 94,
-                "diagramChromePx": 94,
-                "svgPx": 1056,
+                "headerPx": 68,
+                "diagramChromePx": 152,
+                "svgPx": 1025,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -503,11 +493,11 @@
               "hasNavigationDock": true,
               "legendDockIntersectionArea": 0,
               "dockStageIntersectionArea": 0,
-              "dockStageGap": 10,
+              "dockStageGap": 16.75,
               "requiredDockStageGap": 10,
               "viewerChromeStageOk": true,
-              "viewerChromeReserve": 44,
-              "viewerChromeActive": true,
+              "viewerChromeReserve": 0,
+              "viewerChromeActive": false,
               "viewerChromeOk": true,
               "resolvedTheme": "light"
             }
@@ -571,36 +561,34 @@
               "innerWidth": 1440,
               "innerHeight": 900,
               "scrollWidth": 1440,
-              "scrollHeight": 1277,
+              "scrollHeight": 900,
               "overflowX": false,
-              "overflowY": true,
-              "verticalScrollAccepted": true,
-              "overflowDisposition": "readable-vertical-scroll",
+              "overflowY": false,
+              "verticalScrollAccepted": false,
+              "overflowDisposition": "contained",
               "readerLayout": "adaptive",
-              "readerOverflow": "authored",
+              "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 1376,
-              "diagramWidth": 1346,
+              "readerWidth": 1035,
+              "diagramWidth": 1005,
               "pageComposition": {
                 "bodyPaddingPx": 12,
-                "headerPx": 78,
+                "headerPx": 52,
                 "diagramChromePx": 78,
-                "svgPx": 1109,
+                "svgPx": 746,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -632,27 +620,25 @@
               "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 960,
-              "diagramWidth": 927,
+              "readerWidth": 1081,
+              "diagramWidth": 1051,
               "pageComposition": {
                 "bodyPaddingPx": 64,
-                "headerPx": 86,
+                "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 764,
+                "svgPx": 780,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -684,27 +670,25 @@
               "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 1043,
-              "diagramWidth": 1013,
+              "readerWidth": 1188,
+              "diagramWidth": 1158,
               "pageComposition": {
                 "bodyPaddingPx": 64,
-                "headerPx": 86,
+                "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 835,
+                "svgPx": 860,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -736,27 +720,25 @@
               "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 1332,
-              "diagramWidth": 1282,
+              "readerWidth": 1567,
+              "diagramWidth": 1380,
               "pageComposition": {
                 "bodyPaddingPx": 64,
-                "headerPx": 94,
-                "diagramChromePx": 94,
-                "svgPx": 1056,
+                "headerPx": 68,
+                "diagramChromePx": 152,
+                "svgPx": 1025,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -764,11 +746,11 @@
               "hasNavigationDock": true,
               "legendDockIntersectionArea": 0,
               "dockStageIntersectionArea": 0,
-              "dockStageGap": 10,
+              "dockStageGap": 16.75,
               "requiredDockStageGap": 10,
               "viewerChromeStageOk": true,
-              "viewerChromeReserve": 44,
-              "viewerChromeActive": true,
+              "viewerChromeReserve": 0,
+              "viewerChromeActive": false,
               "viewerChromeOk": true,
               "resolvedTheme": "light"
             }
@@ -784,36 +766,34 @@
               "innerWidth": 1440,
               "innerHeight": 900,
               "scrollWidth": 1440,
-              "scrollHeight": 1277,
+              "scrollHeight": 900,
               "overflowX": false,
-              "overflowY": true,
-              "verticalScrollAccepted": true,
-              "overflowDisposition": "readable-vertical-scroll",
+              "overflowY": false,
+              "verticalScrollAccepted": false,
+              "overflowDisposition": "contained",
               "readerLayout": "adaptive",
-              "readerOverflow": "authored",
+              "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 1376,
-              "diagramWidth": 1346,
+              "readerWidth": 1035,
+              "diagramWidth": 1005,
               "pageComposition": {
                 "bodyPaddingPx": 12,
-                "headerPx": 78,
+                "headerPx": 52,
                 "diagramChromePx": 78,
-                "svgPx": 1109,
+                "svgPx": 746,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -845,27 +825,25 @@
               "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 960,
-              "diagramWidth": 927,
+              "readerWidth": 1081,
+              "diagramWidth": 1051,
               "pageComposition": {
                 "bodyPaddingPx": 64,
-                "headerPx": 86,
+                "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 764,
+                "svgPx": 780,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -897,27 +875,25 @@
               "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 1043,
-              "diagramWidth": 1013,
+              "readerWidth": 1188,
+              "diagramWidth": 1158,
               "pageComposition": {
                 "bodyPaddingPx": 64,
-                "headerPx": 86,
+                "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 835,
+                "svgPx": 860,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -949,27 +925,25 @@
               "readerOverflow": null,
               "readerFit": "width-first",
               "ok": true,
-              "readerWidth": 1332,
-              "diagramWidth": 1282,
+              "readerWidth": 1567,
+              "diagramWidth": 1380,
               "pageComposition": {
                 "bodyPaddingPx": 64,
-                "headerPx": 94,
-                "diagramChromePx": 94,
-                "svgPx": 1056,
+                "headerPx": 68,
+                "diagramChromePx": 152,
+                "svgPx": 1025,
                 "cardsPx": 0,
-                "viewBoxHeight": 758
+                "viewBoxHeight": 683
               },
               "viewBoxWidth": 920,
               "minimumProjectedNodeTextPx": 7,
               "minimumProjectedNonEdgeTextPx": 7,
-              "minimumProjectedEdgeTextPx": 7,
-              "minimumProjectedNodeText": "Installs panic hook and enforcessingle instance.",
-              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedEdgeTextPx": 11,
+              "minimumProjectedNodeText": "lock & key",
+              "minimumProjectedNodeTextDetail": "context",
               "minimumProjectedNodeTextOwner": {
-                "kind": "edge",
-                "id": "m1",
-                "from": "os",
-                "to": "main"
+                "kind": "node",
+                "id": "os"
               },
               "minimumRequiredNodeTextPx": 6,
               "readabilityOk": true,
@@ -977,11 +951,11 @@
               "hasNavigationDock": true,
               "legendDockIntersectionArea": 0,
               "dockStageIntersectionArea": 0,
-              "dockStageGap": 10,
+              "dockStageGap": 16.75,
               "requiredDockStageGap": 10,
               "viewerChromeStageOk": true,
-              "viewerChromeReserve": 44,
-              "viewerChromeActive": true,
+              "viewerChromeReserve": 0,
+              "viewerChromeActive": false,
               "viewerChromeOk": true,
               "resolvedTheme": "light"
             }
@@ -1010,8 +984,8 @@
     "browserCheckReceipt": "/Users/brunoorsier/dev/clipboard/docs/architecture/03-startup-sequence.browser-check.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-11-21T08:30:21.389Z",
-  "durationMs": 2902,
+  "finishedAt": "2026-11-28T10:39:51.574Z",
+  "durationMs": 4774,
   "update": {
     "status": "current",
     "installedVersion": "3.2.0",

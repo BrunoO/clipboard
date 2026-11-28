@@ -33,7 +33,7 @@
       <a class="card" href="./01-module-map.html">
         <div class="meta"><span class="value">1</span><span class="type">Architecture</span></div>
         <h2>Module / Component Map</h2>
-        <p>Top-level modules and dependency directions across bootstrap, UI, monitor, DB, crypto, platform, hotkey, tray, and settings.</p>
+        <p>Top-level modules and dependency directions across bootstrap, UI, monitor, DB, crypto, platform, hotkey, tray, settings, transforms, and sandboxed Rhai scripting.</p>
         <p class="why"><strong>Why useful:</strong> Fast orientation, but mostly recoverable from the file tree.</p>
         <div class="path">01-module-map.html</div>
       </a>
@@ -47,7 +47,7 @@
       <a class="card" href="./03-startup-sequence.html">
         <div class="meta"><span class="value">3</span><span class="type">Sequence</span></div>
         <h2>Startup &amp; Shutdown Flow</h2>
-        <p>Bootstrap, encrypted DB/settings load, service wiring, app run, and teardown/join order.</p>
+        <p>Bootstrap, encrypted DB/settings load, service wiring, Rhai script seeding/compilation, app run, and teardown/join order.</p>
         <p class="why"><strong>Why useful:</strong> Helpful for initialization and cleanup regressions; much of it is linear in <code>main.rs</code>.</p>
         <div class="path">03-startup-sequence.html</div>
       </a>
@@ -82,7 +82,7 @@
       <a class="card" href="./08-security-trust-boundaries.html">
         <div class="meta"><span class="value">8</span><span class="type">Architecture</span></div>
         <h2>Security &amp; Trust Boundaries</h2>
-        <p>OS clipboard/target app trust boundaries, classification/masking, SQLCipher persistence, keyring vs restricted fallback key, and guarded paste controls.</p>
+        <p>OS clipboard/target app trust boundaries, classification/masking, SQLCipher persistence, keyring vs restricted fallback key, guarded paste controls, and the sandboxed Rhai script runtime.</p>
         <p class="why"><strong>Why useful:</strong> Highest value—maps the app’s core sensitive-data protections and trust assumptions.</p>
         <div class="path">08-security-trust-boundaries.html</div>
       </a>

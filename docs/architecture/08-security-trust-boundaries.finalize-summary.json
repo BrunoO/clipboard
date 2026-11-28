@@ -6,14 +6,14 @@
   "type": "architecture",
   "quality": "showcase",
   "specification": {
-    "path": "/tmp/arch-08-security.json",
-    "sha256": "f45166e16ccd186432a7c74730b058a71829441a4caf1392b8c36d2d01508d82",
-    "bytes": 3637
+    "path": "/Users/brunoorsier/.gemini/antigravity/brain/a69da31c-13ce-44cb-accc-1fce116a49da/scratch/08-security-trust-boundaries.json",
+    "sha256": "a0b76400f897984b728c5a10fccb773078d845340aba3b040da435befb6a953f",
+    "bytes": 4533
   },
   "artifact": {
     "path": "/Users/brunoorsier/dev/clipboard/docs/architecture/08-security-trust-boundaries.html",
-    "sha256": "1506b88f531984ad72502a7734e1f20db658a3dbf11750450b4982f08c8b4696",
-    "bytes": 838661
+    "sha256": "5f72352a8ed6ce6fc40aa6ba03d20729bbcc413c38b2789cc82b0fb677e795ad",
+    "bytes": 845434
   },
   "gates": {
     "validate": "pass",
@@ -43,87 +43,9 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 3570,
+  "durationMs": 3460,
   "browserCheck": {
     "requested": true,
     "ran": true
-  },
-  "visualReviewRecommendation": {
-    "action": "inspect-route-readability",
-    "signals": {
-      "resolvedCrossovers": 1,
-      "routesOverSuggestedBends": 2
-    },
-    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
-    "affectedRoutes": {
-      "crossings": [
-        {
-          "left": {
-            "id": "s4",
-            "from": "fallback",
-            "to": "db",
-            "label": "fallback key",
-            "collectionIndex": 3,
-            "artifactIndex": 4
-          },
-          "right": {
-            "id": "s5",
-            "from": "monitor",
-            "to": "target",
-            "label": "guarded paste",
-            "collectionIndex": 4,
-            "artifactIndex": 5
-          },
-          "point": [
-            610,
-            283
-          ]
-        }
-      ],
-      "detours": [
-        {
-          "relationship": {
-            "id": "s1",
-            "from": "oscb",
-            "to": "monitor",
-            "label": "clipboard data",
-            "collectionIndex": 0,
-            "artifactIndex": 1
-          },
-          "bends": 3,
-          "stretch": 1.274
-        },
-        {
-          "relationship": {
-            "id": "s5",
-            "from": "monitor",
-            "to": "target",
-            "label": "guarded paste",
-            "collectionIndex": 4,
-            "artifactIndex": 5
-          },
-          "bends": 4,
-          "stretch": 1.154,
-          "directCorridorBlockers": [
-            {
-              "id": "db",
-              "label": "SQLCipher DB",
-              "box": [
-                520,
-                220,
-                160,
-                60
-              ]
-            }
-          ]
-        }
-      ],
-      "truncated": false
-    },
-    "hints": [
-      "fallback → db crosses monitor → target: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
-      "oscb → monitor needs 3 bends: move node oscb or monitor so they share a row or column with matching centers, or sit diagonally with a clear corner."
-    ],
-    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
   }
 }
