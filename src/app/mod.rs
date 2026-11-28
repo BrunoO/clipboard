@@ -254,6 +254,7 @@ pub(crate) fn should_reopen_on_focus(
 pub(crate) struct AppServices {
     pub(crate) notify_rx: Receiver<()>,
     pub(crate) hotkey_rx: Receiver<()>,
+    pub(crate) paste_next_rx: crossbeam_channel::Receiver<()>,
     pub(crate) hotkey_service: Option<HotkeyService>,
     pub(crate) tray_rx: Receiver<TrayAction>,
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -286,6 +287,10 @@ pub(crate) struct DialogState {
     pub(crate) recording_toggle_hotkey: bool,
     pub(crate) manual_toggle_hotkey_edit: bool,
     pub(crate) pending_toggle_hotkey: String,
+    pub(crate) recording_paste_next_hotkey: bool,
+    pub(crate) manual_paste_next_hotkey_edit: bool,
+    pub(crate) pending_paste_next_hotkey: String,
+    pub(crate) hotkey_conflict_error: Option<String>,
     pub(crate) hotkey_recording_hint: Option<String>,
     pub(crate) show_new_secret_dialog: bool,
     pub(crate) new_secret_label: String,
@@ -295,6 +300,183 @@ pub(crate) struct DialogState {
     pub(crate) editing_annotation_id: Option<i64>,
     pub(crate) annotation_label_input: String,
     pub(crate) annotation_notes_input: String,
+}
+
+/// Stack stepping direction for Paste Next (§7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum StackMode {
+    #[default]
+    Lifo,
+    Fifo,
+}
+
+#[derive(Debug, Clone)]
+struct InFlightPaste {
+    seq: u64,
+    submitted_id: i64,
+    mode: StackMode,
+    secret_to_clear: Option<zeroize::Zeroizing<String>>,
+}
+
+/// Result of reconciling a `Pasted` outcome against the in-flight queue.
+pub(crate) enum PastedReconciliation {
+    Stale,
+    Reconciled {
+        secret_to_clear: Option<zeroize::Zeroizing<String>>,
+    },
+}
+
+/// Id-based LIFO / FIFO Paste Stack state machine (§7).
+#[derive(Debug, Default)]
+pub(crate) struct PasteStackState {
+    pub(crate) next_marker: Option<i64>,
+    pub(crate) mode: StackMode,
+    next_seq: u64,
+    in_flight: std::collections::VecDeque<InFlightPaste>,
+    pub(crate) scroll_to_marker: bool,
+}
+
+impl PasteStackState {
+    /// Resets to LIFO with the `NEXT` marker on the newest entry (or `None` if empty).
+    pub(crate) fn reset_to_newest(&mut self, full_ids: &[i64]) {
+        self.mode = StackMode::Lifo;
+        self.next_marker = full_ids.first().copied();
+        self.in_flight.clear();
+    }
+
+    /// Manually places the `NEXT` marker on `id`:
+    /// - newest entry → `StackMode::Lifo` (Rule 5)
+    /// - any older entry → `StackMode::Fifo` (Rule 2)
+    pub(crate) fn place_marker(&mut self, id: i64, full_ids: &[i64]) {
+        if !full_ids.contains(&id) {
+            return;
+        }
+        self.next_marker = Some(id);
+        self.mode = if full_ids.first().copied() == Some(id) {
+            StackMode::Lifo
+        } else {
+            StackMode::Fifo
+        };
+        self.in_flight.clear();
+    }
+
+    /// Resolves the next history id to submit for a Paste Next press from full, unfiltered history.
+    #[must_use]
+    pub(crate) fn next_target_id(&self, full_ids: &[i64]) -> Option<i64> {
+        if let Some(last) = self.in_flight.back() {
+            let pos = full_ids.iter().position(|&id| id == last.submitted_id)?;
+            match last.mode {
+                StackMode::Lifo => full_ids.get(pos + 1).copied(),
+                // Stop an in-flight FIFO burst at the newest entry to avoid accidental double-pastes.
+                StackMode::Fifo => pos.checked_sub(1).and_then(|i| full_ids.get(i).copied()),
+            }
+        } else {
+            self.next_marker.filter(|id| full_ids.contains(id))
+        }
+    }
+
+    /// Records an in-flight submission and returns its monotonic sequence number.
+    fn record_submission(
+        &mut self,
+        submitted_id: i64,
+        secret_to_clear: Option<zeroize::Zeroizing<String>>,
+    ) -> u64 {
+        self.next_seq = self.next_seq.saturating_add(1);
+        let seq = self.next_seq;
+        self.in_flight.push_back(InFlightPaste {
+            seq,
+            submitted_id,
+            mode: self.mode,
+            secret_to_clear,
+        });
+        seq
+    }
+
+    /// Reconciles a `Pasted { seq }` outcome, advancing `next_marker` relative to `submitted_id`.
+    pub(crate) fn on_pasted(&mut self, seq: u64, full_ids: &[i64]) -> PastedReconciliation {
+        let Some(idx) = self.in_flight.iter().position(|e| e.seq == seq) else {
+            return PastedReconciliation::Stale;
+        };
+        let Some(entry) = self.in_flight.remove(idx) else {
+            return PastedReconciliation::Stale;
+        };
+
+        if let Some(pos) = full_ids.iter().position(|&id| id == entry.submitted_id) {
+            match entry.mode {
+                StackMode::Lifo => {
+                    self.mode = StackMode::Lifo;
+                    self.next_marker = full_ids.get(pos + 1).copied();
+                }
+                StackMode::Fifo => {
+                    if pos == 0 {
+                        // Rule 3: newest entry pasted → automatically return to LIFO on newest.
+                        self.mode = StackMode::Lifo;
+                        self.next_marker = full_ids.first().copied();
+                    } else {
+                        self.mode = StackMode::Fifo;
+                        self.next_marker = full_ids.get(pos - 1).copied();
+                    }
+                }
+            }
+        } else if self
+            .next_marker
+            .is_some_and(|marker| !full_ids.contains(&marker))
+        {
+            self.reset_to_newest(full_ids);
+        }
+
+        PastedReconciliation::Reconciled {
+            secret_to_clear: entry.secret_to_clear,
+        }
+    }
+
+    /// Reconciles a `Failed { seq }` outcome: removes the in-flight entry and leaves `next_marker`
+    /// and `mode` untouched.
+    pub(crate) fn on_failed(&mut self, seq: u64) -> bool {
+        if let Some(idx) = self.in_flight.iter().position(|e| e.seq == seq) {
+            self.in_flight.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Updates `next_marker` after `deleted_id` is removed from history.
+    pub(crate) fn on_entry_deleted(
+        &mut self,
+        deleted_id: i64,
+        ids_before_delete: &[i64],
+        ids_after_delete: &[i64],
+    ) {
+        if self.next_marker != Some(deleted_id) {
+            return;
+        }
+        let Some(pos) = ids_before_delete.iter().position(|&id| id == deleted_id) else {
+            self.reset_to_newest(ids_after_delete);
+            return;
+        };
+        match self.mode {
+            StackMode::Lifo => {
+                self.next_marker = ids_before_delete
+                    .get(pos + 1)
+                    .copied()
+                    .filter(|id| ids_after_delete.contains(id));
+            }
+            StackMode::Fifo => {
+                if let Some(newer) = pos
+                    .checked_sub(1)
+                    .and_then(|i| ids_before_delete.get(i).copied())
+                    .filter(|id| ids_after_delete.contains(id))
+                {
+                    // Stays in FIFO until the newest entry is pasted (Rule 3).
+                    self.next_marker = Some(newer);
+                } else {
+                    self.mode = StackMode::Lifo;
+                    self.next_marker = ids_after_delete.first().copied();
+                }
+            }
+        }
+    }
 }
 
 pub(crate) struct ClipboardApp {
@@ -324,6 +506,7 @@ pub(crate) struct ClipboardApp {
     title_bar_dark_mode: Option<bool>,
     is_quitting: bool,
     pub(crate) copied_item_pulse: Option<(i64, Instant)>,
+    pub(crate) paste_stack: PasteStackState,
     data_dir: std::path::PathBuf,
 }
 
@@ -384,6 +567,9 @@ impl ClipboardApp {
             settings.generator_reveal_value,
         );
         let filter_counts = FilterCounts::from_items(&initial_items);
+        let initial_ids: Vec<i64> = initial_items.iter().map(|i| i.id).collect();
+        let mut paste_stack = PasteStackState::default();
+        paste_stack.reset_to_newest(&initial_ids);
         Self {
             db,
             key_storage_mode,
@@ -411,6 +597,7 @@ impl ClipboardApp {
             title_bar_dark_mode: None,
             is_quitting: false,
             copied_item_pulse: None,
+            paste_stack,
             data_dir,
         }
     }
@@ -798,7 +985,10 @@ impl ClipboardApp {
     }
 
     fn copy_secret_to_clipboard(&mut self, secret: &str, ctx: &egui::Context) {
-        self.db.skip_next_capture(secret);
+        self.db
+            .skip_next_capture(crate::db::SkipCaptureTarget::Text(zeroize::Zeroizing::new(
+                secret.to_string(),
+            )));
         let Some(cb) = self.ensure_clipboard_writer() else {
             self.db.clear_skip_capture();
             self.show_warning_toast(&format!("{} Clipboard unavailable", icons::WARNING));
@@ -848,7 +1038,8 @@ impl ClipboardApp {
             return;
         }
         // Prevent the background monitor from redundantly re-capturing this copy 200ms later.
-        self.db.skip_next_capture(&secret);
+        self.db
+            .skip_next_capture(crate::db::SkipCaptureTarget::Text(secret.clone()));
 
         let Some(cb) = self.ensure_clipboard_writer() else {
             self.db.clear_skip_capture();
@@ -956,7 +1147,7 @@ impl ClipboardApp {
     }
 
     fn handle_escape_key(&mut self, ctx: &egui::Context) {
-        if self.dialogs.recording_toggle_hotkey {
+        if self.dialogs.recording_toggle_hotkey || self.dialogs.recording_paste_next_hotkey {
             return;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -974,9 +1165,9 @@ impl ClipboardApp {
         }
     }
 
-    /// Handles key input during toggle hotkey recording mode.
+    /// Handles key input during hotkey recording mode (for either Toggle Window or Paste Next).
     /// Uses raw events to reliably capture modifier+key combinations.
-    fn handle_toggle_hotkey_recording(&mut self, ctx: &egui::Context) {
+    fn handle_hotkey_recording(&mut self, ctx: &egui::Context, is_paste_next: bool) {
         ctx.input(|i| {
             for event in &i.events {
                 let egui::Event::Key {
@@ -991,25 +1182,39 @@ impl ClipboardApp {
                 };
 
                 if *key == egui::Key::Escape {
-                    self.cancel_recording_toggle_hotkey();
+                    if is_paste_next {
+                        self.cancel_recording_paste_next_hotkey();
+                    } else {
+                        self.cancel_recording_toggle_hotkey();
+                    }
                     return;
                 }
 
                 let active_mods = active_modifier_labels(*modifiers);
                 if *key == egui::Key::Backspace && active_mods.is_empty() {
-                    self.clear_toggle_hotkey();
+                    if is_paste_next {
+                        self.clear_paste_next_hotkey();
+                    } else {
+                        self.clear_toggle_hotkey();
+                    }
                     return;
                 }
 
-                if active_mods.is_empty() && !is_function_key(*key) {
-                    self.dialogs.hotkey_recording_hint =
-                        Some("Include a modifier key (Ctrl, Alt, or Shift)".to_string());
+                if active_mods.is_empty() {
+                    self.dialogs.hotkey_recording_hint = Some(
+                        "Include at least one modifier key (Ctrl, Alt, Shift, or Cmd)".to_string(),
+                    );
                     return;
                 }
 
                 if let Some(combo) = format_recorded_hotkey(*modifiers, *key) {
-                    self.dialogs.pending_toggle_hotkey = combo;
-                    self.apply_toggle_hotkey();
+                    if is_paste_next {
+                        self.dialogs.pending_paste_next_hotkey = combo;
+                        self.apply_paste_next_hotkey();
+                    } else {
+                        self.dialogs.pending_toggle_hotkey = combo;
+                        self.apply_toggle_hotkey();
+                    }
                     return;
                 }
             }
@@ -1018,7 +1223,11 @@ impl ClipboardApp {
 
     fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
         if self.dialogs.recording_toggle_hotkey {
-            self.handle_toggle_hotkey_recording(ctx);
+            self.handle_hotkey_recording(ctx, false);
+            return;
+        }
+        if self.dialogs.recording_paste_next_hotkey {
+            self.handle_hotkey_recording(ctx, true);
             return;
         }
 
@@ -1077,6 +1286,17 @@ impl ClipboardApp {
 
         if nav.edit_annotation_selected {
             self.edit_annotation_filtered_item(&filtered_indices, ctx);
+        }
+
+        if nav.set_paste_next_marker_selected && self.settings.active_paste_next_hotkey().is_some()
+        {
+            if let Some(&item_idx) = filtered_indices.get(self.selected_index) {
+                if let Some(item) = self.items.get(item_idx) {
+                    let id = item.id;
+                    self.place_paste_next_marker(id);
+                    ctx.request_repaint();
+                }
+            }
         }
 
         if nav.new_secret {
@@ -1247,10 +1467,14 @@ impl ClipboardApp {
         if let Some(&item_idx) = filtered_indices.get(self.selected_index) {
             if let Some(item) = self.items.get(item_idx) {
                 let id = item.id;
+                let ids_before = self.full_history_ids();
                 if let Err(error) = self.db.delete(id) {
                     self.report_db_write_failure("delete entry", &error);
                     return;
                 }
+                let ids_after = self.full_history_ids();
+                self.paste_stack
+                    .on_entry_deleted(id, &ids_before, &ids_after);
                 self.texture_cache.remove(id);
                 self.refresh_items();
                 let new_count = self.get_filtered_indices().len();
@@ -1417,10 +1641,191 @@ impl ClipboardApp {
         }
     }
 
+    pub(super) fn full_history_ids(&self) -> Vec<i64> {
+        self.db
+            .get_recent(self.settings.max_history, None)
+            .map(|items| items.into_iter().map(|i| i.id).collect())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn reset_paste_stack_to_newest(&mut self) {
+        let full_ids = self.full_history_ids();
+        self.paste_stack.reset_to_newest(&full_ids);
+    }
+
+    pub(super) fn place_paste_next_marker(&mut self, id: i64) {
+        let full_ids = self.full_history_ids();
+        self.paste_stack.place_marker(id, &full_ids);
+        let mode_label = match self.paste_stack.mode {
+            StackMode::Lifo => "LIFO ↓",
+            StackMode::Fifo => "FIFO ↑",
+        };
+        self.show_toast(&format!(
+            "{} Paste Next marker set ({mode_label})",
+            icons::CHECK
+        ));
+    }
+
+    fn handle_paste_next_events(&mut self, ctx: &egui::Context) {
+        // Drain one press at a time — never coalesce Paste Next presses (§3.2).
+        while self.services.paste_next_rx.try_recv().is_ok() {
+            self.handle_paste_next(ctx);
+        }
+    }
+
+    fn handle_paste_next(&mut self, ctx: &egui::Context) {
+        if self.settings.has_hotkey_collision() {
+            return;
+        }
+        let Some(parsed_hk) = self.settings.paste_next_hotkey_parsed() else {
+            return;
+        };
+        let Ok(full_items) = self.db.get_recent(self.settings.max_history, None) else {
+            return;
+        };
+        let full_ids: Vec<i64> = full_items.iter().map(|i| i.id).collect();
+        let Some(target_id) = self.paste_stack.next_target_id(&full_ids) else {
+            return;
+        };
+        let Some(item) = full_items.into_iter().find(|i| i.id == target_id) else {
+            return;
+        };
+
+        let (payload, secret_to_clear) = match item.kind {
+            ItemKind::Image => {
+                let png_bytes = match self.db.get_image_data(item.id) {
+                    Ok(Some(bytes)) => bytes,
+                    Ok(None) => {
+                        crate::logging::log_message(
+                            "WARN",
+                            "Paste Next skipped: image data missing",
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        crate::logging::log_message(
+                            "WARN",
+                            &format!("Paste Next skipped: failed to load image ({e})"),
+                        );
+                        return;
+                    }
+                };
+                match crate::media::png_to_rgba(&png_bytes) {
+                    Ok((width, height, rgba)) => (
+                        crate::platform::PasteNextPayload::Image {
+                            width,
+                            height,
+                            rgba,
+                        },
+                        None,
+                    ),
+                    Err(e) => {
+                        crate::logging::log_message(
+                            "WARN",
+                            &format!("Paste Next skipped oversized/invalid image: {e}"),
+                        );
+                        if self.window_state.is_visible {
+                            self.show_warning_toast(&format!(
+                                "{} Skipped invalid or oversized image.",
+                                icons::WARNING
+                            ));
+                        }
+                        return;
+                    }
+                }
+            }
+            ItemKind::Text
+            | ItemKind::Url
+            | ItemKind::Code
+            | ItemKind::Color
+            | ItemKind::Secret => {
+                if item.content.len() > crate::monitor::MAX_TEXT_LENGTH {
+                    crate::logging::log_message(
+                        "WARN",
+                        "Paste Next skipped: text entry exceeds maximum size limit",
+                    );
+                    if self.window_state.is_visible {
+                        self.show_warning_toast(&format!(
+                            "{} Skipped oversized text entry.",
+                            icons::WARNING
+                        ));
+                    }
+                    return;
+                }
+                let conceal = item.kind == ItemKind::Secret;
+                let text = zeroize::Zeroizing::new(item.content);
+                let secret_to_clear = conceal.then(|| text.clone());
+                (
+                    crate::platform::PasteNextPayload::Text { text, conceal },
+                    secret_to_clear,
+                )
+            }
+        };
+
+        let seq = self
+            .paste_stack
+            .record_submission(target_id, secret_to_clear);
+        crate::platform::submit_paste_next(crate::platform::PasteNextJob {
+            seq,
+            payload,
+            settle_ms: self.settings.auto_paste_delay_ms,
+            release_modifiers: parsed_hk.modifiers(),
+            db: self.db.clone(),
+            ctx: ctx.clone(),
+        });
+    }
+
+    fn handle_paste_next_outcomes(&mut self) {
+        while let Some(outcome) = crate::platform::try_recv_paste_next_outcome() {
+            match outcome {
+                crate::platform::PasteNextOutcome::Pasted { seq } => {
+                    let full_ids = self.full_history_ids();
+                    if let PastedReconciliation::Reconciled { secret_to_clear } =
+                        self.paste_stack.on_pasted(seq, &full_ids)
+                    {
+                        if let Some(secret) = secret_to_clear {
+                            self.schedule_secret_clipboard_clear(&secret);
+                        } else {
+                            self.pending_clipboard_clear = None;
+                        }
+                    }
+                }
+                crate::platform::PasteNextOutcome::Failed { seq, reason } => {
+                    let _ = self.paste_stack.on_failed(seq);
+                    self.db.clear_skip_capture();
+                    crate::logging::log_message(
+                        "WARN",
+                        &format!("Paste Next failed (seq={seq}): {reason}"),
+                    );
+                    if reason == "Accessibility permission missing" {
+                        let msg = format!(
+                            "{} Accessibility permission required for Paste Next (grant in System Settings).",
+                            icons::WARNING
+                        );
+                        if self.window_state.is_visible {
+                            self.show_warning_toast(&msg);
+                        } else {
+                            self.pending_toast = Some((msg, ToastSeverity::Warning));
+                        }
+                    } else if self.window_state.is_visible {
+                        self.show_warning_toast(&format!(
+                            "{} Paste Next failed: {reason}",
+                            icons::WARNING
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     fn handle_monitor_updates(&mut self) {
         let mut new_items_detected = false;
         while self.services.notify_rx.try_recv().is_ok() {
             new_items_detected = true;
+        }
+
+        if new_items_detected {
+            self.reset_paste_stack_to_newest();
         }
 
         let query_changed = self.search_query != self.last_query_cached;
@@ -1534,10 +1939,72 @@ impl ClipboardApp {
                 );
             }
 
+            if self.active_view == ActiveView::History
+                && self.settings.active_paste_next_hotkey().is_some()
+            {
+                self.render_paste_stack_mode_chip(ui, is_dark);
+            }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.render_header_actions(ui, ctx, is_dark);
             });
         });
+    }
+
+    fn render_paste_stack_mode_chip(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        let filtered_indices = self.get_filtered_indices();
+        let marker_visible = self.paste_stack.next_marker.is_some_and(|marker_id| {
+            filtered_indices
+                .iter()
+                .any(|&idx| self.items.get(idx).is_some_and(|item| item.id == marker_id))
+        });
+        let hidden_by_filter = self.paste_stack.next_marker.is_some() && !marker_visible;
+
+        let (base_label, color) = match self.paste_stack.mode {
+            StackMode::Lifo => ("LIFO ↓", crate::theme::accent_color(is_dark)),
+            StackMode::Fifo => ("FIFO ↑", crate::theme::success_color(is_dark)),
+        };
+        let label = if hidden_by_filter {
+            format!("{base_label} · hidden")
+        } else {
+            base_label.to_string()
+        };
+        let bg = color.gamma_multiply(if is_dark { 0.20 } else { 0.12 });
+        let stroke = egui::Stroke::new(1.0, color.gamma_multiply(0.65));
+        let hotkey_badge = self.settings.paste_next_hotkey_badge();
+        let tip = if hidden_by_filter {
+            format!(
+                "Paste Next ({hotkey_badge}): {base_label} — marked entry is hidden by current filter (run still walks full history)"
+            )
+        } else {
+            format!("Paste Next ({hotkey_badge}): {base_label} — click to jump to the NEXT entry")
+        };
+
+        let chip_resp = egui::Frame::new()
+            .corner_radius(crate::theme::pill_rounding())
+            .fill(bg)
+            .stroke(stroke)
+            .inner_margin(egui::Margin::symmetric(6, 2))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(label)
+                        .size(10.0_f32)
+                        .color(color)
+                        .strong(),
+                );
+            })
+            .response;
+        let click_resp = ui
+            .interact(
+                chip_resp.rect,
+                ui.scope_id().with("paste_stack_mode_chip"),
+                egui::Sense::click(),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(tip);
+        if click_resp.clicked() && marker_visible {
+            self.paste_stack.scroll_to_marker = true;
+        }
     }
 
     fn render_header_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, is_dark: bool) {
@@ -1974,6 +2441,7 @@ impl ClipboardApp {
                             Ok(()) => {
                                 self.texture_cache.clear();
                                 self.refresh_items();
+                                self.reset_paste_stack_to_newest();
                                 self.dialogs.show_clear_confirm_dialog = false;
                                 self.show_toast(&format!(
                                     "{} History cleared. Pinned items kept.",
@@ -1990,6 +2458,7 @@ impl ClipboardApp {
                                 );
                                 self.texture_cache.clear();
                                 self.refresh_items();
+                                self.reset_paste_stack_to_newest();
                                 self.dialogs.show_clear_confirm_dialog = false;
                                 self.show_error_toast(
                                     "History rows were removed, but secure compaction failed. Restart and clear again to purge residual data.",
@@ -2433,6 +2902,8 @@ impl eframe::App for ClipboardApp {
         }
         self.handle_app_activation(ctx);
         self.handle_monitor_updates();
+        self.handle_paste_next_outcomes();
+        self.handle_paste_next_events(ctx);
         self.handle_clipboard_auto_clear();
         self.handle_ocr_results(ctx);
         log_viewport_state_transitions(&self.window_state, ctx);
@@ -2548,6 +3019,7 @@ struct HistoryNavInput {
     delete_selected: bool,
     toggle_secret_selected: bool,
     edit_annotation_selected: bool,
+    set_paste_next_marker_selected: bool,
     new_secret: bool,
     copy_shortcut_slot: Option<usize>,
 }
@@ -2606,6 +3078,13 @@ fn read_history_nav_input(ctx: &egui::Context) -> HistoryNavInput {
             || i.consume_key(egui::Modifiers::COMMAND, egui::Key::E)
         {
             nav.edit_annotation_selected = true;
+        }
+
+        if i.consume_key(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::M,
+        ) {
+            nav.set_paste_next_marker_selected = true;
         }
 
         let new_secret_shortcut = if cfg!(target_os = "macos") {
@@ -2669,36 +3148,6 @@ pub(super) fn active_modifier_labels(modifiers: egui::Modifiers) -> Vec<&'static
         parts.push("Cmd");
     }
     parts
-}
-
-const fn is_function_key(key: egui::Key) -> bool {
-    matches!(
-        key,
-        egui::Key::F1
-            | egui::Key::F2
-            | egui::Key::F3
-            | egui::Key::F4
-            | egui::Key::F5
-            | egui::Key::F6
-            | egui::Key::F7
-            | egui::Key::F8
-            | egui::Key::F9
-            | egui::Key::F10
-            | egui::Key::F11
-            | egui::Key::F12
-            | egui::Key::F13
-            | egui::Key::F14
-            | egui::Key::F15
-            | egui::Key::F16
-            | egui::Key::F17
-            | egui::Key::F18
-            | egui::Key::F19
-            | egui::Key::F20
-            | egui::Key::F21
-            | egui::Key::F22
-            | egui::Key::F23
-            | egui::Key::F24
-    )
 }
 
 fn format_recorded_hotkey(modifiers: egui::Modifiers, key: egui::Key) -> Option<String> {
@@ -2831,7 +3280,8 @@ fn render_view_toggle_button(
 mod tests {
     use super::{
         clipboard_clear_is_due, monitor_update_needs_refresh, AppServices, ClipboardApp,
-        DialogState, ToastSeverity, WindowFocusState,
+        DialogState, PasteStackState, PastedReconciliation, StackMode, ToastSeverity,
+        WindowFocusState,
     };
     use eframe::egui;
     use std::time::{Duration, Instant};
@@ -2876,6 +3326,7 @@ mod tests {
             services: AppServices {
                 notify_rx,
                 hotkey_rx,
+                paste_next_rx: crossbeam_channel::bounded(64).1,
                 hotkey_service: None,
                 tray_rx,
                 tray_service: None,
@@ -2902,6 +3353,7 @@ mod tests {
             title_bar_dark_mode: None,
             is_quitting: false,
             copied_item_pulse: None,
+            paste_stack: PasteStackState::default(),
             data_dir: dir.path().to_path_buf(),
         };
 
@@ -3004,6 +3456,7 @@ mod tests {
             services: AppServices {
                 notify_rx,
                 hotkey_rx,
+                paste_next_rx: crossbeam_channel::bounded(64).1,
                 hotkey_service: None,
                 tray_rx,
                 tray_service: None,
@@ -3030,6 +3483,7 @@ mod tests {
             title_bar_dark_mode: None,
             is_quitting: false,
             copied_item_pulse: None,
+            paste_stack: PasteStackState::default(),
             data_dir: dir.path().to_path_buf(),
         };
 
@@ -3064,6 +3518,7 @@ mod tests {
             services: AppServices {
                 notify_rx,
                 hotkey_rx,
+                paste_next_rx: crossbeam_channel::bounded(64).1,
                 hotkey_service: None,
                 tray_rx,
                 tray_service: None,
@@ -3090,6 +3545,7 @@ mod tests {
             title_bar_dark_mode: None,
             is_quitting: false,
             copied_item_pulse: None,
+            paste_stack: PasteStackState::default(),
             data_dir: dir.path().to_path_buf(),
         };
 
@@ -3299,6 +3755,7 @@ mod tests {
             services: AppServices {
                 notify_rx,
                 hotkey_rx,
+                paste_next_rx: crossbeam_channel::bounded(64).1,
                 hotkey_service: None,
                 tray_rx,
                 tray_service: None,
@@ -3325,6 +3782,7 @@ mod tests {
             title_bar_dark_mode: None,
             is_quitting: false,
             copied_item_pulse: None,
+            paste_stack: PasteStackState::default(),
             data_dir: dir.path().to_path_buf(),
         };
 
@@ -3343,5 +3801,131 @@ mod tests {
         app.handle_tray_events(&ctx);
         assert!(app.is_quitting);
         assert!(!app.window_state.is_visible);
+    }
+
+    #[test]
+    fn test_paste_stack_lifo_and_fifo_transitions() {
+        // History newest-first: [C=3, B=2, A=1]
+        let ids = [3_i64, 2, 1];
+        let mut stack = PasteStackState::default();
+        stack.reset_to_newest(&ids);
+        assert_eq!(stack.mode, StackMode::Lifo);
+        assert_eq!(stack.next_marker, Some(3));
+
+        // LIFO: C -> B -> A -> None (AC-3, AC-13)
+        for (expected_id, expected_next) in [(3, Some(2)), (2, Some(1)), (1, None)] {
+            assert_eq!(stack.next_target_id(&ids), Some(expected_id));
+            let seq = stack.record_submission(expected_id, None);
+            assert!(matches!(
+                stack.on_pasted(seq, &ids),
+                PastedReconciliation::Reconciled { .. }
+            ));
+            assert_eq!(stack.mode, StackMode::Lifo);
+            assert_eq!(stack.next_marker, expected_next);
+        }
+        assert_eq!(stack.next_target_id(&ids), None);
+
+        // AC-23: Place marker on A (oldest) -> switches to FIFO, 3 presses paste A, B, C, then back to LIFO on C
+        stack.place_marker(1, &ids);
+        assert_eq!(stack.mode, StackMode::Fifo);
+        assert_eq!(stack.next_marker, Some(1));
+
+        let s1 = stack.record_submission(1, None);
+        assert!(matches!(
+            stack.on_pasted(s1, &ids),
+            PastedReconciliation::Reconciled { .. }
+        ));
+        assert_eq!(stack.mode, StackMode::Fifo);
+        assert_eq!(stack.next_marker, Some(2));
+
+        let s2 = stack.record_submission(2, None);
+        assert!(matches!(
+            stack.on_pasted(s2, &ids),
+            PastedReconciliation::Reconciled { .. }
+        ));
+        // Stepping onto newest entry stays FIFO until newest is actually pasted!
+        assert_eq!(stack.mode, StackMode::Fifo);
+        assert_eq!(stack.next_marker, Some(3));
+
+        let s3 = stack.record_submission(3, None);
+        assert!(matches!(
+            stack.on_pasted(s3, &ids),
+            PastedReconciliation::Reconciled { .. }
+        ));
+        assert_eq!(stack.mode, StackMode::Lifo);
+        assert_eq!(stack.next_marker, Some(3));
+
+        // Rule 5: manually placing marker on newest means LIFO
+        stack.place_marker(1, &ids);
+        assert_eq!(stack.mode, StackMode::Fifo);
+        stack.place_marker(3, &ids);
+        assert_eq!(stack.mode, StackMode::Lifo);
+        assert_eq!(stack.next_marker, Some(3));
+    }
+
+    #[test]
+    fn test_paste_stack_reset_failure_in_flight_and_deletions() {
+        let ids = [3_i64, 2, 1];
+        let mut stack = PasteStackState::default();
+
+        // AC-24: new copy during FIFO resets to LIFO on new entry
+        stack.place_marker(1, &ids);
+        assert_eq!(stack.mode, StackMode::Fifo);
+        let ids_with_d = [4_i64, 3, 2, 1];
+        stack.reset_to_newest(&ids_with_d);
+        assert_eq!(stack.mode, StackMode::Lifo);
+        assert_eq!(stack.next_marker, Some(4));
+
+        // AC-14: failure does not advance marker; queued job behind it still advances from its own submitted_id
+        let s1 = stack.record_submission(4, None);
+        assert_eq!(stack.next_target_id(&ids_with_d), Some(3));
+        let s2 = stack.record_submission(3, None);
+        assert!(stack.on_failed(s1));
+        assert_eq!(stack.next_marker, Some(4));
+        assert!(matches!(
+            stack.on_pasted(s2, &ids_with_d),
+            PastedReconciliation::Reconciled { .. }
+        ));
+        assert_eq!(stack.next_marker, Some(2));
+
+        // In-flight burst in FIFO stops at newest entry
+        stack.place_marker(2, &ids);
+        let f1 = stack.record_submission(2, None);
+        assert_eq!(stack.next_target_id(&ids), Some(3));
+        let f2 = stack.record_submission(3, None);
+        assert_eq!(stack.next_target_id(&ids), None);
+        assert!(matches!(
+            stack.on_pasted(f1, &ids),
+            PastedReconciliation::Reconciled { .. }
+        ));
+        assert!(matches!(
+            stack.on_pasted(f2, &ids),
+            PastedReconciliation::Reconciled { .. }
+        ));
+        assert_eq!(stack.mode, StackMode::Lifo);
+        assert_eq!(stack.next_marker, Some(3));
+
+        // AC-26: marker follows its entry by id across non-clipboard inserts and deletions above it
+        stack.place_marker(2, &ids);
+        let ids_after_non_clip_insert = [5_i64, 3, 2, 1];
+        assert_eq!(stack.next_target_id(&ids_after_non_clip_insert), Some(2));
+
+        // Deleting an entry above the marker leaves marker on its id
+        stack.on_entry_deleted(3, &ids, &[2, 1]);
+        assert_eq!(stack.next_marker, Some(2));
+
+        // Deleting the marked entry in FIFO moves to next newer; if none, switches to LIFO on newest
+        stack.place_marker(2, &ids);
+        stack.on_entry_deleted(2, &ids, &[3, 1]);
+        assert_eq!(stack.mode, StackMode::Fifo);
+        assert_eq!(stack.next_marker, Some(3));
+        stack.on_entry_deleted(3, &[3, 1], &[1]);
+        assert_eq!(stack.mode, StackMode::Lifo);
+        assert_eq!(stack.next_marker, Some(1));
+
+        // Deleting the marked entry in LIFO moves to next older; if none, sets None
+        stack.on_entry_deleted(1, &[1], &[]);
+        assert_eq!(stack.mode, StackMode::Lifo);
+        assert_eq!(stack.next_marker, None);
     }
 }

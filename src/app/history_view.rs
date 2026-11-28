@@ -21,6 +21,7 @@ pub(super) enum ItemAction {
     ToggleRevealSecret(i64),
     TogglePin(i64),
     EditAnnotation(i64),
+    SetPasteNextMarker(i64),
     Delete(i64),
     ShowWarning(String),
 }
@@ -34,6 +35,10 @@ struct ItemRenderState {
     is_revealed: bool,
     is_dark: bool,
     is_pulse: bool,
+    paste_next_enabled: bool,
+    is_next_marker: bool,
+    is_newest_item: bool,
+    stack_mode: super::StackMode,
     now: jiff::civil::DateTime,
 }
 
@@ -196,6 +201,13 @@ impl ClipboardApp {
     ) {
         let should_scroll_selected = self.scroll_to_selected;
         self.scroll_to_selected = false;
+        let should_scroll_marker = self.paste_stack.scroll_to_marker;
+        self.paste_stack.scroll_to_marker = false;
+        let paste_next_enabled = self.settings.active_paste_next_hotkey().is_some();
+        let paste_next_badge = self.settings.paste_next_hotkey_badge().to_string();
+        let next_marker_id = self.paste_stack.next_marker;
+        let stack_mode = self.paste_stack.mode;
+        let newest_item_id = self.full_history_ids().first().copied();
         let now = jiff::ZonedDateTime::now().datetime();
         // Cap fresh PNG decodes per frame so summoning a history with many images stays snappy.
         let mut image_decode_budget: usize = 2;
@@ -210,7 +222,9 @@ impl ClipboardApp {
                     if let Some(item) = self.items.get(idx) {
                         let is_selected = slot == self.selected_index;
                         let shortcut_num = if slot < 9 { Some(slot + 1) } else { None };
-                        let should_scroll = is_selected && should_scroll_selected;
+                        let is_next_marker = next_marker_id == Some(item.id);
+                        let should_scroll = (is_selected && should_scroll_selected)
+                            || (is_next_marker && should_scroll_marker);
                         let is_revealed = self.revealed_secrets.contains(&item.id);
                         let is_pulse = self.copied_item_pulse.as_ref().is_some_and(|(id, at)| {
                             *id == item.id && at.elapsed() < Duration::from_millis(600)
@@ -223,6 +237,7 @@ impl ClipboardApp {
                             &mut self.texture_cache,
                             &mut image_decode_budget,
                             ctx,
+                            &paste_next_badge,
                             ItemRenderState {
                                 is_selected,
                                 shortcut_num,
@@ -230,6 +245,10 @@ impl ClipboardApp {
                                 is_revealed,
                                 is_dark,
                                 is_pulse,
+                                paste_next_enabled,
+                                is_next_marker,
+                                is_newest_item: newest_item_id == Some(item.id),
+                                stack_mode,
                                 now,
                             },
                         );
@@ -328,11 +347,18 @@ impl ClipboardApp {
                     self.dialogs.annotation_notes_input = item.notes.clone().unwrap_or_default();
                 }
             }
+            ItemAction::SetPasteNextMarker(id) => {
+                self.place_paste_next_marker(id);
+            }
             ItemAction::Delete(id) => {
+                let ids_before = self.full_history_ids();
                 if let Err(error) = self.db.delete(id) {
                     self.report_db_write_failure("delete entry", &error);
                     return;
                 }
+                let ids_after = self.full_history_ids();
+                self.paste_stack
+                    .on_entry_deleted(id, &ids_before, &ids_after);
                 self.revealed_secrets.remove(&id);
                 self.texture_cache.remove(id);
                 self.refresh_items();
@@ -364,6 +390,7 @@ impl ClipboardApp {
 
     #[allow(
         clippy::too_many_lines,
+        clippy::too_many_arguments,
         reason = "Card rendering keeps related UI branches local for readability"
     )]
     fn render_clipboard_item(
@@ -373,6 +400,7 @@ impl ClipboardApp {
         texture_cache: &mut ImageTextureCache,
         image_decode_budget: &mut usize,
         ctx: &egui::Context,
+        paste_next_badge: &str,
         state: ItemRenderState,
     ) -> (ItemAction, bool) {
         let mut action = ItemAction::None;
@@ -389,15 +417,8 @@ impl ClipboardApp {
             .shadow(shadow)
             .inner_margin(8)
             .show(ui, |ui| {
-                let header_action = Self::render_item_header(
-                    ui,
-                    item,
-                    state.shortcut_num,
-                    state.is_selected,
-                    state.is_revealed,
-                    state.is_dark,
-                    state.now,
-                );
+                let header_action =
+                    Self::render_item_header_with_stack(ui, item, paste_next_badge, state);
                 if !matches!(header_action, ItemAction::None) {
                     action = header_action;
                 }
@@ -458,6 +479,20 @@ impl ClipboardApp {
 
         let mut context_action = ItemAction::None;
         frame_resp.response.context_menu(|ui| {
+            if state.paste_next_enabled {
+                let dir_arrow = if state.is_newest_item { "↓" } else { "↑" };
+                let shortcut_hint = format!("{}+Shift+M", crate::platform::PRIMARY_MODIFIER_NAME);
+                if ui
+                    .button(format!(
+                        "{dir_arrow} Paste next from here ({shortcut_hint})"
+                    ))
+                    .clicked()
+                {
+                    context_action = ItemAction::SetPasteNextMarker(item.id);
+                    ui.close();
+                }
+                ui.separator();
+            }
             let menu_act = Self::render_card_transform_menu(ui, item, state.is_revealed);
             if !matches!(menu_act, ItemAction::None) {
                 context_action = menu_act;
@@ -648,6 +683,7 @@ impl ClipboardApp {
         }
     }
 
+    #[cfg(test)]
     fn render_item_header(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
@@ -657,6 +693,73 @@ impl ClipboardApp {
         is_dark: bool,
         now: jiff::civil::DateTime,
     ) -> ItemAction {
+        Self::render_item_header_with_stack(
+            ui,
+            item,
+            "",
+            ItemRenderState {
+                is_selected,
+                shortcut_num,
+                should_scroll: false,
+                is_revealed,
+                is_dark,
+                is_pulse: false,
+                paste_next_enabled: false,
+                is_next_marker: false,
+                is_newest_item: false,
+                stack_mode: super::StackMode::Lifo,
+                now,
+            },
+        )
+    }
+
+    fn render_next_marker_pill(
+        ui: &mut egui::Ui,
+        mode: super::StackMode,
+        hotkey_badge: &str,
+        is_dark: bool,
+    ) {
+        let (label, color, tip) = match mode {
+            super::StackMode::Lifo => (
+                "↓ NEXT",
+                crate::theme::accent_color(is_dark),
+                format!(
+                    "Next to paste with {hotkey_badge} — pasting downward (newest → oldest)"
+                ),
+            ),
+            super::StackMode::Fifo => (
+                "↑ NEXT",
+                crate::theme::success_color(is_dark),
+                format!(
+                    "Next to paste with {hotkey_badge} — pasting upward (oldest → newest, then back to LIFO)"
+                ),
+            ),
+        };
+        let bg = color.gamma_multiply(if is_dark { 0.22 } else { 0.13 });
+        let stroke = egui::Stroke::new(1.0, color.gamma_multiply(0.75));
+        egui::Frame::new()
+            .corner_radius(crate::theme::pill_rounding())
+            .fill(bg)
+            .stroke(stroke)
+            .inner_margin(egui::Margin::symmetric(6, 2))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(label)
+                        .size(9.5_f32)
+                        .color(color)
+                        .strong(),
+                );
+            })
+            .response
+            .on_hover_text(tip);
+    }
+
+    fn render_item_header_with_stack(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        paste_next_badge: &str,
+        state: ItemRenderState,
+    ) -> ItemAction {
         let mut action = ItemAction::None;
 
         ui.horizontal(|ui| {
@@ -664,18 +767,27 @@ impl ClipboardApp {
             // receives the exact remaining width and can hide the timestamp when
             // dynamic action buttons would otherwise overlap it.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if let Some(num) = shortcut_num {
-                    Self::render_shortcut_badge(ui, num, is_selected, is_dark);
+                if let Some(num) = state.shortcut_num {
+                    Self::render_shortcut_badge(ui, num, state.is_selected, state.is_dark);
                 }
 
-                action = Self::render_item_header_actions(ui, item, is_selected, is_revealed);
+                if state.paste_next_enabled && state.is_next_marker {
+                    Self::render_next_marker_pill(
+                        ui,
+                        state.stack_mode,
+                        paste_next_badge,
+                        state.is_dark,
+                    );
+                }
+
+                action = Self::render_item_header_actions(ui, item, state);
 
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     if item.is_pinned {
                         ui.label(
                             egui::RichText::new(icons::PUSH_PIN)
                                 .size(12.0)
-                                .color(crate::theme::warning_color(is_dark)),
+                                .color(crate::theme::warning_color(state.is_dark)),
                         )
                         .on_hover_text("Pinned (protected from pruning & Clear All)");
                     }
@@ -686,14 +798,14 @@ impl ClipboardApp {
                                 egui::RichText::new(label)
                                     .size(13.5)
                                     .strong()
-                                    .color(crate::theme::text_primary(is_dark)),
+                                    .color(crate::theme::text_primary(state.is_dark)),
                             )
                             .truncate(),
                         );
                         ui.add_space(4.0);
                     }
 
-                    Self::render_item_badge(ui, item, is_dark, now);
+                    Self::render_item_badge(ui, item, state.is_dark, state.now);
                 });
             });
         });
@@ -724,14 +836,27 @@ impl ClipboardApp {
     fn render_item_header_actions(
         ui: &mut egui::Ui,
         item: &ClipboardItem,
-        is_selected: bool,
-        is_revealed: bool,
+        state: ItemRenderState,
     ) -> ItemAction {
         let mut action = ItemAction::None;
 
         let mut overflow_action = ItemAction::None;
         ui.menu_button("⋯", |ui| {
-            let menu_action = Self::render_card_transform_menu(ui, item, is_revealed);
+            if state.paste_next_enabled {
+                let dir_arrow = if state.is_newest_item { "↓" } else { "↑" };
+                let shortcut_hint = format!("{}+Shift+M", crate::platform::PRIMARY_MODIFIER_NAME);
+                if ui
+                    .button(format!(
+                        "{dir_arrow} Paste next from here ({shortcut_hint})"
+                    ))
+                    .clicked()
+                {
+                    overflow_action = ItemAction::SetPasteNextMarker(item.id);
+                    ui.close();
+                }
+                ui.separator();
+            }
+            let menu_action = Self::render_card_transform_menu(ui, item, state.is_revealed);
             if !matches!(menu_action, ItemAction::None) {
                 overflow_action = menu_action;
             }
@@ -740,12 +865,17 @@ impl ClipboardApp {
             action = overflow_action;
         }
 
-        let eye_action = Self::render_secret_reveal_button(ui, item, is_revealed);
+        let eye_action = Self::render_secret_reveal_button(ui, item, state.is_revealed);
         if !matches!(eye_action, ItemAction::None) {
             action = eye_action;
         }
 
-        if !is_selected {
+        let marker_action = Self::render_paste_next_hover_button(ui, item, state);
+        if !matches!(marker_action, ItemAction::None) {
+            action = marker_action;
+        }
+
+        if !state.is_selected {
             return action;
         }
 
@@ -799,6 +929,43 @@ impl ClipboardApp {
         }
 
         action
+    }
+
+    fn render_paste_next_hover_button(
+        ui: &mut egui::Ui,
+        item: &ClipboardItem,
+        state: ItemRenderState,
+    ) -> ItemAction {
+        let show_quick_actions = state.is_selected || ui.rect_contains_pointer(ui.max_rect());
+        if !(state.paste_next_enabled && !state.is_next_marker && show_quick_actions) {
+            return ItemAction::None;
+        }
+        let (arrow, tip) = if state.is_newest_item {
+            (
+                "↓",
+                format!(
+                    "Paste next from here — LIFO ({}+Shift+M)",
+                    crate::platform::PRIMARY_MODIFIER_NAME
+                ),
+            )
+        } else {
+            (
+                "↑",
+                format!(
+                    "Paste next from here — FIFO ({}+Shift+M)",
+                    crate::platform::PRIMARY_MODIFIER_NAME
+                ),
+            )
+        };
+        if ui
+            .small_button(egui::RichText::new(arrow).strong())
+            .on_hover_text(tip)
+            .clicked()
+        {
+            ItemAction::SetPasteNextMarker(item.id)
+        } else {
+            ItemAction::None
+        }
     }
 
     fn render_secret_reveal_button(

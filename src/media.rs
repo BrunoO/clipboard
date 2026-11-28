@@ -1,7 +1,28 @@
 use image::{ImageBuffer, RgbaImage};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hasher;
 use std::io::Cursor;
 
-const MAX_IMAGE_PIXELS: usize = 40_000_000; // Guard against decompression bombs (~40 MP)
+pub(crate) const MAX_IMAGE_PIXELS: usize = 40_000_000; // Guard against decompression bombs (~40 MP)
+
+/// Computes a fast, deterministic fingerprint for an RGBA image buffer.
+/// Shared by the clipboard monitor and Paste Next writer for feedback-loop suppression.
+#[must_use]
+pub(crate) fn image_fingerprint(width: usize, height: usize, rgba: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hasher.write_usize(width);
+    hasher.write_usize(height);
+    hasher.write_usize(rgba.len());
+    if rgba.len() <= 65536 {
+        hasher.write(rgba);
+    } else {
+        hasher.write(&rgba[..16384]);
+        let mid = rgba.len() / 2;
+        hasher.write(&rgba[mid..mid + 16384]);
+        hasher.write(&rgba[rgba.len() - 16384..]);
+    }
+    hasher.finish()
+}
 
 /// Domain error type for media encoding and decoding operations.
 #[derive(Debug)]

@@ -231,6 +231,103 @@ pub(super) fn simulate_paste() {
     });
 }
 
+fn modifier_keysyms(modifiers: global_hotkey::hotkey::Modifiers) -> Vec<u32> {
+    const XK_SHIFT_L: u32 = 0xffe1;
+    const XK_SHIFT_R: u32 = 0xffe2;
+    const XK_CONTROL_L: u32 = 0xffe3;
+    const XK_CONTROL_R: u32 = 0xffe4;
+    const XK_ALT_L: u32 = 0xffe9;
+    const XK_ALT_R: u32 = 0xffea;
+    const XK_SUPER_L: u32 = 0xffeb;
+    const XK_SUPER_R: u32 = 0xffec;
+
+    let mut syms = Vec::new();
+    if modifiers.contains(global_hotkey::hotkey::Modifiers::CONTROL) {
+        syms.extend_from_slice(&[XK_CONTROL_L, XK_CONTROL_R]);
+    }
+    if modifiers.contains(global_hotkey::hotkey::Modifiers::SHIFT) {
+        syms.extend_from_slice(&[XK_SHIFT_L, XK_SHIFT_R]);
+    }
+    if modifiers.contains(global_hotkey::hotkey::Modifiers::ALT) {
+        syms.extend_from_slice(&[XK_ALT_L, XK_ALT_R]);
+    }
+    if modifiers.contains(global_hotkey::hotkey::Modifiers::META) {
+        syms.extend_from_slice(&[XK_SUPER_L, XK_SUPER_R]);
+    }
+    syms
+}
+
+fn keycode_is_pressed(keymap: &[u8; 32], kc: u8) -> bool {
+    let byte_idx = usize::from(kc / 8);
+    let bit_mask = 1_u8 << (kc % 8);
+    (keymap[byte_idx] & bit_mask) != 0
+}
+
+pub(super) fn are_modifiers_held(modifiers: global_hotkey::hotkey::Modifiers) -> bool {
+    let syms = modifier_keysyms(modifiers);
+    if syms.is_empty() {
+        return false;
+    }
+    with_x11(|s| {
+        let reply = s.conn.query_keymap().ok()?.reply().ok()?;
+        let held = syms.iter().any(|&sym| {
+            find_keycode(&s.conn, sym).is_some_and(|kc| keycode_is_pressed(&reply.keys, kc))
+        });
+        Some(held)
+    })
+    .unwrap_or(false)
+}
+
+pub(super) fn simulate_paste_foreground(
+    release_modifiers: global_hotkey::hotkey::Modifiers,
+) -> Result<(), &'static str> {
+    const XK_CONTROL_L: u32 = 0xffe3;
+    const XK_V_LOWER: u32 = 0x0076;
+    const KEY_PRESS: u8 = 2;
+    const KEY_RELEASE: u8 = 3;
+
+    let syms = modifier_keysyms(release_modifiers);
+    let res = with_x11(|s| {
+        let ctrl_kc = find_keycode(&s.conn, XK_CONTROL_L)?;
+        let v_kc = find_keycode(&s.conn, XK_V_LOWER)?;
+
+        if !syms.is_empty() {
+            if let Ok(Ok(reply)) = s.conn.query_keymap().map(|c| c.reply()) {
+                for &sym in &syms {
+                    if let Some(kc) = find_keycode(&s.conn, sym) {
+                        if keycode_is_pressed(&reply.keys, kc) {
+                            let _ = s.conn.xtest_fake_input(KEY_RELEASE, kc, 0, s.root, 0, 0, 0);
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = s
+            .conn
+            .xtest_fake_input(KEY_PRESS, ctrl_kc, 0, s.root, 0, 0, 0);
+        let _ = s.conn.xtest_fake_input(KEY_PRESS, v_kc, 0, s.root, 0, 0, 0);
+        let _ = s.conn.flush();
+
+        std::thread::sleep(Duration::from_millis(15));
+
+        let _ = s
+            .conn
+            .xtest_fake_input(KEY_RELEASE, v_kc, 0, s.root, 0, 0, 0);
+        let _ = s
+            .conn
+            .xtest_fake_input(KEY_RELEASE, ctrl_kc, 0, s.root, 0, 0, 0);
+        let _ = s.conn.flush();
+        Some(())
+    });
+
+    if res.is_some() {
+        Ok(())
+    } else {
+        Err("Wayland paste simulation unavailable")
+    }
+}
+
 /// Marker emission is intentionally unavailable on Linux/X11.
 ///
 /// `arboard` owns the `CLIPBOARD` selection when a secret is copied, so adding
@@ -365,7 +462,7 @@ mod x11_quote_hotkey {
     use x11rb::protocol::Event;
 
     enum Msg {
-        Register(HotKey, Sender<Result<(), ()>>),
+        Register(HotKey, crate::hotkey::HotkeyAction, Sender<Result<(), ()>>),
         Clear,
         Shutdown,
     }
@@ -378,21 +475,25 @@ mod x11_quote_hotkey {
     }
 
     impl QuoteHotkeyFallback {
-        pub(crate) fn new(hotkey_tx: SyncSender<()>, ctx: egui::Context) -> Self {
+        pub(crate) fn new(
+            hotkey_tx: SyncSender<()>,
+            paste_next_tx: crossbeam_channel::Sender<()>,
+            ctx: egui::Context,
+        ) -> Self {
             let (tx, rx) = mpsc::channel::<Msg>();
             let handle = thread::Builder::new()
                 .name("x11-quote-hotkey".to_string())
-                .spawn(move || run_loop(&rx, &hotkey_tx, &ctx))
+                .spawn(move || run_loop(&rx, &hotkey_tx, &paste_next_tx, &ctx))
                 .ok();
             Self { tx, handle }
         }
 
-        pub(crate) fn try_register(&self, hk: HotKey) -> bool {
+        pub(crate) fn try_register(&self, hk: HotKey, action: crate::hotkey::HotkeyAction) -> bool {
             if hk.key != Code::Quote {
                 return false;
             }
             let (reply_tx, reply_rx) = mpsc::channel();
-            if self.tx.send(Msg::Register(hk, reply_tx)).is_err() {
+            if self.tx.send(Msg::Register(hk, action, reply_tx)).is_err() {
                 return false;
             }
             matches!(reply_rx.recv(), Ok(Ok(())))
@@ -465,8 +566,12 @@ mod x11_quote_hotkey {
         None
     }
 
-    fn ungrab_all<C: Connection>(conn: &C, root: Window, grabs: &mut Vec<(u8, ModMask)>) {
-        for (kc, mods) in grabs.drain(..) {
+    fn ungrab_all<C: Connection>(
+        conn: &C,
+        root: Window,
+        grabs: &mut Vec<(u8, ModMask, crate::hotkey::HotkeyAction)>,
+    ) {
+        for (kc, mods, _) in grabs.drain(..) {
             for m in ignored_mods() {
                 let _ = conn.ungrab_key(kc, root, mods | m);
             }
@@ -477,7 +582,7 @@ mod x11_quote_hotkey {
     fn drain_until_shutdown(rx: &mpsc::Receiver<Msg>) {
         while let Ok(msg) = rx.recv() {
             match msg {
-                Msg::Register(_, reply) => {
+                Msg::Register(_, _, reply) => {
                     let _ = reply.send(Err(()));
                 }
                 Msg::Clear => {}
@@ -488,22 +593,37 @@ mod x11_quote_hotkey {
 
     fn poll_x11_key_events(
         conn: &x11rb::rust_connection::RustConnection,
-        grabs: &[(u8, ModMask)],
+        grabs: &[(u8, ModMask, crate::hotkey::HotkeyAction)],
         full_mask: KeyButMask,
         hotkey_tx: &SyncSender<()>,
+        paste_next_tx: &crossbeam_channel::Sender<()>,
         ctx: &egui::Context,
     ) {
         while let Ok(Some(event)) = conn.poll_for_event() {
             if let Event::KeyPress(ev) = event {
                 let ev_mods = ModMask::from((ev.state & full_mask).bits());
-                if grabs
+                if let Some(&(_, _, action)) = grabs
                     .iter()
-                    .any(|&(kc, mods)| kc == ev.detail && mods == ev_mods)
+                    .find(|&&(kc, mods, _)| kc == ev.detail && mods == ev_mods)
                 {
-                    crate::platform::capture_active_window();
-                    // Best-effort coalesced wakeup; a full or closed channel needs no action.
-                    let _ = hotkey_tx.try_send(());
-                    ctx.request_repaint();
+                    match action {
+                        crate::hotkey::HotkeyAction::ToggleWindow => {
+                            crate::platform::capture_active_window();
+                            let _ = hotkey_tx.try_send(());
+                            ctx.request_repaint();
+                        }
+                        crate::hotkey::HotkeyAction::PasteNext => {
+                            if !crate::platform::is_paste_next_in_flight() {
+                                if let Err(e) = paste_next_tx.try_send(()) {
+                                    crate::logging::log_message(
+                                        "WARN",
+                                        &format!("Paste Next channel full/closed: {e}"),
+                                    );
+                                }
+                                ctx.request_repaint();
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -512,8 +632,9 @@ mod x11_quote_hotkey {
     fn grab_quote_key(
         conn: &x11rb::rust_connection::RustConnection,
         root: u32,
-        grabs: &mut Vec<(u8, ModMask)>,
+        grabs: &mut Vec<(u8, ModMask, crate::hotkey::HotkeyAction)>,
         hk: HotKey,
+        action: crate::hotkey::HotkeyAction,
     ) -> Result<(), ()> {
         let kc = find_quote_keycode(conn).ok_or(())?;
         let mods = mods_to_x11(hk.mods);
@@ -523,7 +644,7 @@ mod x11_quote_hotkey {
         });
         let _ = conn.flush();
         if ok {
-            grabs.push((kc, mods));
+            grabs.push((kc, mods, action));
             Ok(())
         } else {
             Err(())
@@ -533,12 +654,12 @@ mod x11_quote_hotkey {
     fn handle_x11_msg(
         conn: &x11rb::rust_connection::RustConnection,
         root: u32,
-        grabs: &mut Vec<(u8, ModMask)>,
+        grabs: &mut Vec<(u8, ModMask, crate::hotkey::HotkeyAction)>,
         msg: Msg,
     ) -> bool {
         match msg {
-            Msg::Register(hk, reply) => {
-                let _ = reply.send(grab_quote_key(conn, root, grabs, hk));
+            Msg::Register(hk, action, reply) => {
+                let _ = reply.send(grab_quote_key(conn, root, grabs, hk, action));
                 true
             }
             Msg::Clear => {
@@ -552,7 +673,12 @@ mod x11_quote_hotkey {
         }
     }
 
-    fn run_loop(rx: &mpsc::Receiver<Msg>, hotkey_tx: &SyncSender<()>, ctx: &egui::Context) {
+    fn run_loop(
+        rx: &mpsc::Receiver<Msg>,
+        hotkey_tx: &SyncSender<()>,
+        paste_next_tx: &crossbeam_channel::Sender<()>,
+        ctx: &egui::Context,
+    ) {
         let Ok((conn, screen_num)) = x11rb::connect(None) else {
             // Still drain messages until shutdown so callers don't block
             drain_until_shutdown(rx);
@@ -562,13 +688,13 @@ mod x11_quote_hotkey {
             return;
         };
 
-        let mut grabs: Vec<(u8, ModMask)> = Vec::new();
+        let mut grabs: Vec<(u8, ModMask, crate::hotkey::HotkeyAction)> = Vec::new();
         let full_mask =
             KeyButMask::CONTROL | KeyButMask::SHIFT | KeyButMask::MOD4 | KeyButMask::MOD1;
 
         loop {
             if !grabs.is_empty() {
-                poll_x11_key_events(&conn, &grabs, full_mask, hotkey_tx, ctx);
+                poll_x11_key_events(&conn, &grabs, full_mask, hotkey_tx, paste_next_tx, ctx);
             }
 
             let next_msg = if grabs.is_empty() {

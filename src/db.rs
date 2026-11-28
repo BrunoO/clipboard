@@ -143,12 +143,38 @@ impl std::error::Error for ClearError {
     }
 }
 
+/// Payload identity to ignore once in the background clipboard monitor.
+/// Unified across all payload kinds so new clipboard types cannot bypass skip-loop suppression.
+pub(crate) enum SkipCaptureTarget {
+    Text(zeroize::Zeroizing<String>),
+    Image(u64),
+}
+
+/// Zero-allocation borrowed candidate checked by the monitor against a pending [`SkipCaptureTarget`].
+pub(crate) enum SkipCaptureCandidate<'a> {
+    Text(&'a str),
+    Image(u64),
+}
+
+impl SkipCaptureTarget {
+    fn matches(&self, candidate: &SkipCaptureCandidate<'_>) -> bool {
+        match (self, candidate) {
+            (Self::Text(expected), SkipCaptureCandidate::Text(actual)) => {
+                expected.as_str() == *actual
+            }
+            (Self::Image(expected), SkipCaptureCandidate::Image(actual)) => expected == actual,
+            (Self::Text(_), SkipCaptureCandidate::Image(_))
+            | (Self::Image(_), SkipCaptureCandidate::Text(_)) => false,
+        }
+    }
+}
+
 struct DatabaseInner {
     conn: Mutex<Connection>,
     max_history: AtomicUsize,
     ignore_concealed: AtomicBool,
     auto_detect_secrets: AtomicBool,
-    transient_text: Mutex<Option<zeroize::Zeroizing<String>>>,
+    skip_capture: Mutex<Option<SkipCaptureTarget>>,
 }
 
 /// Thread-safe handle to the encrypted `SQLCipher` database.
@@ -312,7 +338,7 @@ impl Database {
             max_history: AtomicUsize::new(100),
             ignore_concealed: AtomicBool::new(true),
             auto_detect_secrets: AtomicBool::new(true),
-            transient_text: Mutex::new(None),
+            skip_capture: Mutex::new(None),
         })))
     }
 
@@ -324,10 +350,10 @@ impl Database {
         })
     }
 
-    /// Acquires the transient text mutex, recovering from poison if a previous thread panicked.
-    fn lock_transient(&self) -> std::sync::MutexGuard<'_, Option<zeroize::Zeroizing<String>>> {
-        self.0.transient_text.lock().unwrap_or_else(|poisoned| {
-            eprintln!("⚠️ Transient text mutex recovered from poison");
+    /// Acquires the skip-capture mutex, recovering from poison if a previous thread panicked.
+    fn lock_skip_capture(&self) -> std::sync::MutexGuard<'_, Option<SkipCaptureTarget>> {
+        self.0.skip_capture.lock().unwrap_or_else(|poisoned| {
+            eprintln!("⚠️ Skip-capture mutex recovered from poison");
             poisoned.into_inner()
         })
     }
@@ -374,23 +400,23 @@ impl Database {
         self.set_auto_detect_secrets(settings.auto_detect_secrets);
     }
 
-    /// Marks the given text to be ignored once by the background clipboard monitor.
-    pub(crate) fn skip_next_capture(&self, text: &str) {
-        let mut guard = self.lock_transient();
-        *guard = Some(zeroize::Zeroizing::new(text.to_string()));
+    /// Marks the given payload target to be ignored once by the background clipboard monitor.
+    pub(crate) fn skip_next_capture(&self, target: SkipCaptureTarget) {
+        let mut guard = self.lock_skip_capture();
+        *guard = Some(target);
     }
 
-    /// Clears any pending transient skip marker (e.g. if a clipboard write failed).
+    /// Clears any pending skip-capture marker (e.g. if a clipboard write failed).
     pub(crate) fn clear_skip_capture(&self) {
-        let mut guard = self.lock_transient();
+        let mut guard = self.lock_skip_capture();
         *guard = None;
     }
 
-    /// Returns true (and clears the marker) if `text` matches a pending transient copy.
+    /// Returns true (and clears the marker) if `candidate` matches a pending programmatic write.
     #[must_use]
-    pub(crate) fn take_if_skipped(&self, text: &str) -> bool {
-        let mut guard = self.lock_transient();
-        if guard.as_deref().map(String::as_str) == Some(text) {
+    pub(crate) fn take_if_skipped(&self, candidate: &SkipCaptureCandidate<'_>) -> bool {
+        let mut guard = self.lock_skip_capture();
+        if guard.as_ref().is_some_and(|t| t.matches(candidate)) {
             *guard = None;
             return true;
         }
@@ -2193,5 +2219,37 @@ mod tests {
         let not_a_db = dir.path().join("notadb.db");
         std::fs::write(&not_a_db, b"not a database").unwrap();
         assert!(Database::validate_backup_file(&not_a_db, &key).is_err());
+    }
+
+    #[test]
+    fn test_unified_skip_capture_target_text_and_image() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("skip_capture_test.db");
+        let db = Database::open(&db_path, &test_hex_key(77)).unwrap();
+
+        // Text skip matches once and does not match image or different text
+        db.skip_next_capture(SkipCaptureTarget::Text(zeroize::Zeroizing::new(
+            "secret-payload".to_string(),
+        )));
+        assert!(!db.take_if_skipped(&SkipCaptureCandidate::Text("other")));
+        assert!(!db.take_if_skipped(&SkipCaptureCandidate::Image(12345)));
+        assert!(db.take_if_skipped(&SkipCaptureCandidate::Text("secret-payload")));
+        // Consumed after match
+        assert!(!db.take_if_skipped(&SkipCaptureCandidate::Text("secret-payload")));
+
+        // Image skip matches once and overwrites any previous pending text skip
+        db.skip_next_capture(SkipCaptureTarget::Text(zeroize::Zeroizing::new(
+            "stale".to_string(),
+        )));
+        db.skip_next_capture(SkipCaptureTarget::Image(987_654_321));
+        assert!(!db.take_if_skipped(&SkipCaptureCandidate::Text("stale")));
+        assert!(!db.take_if_skipped(&SkipCaptureCandidate::Image(111)));
+        assert!(db.take_if_skipped(&SkipCaptureCandidate::Image(987_654_321)));
+        assert!(!db.take_if_skipped(&SkipCaptureCandidate::Image(987_654_321)));
+
+        // clear_skip_capture clears any pending target
+        db.skip_next_capture(SkipCaptureTarget::Image(42));
+        db.clear_skip_capture();
+        assert!(!db.take_if_skipped(&SkipCaptureCandidate::Image(42)));
     }
 }

@@ -38,13 +38,18 @@ impl QuoteHotkeyFallback {
     #[must_use]
     pub(crate) fn new(
         _hotkey_tx: std::sync::mpsc::SyncSender<()>,
+        _paste_next_tx: crossbeam_channel::Sender<()>,
         _ctx: eframe::egui::Context,
     ) -> Self {
         Self
     }
 
     #[must_use]
-    pub(crate) const fn try_register(&self, _hk: global_hotkey::hotkey::HotKey) -> bool {
+    pub(crate) const fn try_register(
+        &self,
+        _hk: global_hotkey::hotkey::HotKey,
+        _action: crate::hotkey::HotkeyAction,
+    ) -> bool {
         false
     }
 
@@ -387,6 +392,22 @@ pub(crate) const META_MODIFIER_NAME: &str = if cfg!(target_os = "macos") {
 } else {
     "Win"
 };
+
+/// Re-entrancy guard set while `paste-next-worker` is injecting synthetic paste keystrokes,
+/// so the global hotkey listener ignores any self-triggered Paste Next events.
+static PASTE_NEXT_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Returns `true` while `paste-next-worker` is simulating a paste keystroke.
+#[must_use]
+pub(crate) fn is_paste_next_in_flight() -> bool {
+    PASTE_NEXT_IN_FLIGHT.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Sets or clears the `PASTE_NEXT_IN_FLIGHT` re-entrancy guard.
+pub(crate) fn set_paste_next_in_flight(in_flight: bool) {
+    PASTE_NEXT_IN_FLIGHT.store(in_flight, std::sync::atomic::Ordering::Release);
+}
 
 /// Returns the platform default for `hide_on_blur` (`false` on Windows where clicking outside
 /// while interacting with the taskbar/tray is common, `true` elsewhere).
@@ -757,9 +778,16 @@ fn restore_focus_platform() {
     backend::restore_focus();
 }
 
+/// Serializes synthetic paste sequences between `focus-paste-worker` and `paste-next-worker`
+/// so their clipboard writes and keystrokes never interleave.
+static PASTE_SIMULATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn simulate_paste_if_foreground() {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
+        let _guard = PASTE_SIMULATION_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !backend::is_target_foreground() {
             log_message(
                 "WARN",
@@ -771,6 +799,36 @@ fn simulate_paste_if_foreground() {
         let _ = backend::simulate_paste();
         #[cfg(not(target_os = "windows"))]
         backend::simulate_paste();
+    }
+}
+
+fn wait_for_modifiers_released(modifiers: global_hotkey::hotkey::Modifiers, timeout: Duration) {
+    if modifiers.is_empty() {
+        return;
+    }
+    let deadline = std::time::Instant::now() + timeout;
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    while backend::are_modifiers_held(modifiers) {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let _ = deadline;
+}
+
+fn simulate_paste_foreground(
+    release_modifiers: global_hotkey::hotkey::Modifiers,
+) -> Result<(), &'static str> {
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    {
+        backend::simulate_paste_foreground(release_modifiers)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = release_modifiers;
+        Err("paste simulation unsupported on this platform")
     }
 }
 
@@ -892,9 +950,12 @@ fn paste_worker() -> &'static PasteWorker {
     })
 }
 
-/// Shuts down the paste worker if it was started. Safe to call more than once.
+/// Shuts down both paste workers if they were started. Safe to call more than once.
 pub(crate) fn shutdown_paste_worker() {
     if let Some(worker) = PASTE_WORKER.get() {
+        worker.shutdown();
+    }
+    if let Some(worker) = PASTE_NEXT_WORKER.get() {
         worker.shutdown();
     }
 }
@@ -914,6 +975,248 @@ pub(crate) fn restore_focus_and_paste(
         auto_paste,
         auto_paste_delay_ms,
     });
+}
+
+/// Payload executed by the ordered `paste-next-worker`.
+pub(crate) enum PasteNextPayload {
+    Text {
+        text: zeroize::Zeroizing<String>,
+        conceal: bool,
+    },
+    Image {
+        width: usize,
+        height: usize,
+        rgba: Vec<u8>,
+    },
+}
+
+/// A single Paste Next unit of work executed strictly in submission order.
+pub(crate) struct PasteNextJob {
+    pub(crate) seq: u64,
+    pub(crate) payload: PasteNextPayload,
+    pub(crate) settle_ms: u64,
+    pub(crate) release_modifiers: global_hotkey::hotkey::Modifiers,
+    pub(crate) db: crate::db::Database,
+    pub(crate) ctx: eframe::egui::Context,
+}
+
+/// Completion outcome emitted by `paste-next-worker` for `App::logic()` reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PasteNextOutcome {
+    Pasted { seq: u64 },
+    Failed { seq: u64, reason: &'static str },
+}
+
+/// RAII guard ensuring `PASTE_NEXT_IN_FLIGHT` is always cleared even if simulation unwinds.
+struct PasteNextInFlightGuard;
+
+impl PasteNextInFlightGuard {
+    fn enter() -> Self {
+        set_paste_next_in_flight(true);
+        Self
+    }
+}
+
+impl Drop for PasteNextInFlightGuard {
+    fn drop(&mut self) {
+        set_paste_next_in_flight(false);
+    }
+}
+
+trait PasteNextExecutor {
+    fn execute_job(&mut self, job: PasteNextJob) -> PasteNextOutcome;
+}
+
+struct OsPasteNextExecutor {
+    clipboard: Option<arboard::Clipboard>,
+}
+
+impl OsPasteNextExecutor {
+    const fn new() -> Self {
+        Self { clipboard: None }
+    }
+
+    fn ensure_clipboard(&mut self) -> Option<&mut arboard::Clipboard> {
+        if self.clipboard.is_none() {
+            match arboard::Clipboard::new() {
+                Ok(cb) => self.clipboard = Some(cb),
+                Err(e) => {
+                    log_message("WARN", &format!("Paste Next clipboard init failed: {e}"));
+                    return None;
+                }
+            }
+        }
+        self.clipboard.as_mut()
+    }
+}
+
+impl PasteNextExecutor for OsPasteNextExecutor {
+    fn execute_job(&mut self, job: PasteNextJob) -> PasteNextOutcome {
+        const MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_millis(500);
+
+        let seq = job.seq;
+        let settle_ms = job.settle_ms.clamp(20, 1000);
+        let release_modifiers = job.release_modifiers;
+        let db = job.db;
+        let ctx = job.ctx;
+
+        // 1. Wait for physical hotkey modifiers to be released (bounded timeout).
+        wait_for_modifiers_released(release_modifiers, MODIFIER_RELEASE_TIMEOUT);
+
+        // 2. Serialize clipboard write + synthetic paste against `focus-paste-worker`.
+        let outcome = {
+            let _lock = PASTE_SIMULATION_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+            // Write payload and arm unified skip marker immediately before OS clipboard write.
+            let write_ok = match job.payload {
+                PasteNextPayload::Text { text, conceal } => {
+                    db.skip_next_capture(crate::db::SkipCaptureTarget::Text(text.clone()));
+                    let res = self
+                        .ensure_clipboard()
+                        .is_some_and(|cb| cb.set_text(text.as_str()).is_ok());
+                    if res && conceal {
+                        mark_clipboard_concealed();
+                    }
+                    res
+                }
+                PasteNextPayload::Image {
+                    width,
+                    height,
+                    rgba,
+                } => {
+                    let fp = crate::media::image_fingerprint(width, height, &rgba);
+                    db.skip_next_capture(crate::db::SkipCaptureTarget::Image(fp));
+                    self.ensure_clipboard().is_some_and(|cb| {
+                        cb.set_image(arboard::ImageData {
+                            width,
+                            height,
+                            bytes: std::borrow::Cow::Borrowed(&rgba),
+                        })
+                        .is_ok()
+                    })
+                }
+            };
+
+            if write_ok {
+                // 3. Wait settle_ms so the OS pasteboard is updated and readable.
+                std::thread::sleep(Duration::from_millis(settle_ms));
+
+                // 4. Simulate paste into the current foreground window with re-entrancy guard.
+                let sim_res = {
+                    let _guard = PasteNextInFlightGuard::enter();
+                    simulate_paste_foreground(release_modifiers)
+                };
+
+                match sim_res {
+                    Ok(()) => PasteNextOutcome::Pasted { seq },
+                    Err(reason) => {
+                        db.clear_skip_capture();
+                        PasteNextOutcome::Failed { seq, reason }
+                    }
+                }
+            } else {
+                // Drop cached clipboard handle so next job retries initialization.
+                self.clipboard = None;
+                db.clear_skip_capture();
+                PasteNextOutcome::Failed {
+                    seq,
+                    reason: "clipboard write failed",
+                }
+            }
+        };
+
+        ctx.request_repaint();
+        outcome
+    }
+}
+
+fn paste_next_worker_loop<E: PasteNextExecutor>(
+    rx: &std::sync::mpsc::Receiver<PasteNextJob>,
+    outcome_tx: &crossbeam_channel::Sender<PasteNextOutcome>,
+    executor: &mut E,
+) {
+    while let Ok(job) = rx.recv() {
+        let outcome = executor.execute_job(job);
+        if outcome_tx.send(outcome).is_err() {
+            break;
+        }
+    }
+}
+
+struct PasteNextWorker {
+    sender: std::sync::Mutex<Option<std::sync::mpsc::Sender<PasteNextJob>>>,
+    outcome_rx: crossbeam_channel::Receiver<PasteNextOutcome>,
+    handle: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl PasteNextWorker {
+    fn send(&self, job: PasteNextJob) {
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(tx) = sender.as_ref() {
+            let _ = tx.send(job);
+        }
+    }
+
+    fn shutdown(&self) {
+        let sender = self
+            .sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        drop(sender);
+
+        let handle = self
+            .handle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(handle) = handle {
+            if handle.join().is_err() {
+                log_message("ERROR", "paste-next-worker panicked during shutdown");
+            }
+        }
+    }
+}
+
+static PASTE_NEXT_WORKER: std::sync::OnceLock<PasteNextWorker> = std::sync::OnceLock::new();
+
+fn paste_next_worker() -> &'static PasteNextWorker {
+    PASTE_NEXT_WORKER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<PasteNextJob>();
+        let (outcome_tx, outcome_rx) = crossbeam_channel::unbounded::<PasteNextOutcome>();
+        let handle = std::thread::Builder::new()
+            .name("paste-next-worker".to_string())
+            .spawn(move || {
+                let mut executor = OsPasteNextExecutor::new();
+                paste_next_worker_loop(&rx, &outcome_tx, &mut executor);
+            });
+        if let Err(e) = &handle {
+            log_message("ERROR", &format!("Failed to spawn paste-next-worker: {e}"));
+        }
+        PasteNextWorker {
+            sender: std::sync::Mutex::new(Some(tx)),
+            outcome_rx,
+            handle: std::sync::Mutex::new(handle.ok()),
+        }
+    })
+}
+
+/// Submits a Paste Next job to the ordered `paste-next-worker` without blocking the caller.
+pub(crate) fn submit_paste_next(job: PasteNextJob) {
+    paste_next_worker().send(job);
+}
+
+/// Non-blocking poll for completed Paste Next outcomes (returns `None` if worker not started or empty).
+#[must_use]
+pub(crate) fn try_recv_paste_next_outcome() -> Option<PasteNextOutcome> {
+    PASTE_NEXT_WORKER
+        .get()
+        .and_then(|worker| worker.outcome_rx.try_recv().ok())
 }
 
 #[cfg(test)]
@@ -979,6 +1282,62 @@ mod tests {
                 "CanUploadClipboardContentToCloud",
             ]
         );
+    }
+
+    #[test]
+    fn test_paste_next_worker_executes_ten_rapid_jobs_in_order() {
+        struct MockExecutor {
+            recorded: Vec<(u64, String)>,
+        }
+        impl PasteNextExecutor for MockExecutor {
+            fn execute_job(&mut self, job: PasteNextJob) -> PasteNextOutcome {
+                let text = match job.payload {
+                    PasteNextPayload::Text { text, .. } => text.to_string(),
+                    PasteNextPayload::Image { .. } => "image".to_string(),
+                };
+                self.recorded.push((job.seq, text));
+                PasteNextOutcome::Pasted { seq: job.seq }
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let db =
+            crate::db::Database::open(&dir.path().join("mock_pn.db"), &"11".repeat(32)).unwrap();
+        let ctx = eframe::egui::Context::default();
+
+        let (tx, rx) = std::sync::mpsc::channel::<PasteNextJob>();
+        let (outcome_tx, outcome_rx) = crossbeam_channel::unbounded::<PasteNextOutcome>();
+
+        for seq in 1..=10_u64 {
+            tx.send(PasteNextJob {
+                seq,
+                payload: PasteNextPayload::Text {
+                    text: zeroize::Zeroizing::new(format!("item-{seq}")),
+                    conceal: false,
+                },
+                settle_ms: 20,
+                release_modifiers: global_hotkey::hotkey::Modifiers::empty(),
+                db: db.clone(),
+                ctx: ctx.clone(),
+            })
+            .unwrap();
+        }
+        drop(tx);
+
+        let mut mock = MockExecutor {
+            recorded: Vec::new(),
+        };
+        paste_next_worker_loop(&rx, &outcome_tx, &mut mock);
+
+        let expected_recorded: Vec<(u64, String)> =
+            (1..=10_u64).map(|i| (i, format!("item-{i}"))).collect();
+        assert_eq!(mock.recorded, expected_recorded);
+
+        let outcomes: Vec<PasteNextOutcome> = outcome_rx.try_iter().collect();
+        let expected_outcomes: Vec<PasteNextOutcome> = (1..=10_u64)
+            .map(|seq| PasteNextOutcome::Pasted { seq })
+            .collect();
+        assert_eq!(outcomes, expected_outcomes);
     }
 
     #[test]

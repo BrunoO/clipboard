@@ -98,9 +98,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let native_options = build_native_options();
     crate::logging::log_message("INFO", "CipherClipboard starting");
 
-    // 7. Setup inter-thread channels (bounded capacity 1 for coalesced wakeup signals)
+    // 7. Setup inter-thread channels (bounded capacity 1 for coalesced wakeup signals;
+    //    lossless bounded queue for Paste Next presses)
     let (notify_tx, notify_rx) = std::sync::mpsc::sync_channel(1);
     let (hotkey_tx, hotkey_rx) = std::sync::mpsc::sync_channel(1);
+    let (paste_next_tx, paste_next_rx) = crossbeam_channel::bounded::<()>(64);
     let (tray_tx, tray_rx) = std::sync::mpsc::channel();
 
     // 8. Start GUI, global hotkeys, system tray, and background monitor
@@ -129,16 +131,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Initialize Windows system tray icon (runs on main UI thread event loop)
             let tray_service = tray::TrayService::new(&tray_tx, &cc.egui_ctx);
 
-            // Initialize OS global hotkey service with user's configured hotkey
-            let initial_hotkeys = settings.effective_hotkeys();
-            let hotkey_service =
-                match HotkeyService::new(&initial_hotkeys, hotkey_tx, cc.egui_ctx.clone()) {
-                    Ok(service) => Some(service),
-                    Err(e) => {
-                        eprintln!("⚠️ Failed to register global hotkey: {e}");
-                        None
-                    }
-                };
+            // Initialize OS global hotkey service with user's configured shortcuts
+            let toggle_hotkey = settings.active_toggle_hotkey();
+            let paste_next_hotkey = settings.active_paste_next_hotkey();
+            let hotkey_service = match HotkeyService::new(
+                toggle_hotkey,
+                paste_next_hotkey,
+                hotkey_tx,
+                paste_next_tx,
+                cc.egui_ctx.clone(),
+            ) {
+                Ok(service) => Some(service),
+                Err(e) => {
+                    eprintln!("⚠️ Failed to register global hotkey: {e}");
+                    None
+                }
+            };
 
             // Start background clipboard polling thread
             let monitor_db = db.clone();
@@ -151,6 +159,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let services = AppServices {
                 notify_rx,
                 hotkey_rx,
+                paste_next_rx,
                 hotkey_service,
                 tray_rx,
                 tray_service,

@@ -9,6 +9,31 @@ pub(crate) fn default_toggle_hotkey() -> String {
     crate::platform::platform_select("Cmd+Shift+V", "Ctrl+Shift+V", "Ctrl+Shift+V").to_string()
 }
 
+/// Default platform global shortcut for Paste Next (Paste Stack).
+#[must_use]
+pub(crate) fn default_paste_next_hotkey() -> String {
+    crate::platform::platform_select("Cmd+Option+V", "Ctrl+Alt+V", "Ctrl+Alt+V").to_string()
+}
+
+/// Validation errors when recording or saving a global hotkey binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HotkeyValidationError {
+    MissingModifier,
+    ReservedOsPaste,
+    ConflictsWithOtherAction,
+}
+
+impl HotkeyValidationError {
+    #[must_use]
+    pub(crate) const fn message(self) -> &'static str {
+        match self {
+            Self::MissingModifier => "Shortcut must include at least one modifier key.",
+            Self::ReservedOsPaste => "Cannot bind the standard OS Paste shortcut (Cmd+V / Ctrl+V).",
+            Self::ConflictsWithOtherAction => "Shortcut conflicts with the other global shortcut.",
+        }
+    }
+}
+
 /// User's preferred color theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) enum AppThemeMode {
@@ -321,6 +346,95 @@ impl ParsedHotkey {
         });
         parts.join("+")
     }
+
+    /// Returns the modifiers required by this hotkey.
+    #[must_use]
+    pub(crate) const fn modifiers(&self) -> Modifiers {
+        self.modifiers
+    }
+
+    /// Returns `true` if this binding is the OS standard paste (`Cmd+V` on macOS, `Ctrl+V` elsewhere).
+    #[must_use]
+    pub(crate) fn is_os_paste(&self) -> bool {
+        let primary = crate::platform::platform_select(
+            Modifiers::META,
+            Modifiers::CONTROL,
+            Modifiers::CONTROL,
+        );
+        self.key == Code::KeyV && self.modifiers == primary
+    }
+
+    /// Validates this binding against hard rules (modifier required, not OS paste, no collision).
+    pub(crate) fn validate_binding(
+        &self,
+        other_binding: Option<&Self>,
+    ) -> Result<(), HotkeyValidationError> {
+        if self.modifiers.is_empty() {
+            return Err(HotkeyValidationError::MissingModifier);
+        }
+        if self.is_os_paste() {
+            return Err(HotkeyValidationError::ReservedOsPaste);
+        }
+        if let Some(other) = other_binding {
+            if other.to_hotkey().id() == self.to_hotkey().id() {
+                return Err(HotkeyValidationError::ConflictsWithOtherAction);
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns a soft warning if this global hotkey shadows an in-app or common OS shortcut.
+    #[must_use]
+    pub(crate) fn soft_conflict_warning(&self) -> Option<&'static str> {
+        let primary = crate::platform::platform_select(
+            Modifiers::META,
+            Modifiers::CONTROL,
+            Modifiers::CONTROL,
+        );
+        let is_primary_only = self.modifiers == primary;
+        let is_ctrl_only = self.modifiers == Modifiers::CONTROL;
+        let is_primary_shift = self.modifiers == (primary | Modifiers::SHIFT);
+
+        if is_primary_only
+            && matches!(
+                self.key,
+                Code::KeyQ
+                    | Code::KeyL
+                    | Code::KeyE
+                    | Code::KeyN
+                    | Code::Digit1
+                    | Code::Digit2
+                    | Code::Digit3
+                    | Code::Digit4
+                    | Code::Digit5
+                    | Code::Digit6
+                    | Code::Digit7
+                    | Code::Digit8
+                    | Code::Digit9
+            )
+        {
+            return Some("Shadows an in-app shortcut (global hotkeys are grabbed system-wide).");
+        }
+        if is_ctrl_only
+            && matches!(
+                self.key,
+                Code::KeyN | Code::KeyP | Code::KeyJ | Code::KeyK | Code::KeyD
+            )
+        {
+            return Some(
+                "Shadows an in-app navigation/delete shortcut (global hotkeys are grabbed system-wide).",
+            );
+        }
+        if is_primary_shift && self.key == Code::KeyM {
+            return Some(
+                "Shadows the in-app \"Paste next from here\" shortcut (global hotkeys are grabbed system-wide).",
+            );
+        }
+        if is_primary_only && self.key == Code::Space {
+            return Some("May conflict with system Spotlight / input-source switching.");
+        }
+        None
+    }
 }
 
 /// Persistent user configuration for the clipboard manager.
@@ -329,6 +443,8 @@ impl ParsedHotkey {
 pub(crate) struct AppSettings {
     #[serde(default = "default_toggle_hotkey")]
     pub(crate) toggle_hotkey: String, // e.g. "Cmd+Shift+V" / "Ctrl+Shift+V"; empty means disabled
+    #[serde(default = "default_paste_next_hotkey")]
+    pub(crate) paste_next_hotkey: String, // e.g. "Cmd+Option+V" / "Ctrl+Alt+V"; empty means disabled
     #[serde(default)]
     pub(crate) theme: AppThemeMode,
     pub(crate) hide_on_copy: bool,
@@ -407,6 +523,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             toggle_hotkey: default_toggle_hotkey(),
+            paste_next_hotkey: default_paste_next_hotkey(),
             theme: AppThemeMode::System,
             hide_on_copy: true,
             max_history: 100,
@@ -466,19 +583,60 @@ impl AppSettings {
         Ok(())
     }
 
-    /// Returns the effective hotkeys for toggling the window (empty when disabled/unparseable).
-    pub(crate) fn effective_hotkeys(&self) -> Vec<HotKey> {
+    /// Parses the Toggle Window hotkey if set and valid.
+    #[must_use]
+    pub(crate) fn toggle_hotkey_parsed(&self) -> Option<ParsedHotkey> {
         ParsedHotkey::parse(&self.toggle_hotkey)
-            .map_or_else(Vec::new, |parsed| vec![parsed.to_hotkey()])
     }
 
-    /// Short badge label for header display.
+    /// Parses the Paste Next hotkey if set and valid.
+    #[must_use]
+    pub(crate) fn paste_next_hotkey_parsed(&self) -> Option<ParsedHotkey> {
+        ParsedHotkey::parse(&self.paste_next_hotkey)
+    }
+
+    /// Returns the effective Toggle Window hotkey (`None` when disabled or unparseable).
+    #[must_use]
+    pub(crate) fn active_toggle_hotkey(&self) -> Option<HotKey> {
+        self.toggle_hotkey_parsed().map(|p| p.to_hotkey())
+    }
+
+    /// Returns `true` if both shortcuts are set and collide on the same hotkey id.
+    #[must_use]
+    pub(crate) fn has_hotkey_collision(&self) -> bool {
+        match (self.active_toggle_hotkey(), self.paste_next_hotkey_parsed()) {
+            (Some(toggle), Some(paste_next)) => toggle.id() == paste_next.to_hotkey().id(),
+            _ => false,
+        }
+    }
+
+    /// Returns the effective Paste Next hotkey (`None` when disabled, unparseable, or colliding
+    /// with Toggle Window — Toggle Window wins on startup/upgrade collisions).
+    #[must_use]
+    pub(crate) fn active_paste_next_hotkey(&self) -> Option<HotKey> {
+        if self.has_hotkey_collision() {
+            return None;
+        }
+        self.paste_next_hotkey_parsed().map(|p| p.to_hotkey())
+    }
+
+    /// Short badge label for Toggle Window header display.
     #[must_use]
     pub(crate) fn toggle_hotkey_badge(&self) -> &str {
         if self.toggle_hotkey.is_empty() {
             "Disabled"
         } else {
             &self.toggle_hotkey
+        }
+    }
+
+    /// Short badge label for Paste Next display.
+    #[must_use]
+    pub(crate) fn paste_next_hotkey_badge(&self) -> &str {
+        if self.paste_next_hotkey.is_empty() {
+            "Disabled"
+        } else {
+            &self.paste_next_hotkey
         }
     }
 }
@@ -591,15 +749,71 @@ mod tests {
     fn test_default_toggle_hotkey_is_valid() {
         let settings = AppSettings::default();
         assert_eq!(settings.toggle_hotkey, default_toggle_hotkey());
-        assert_eq!(settings.effective_hotkeys().len(), 1);
+        assert!(settings.active_toggle_hotkey().is_some());
         assert_eq!(settings.toggle_hotkey_badge(), default_toggle_hotkey());
+        assert_eq!(settings.paste_next_hotkey, default_paste_next_hotkey());
+        assert!(settings.active_paste_next_hotkey().is_some());
+        assert_eq!(
+            settings.paste_next_hotkey_badge(),
+            default_paste_next_hotkey()
+        );
+        assert!(!settings.has_hotkey_collision());
 
         let disabled = AppSettings {
             toggle_hotkey: String::new(),
+            paste_next_hotkey: String::new(),
             ..AppSettings::default()
         };
-        assert_eq!(disabled.effective_hotkeys().len(), 0);
+        assert!(disabled.active_toggle_hotkey().is_none());
         assert_eq!(disabled.toggle_hotkey_badge(), "Disabled");
+        assert!(disabled.active_paste_next_hotkey().is_none());
+        assert_eq!(disabled.paste_next_hotkey_badge(), "Disabled");
+    }
+
+    #[test]
+    fn test_paste_next_hotkey_legacy_default_and_validation() {
+        let legacy: AppSettings =
+            serde_json::from_str(r#"{"hide_on_copy":true,"max_history":100}"#)
+                .expect("Old JSON without paste_next_hotkey should load with platform default");
+        assert_eq!(legacy.paste_next_hotkey, default_paste_next_hotkey());
+        assert!(legacy.active_paste_next_hotkey().is_some());
+
+        // Startup collision guard: Toggle Window wins over Paste Next
+        let colliding = AppSettings {
+            toggle_hotkey: default_paste_next_hotkey(),
+            paste_next_hotkey: default_paste_next_hotkey(),
+            ..AppSettings::default()
+        };
+        assert!(colliding.has_hotkey_collision());
+        assert!(colliding.active_toggle_hotkey().is_some());
+        assert!(colliding.active_paste_next_hotkey().is_none());
+
+        // Validation rules: bare key, OS paste, and collision rejected
+        let bare = ParsedHotkey::parse("F1").unwrap();
+        assert_eq!(
+            bare.validate_binding(None),
+            Err(HotkeyValidationError::MissingModifier)
+        );
+        let os_paste_str = crate::platform::platform_select("Cmd+V", "Ctrl+V", "Ctrl+V");
+        let os_paste = ParsedHotkey::parse(os_paste_str).unwrap();
+        assert_eq!(
+            os_paste.validate_binding(None),
+            Err(HotkeyValidationError::ReservedOsPaste)
+        );
+        let toggle = ParsedHotkey::parse(&default_toggle_hotkey()).unwrap();
+        assert_eq!(
+            toggle.validate_binding(Some(&toggle)),
+            Err(HotkeyValidationError::ConflictsWithOtherAction)
+        );
+        let paste_next = ParsedHotkey::parse(&default_paste_next_hotkey()).unwrap();
+        assert_eq!(paste_next.validate_binding(Some(&toggle)), Ok(()));
+        assert!(paste_next.soft_conflict_warning().is_none());
+
+        let shadowed = ParsedHotkey::parse(crate::platform::platform_select(
+            "Cmd+Q", "Ctrl+Q", "Ctrl+Q",
+        ))
+        .unwrap();
+        assert!(shadowed.soft_conflict_warning().is_some());
     }
 
     #[test]

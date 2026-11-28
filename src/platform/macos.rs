@@ -191,6 +191,7 @@ extern "C" {
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGEventSourceCreate(state_id: i32) -> *mut std::ffi::c_void;
+    fn CGEventSourceFlagsState(state_id: i32) -> u64;
     fn CGEventCreateKeyboardEvent(
         source: *mut std::ffi::c_void,
         virtual_key: u16,
@@ -315,6 +316,45 @@ pub(super) fn simulate_paste() {
             CFRelease(source);
         }
     }
+}
+
+pub(super) fn are_modifiers_held(modifiers: global_hotkey::hotkey::Modifiers) -> bool {
+    // kCGEventSourceStateCombinedSessionState = 0
+    const SOURCE_STATE_COMBINED_SESSION: i32 = 0;
+    const MASK_SHIFT: u64 = 0x0002_0000;
+    const MASK_CONTROL: u64 = 0x0004_0000;
+    const MASK_ALTERNATE: u64 = 0x0008_0000;
+    const MASK_COMMAND: u64 = 0x0010_0000;
+
+    let mut mask = 0_u64;
+    if modifiers.contains(global_hotkey::hotkey::Modifiers::SHIFT) {
+        mask |= MASK_SHIFT;
+    }
+    if modifiers.contains(global_hotkey::hotkey::Modifiers::CONTROL) {
+        mask |= MASK_CONTROL;
+    }
+    if modifiers.contains(global_hotkey::hotkey::Modifiers::ALT) {
+        mask |= MASK_ALTERNATE;
+    }
+    if modifiers.contains(global_hotkey::hotkey::Modifiers::META) {
+        mask |= MASK_COMMAND;
+    }
+    if mask == 0 {
+        return false;
+    }
+    // SAFETY: `CGEventSourceFlagsState` takes a fixed CoreGraphics state enum and returns a bitmask.
+    let flags = unsafe { CGEventSourceFlagsState(SOURCE_STATE_COMBINED_SESSION) };
+    (flags & mask) != 0
+}
+
+pub(super) fn simulate_paste_foreground(
+    _release_modifiers: global_hotkey::hotkey::Modifiers,
+) -> Result<(), &'static str> {
+    if !is_trusted() {
+        return Err("Accessibility permission missing");
+    }
+    simulate_paste();
+    Ok(())
 }
 
 fn general_pasteboard() -> Option<Retained<NSPasteboard>> {

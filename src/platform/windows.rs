@@ -38,9 +38,9 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardLayout, MapVirtualKeyExW, SendInput, ToUnicodeEx, HKL, INPUT, INPUT_0,
-    INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MAPVK_VSC_TO_VK, VK_CONTROL,
-    VK_V,
+    GetAsyncKeyState, GetKeyboardLayout, MapVirtualKeyExW, SendInput, ToUnicodeEx, HKL, INPUT,
+    INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MAPVK_VSC_TO_VK,
+    VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_V,
 };
 use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE,
@@ -1362,6 +1362,122 @@ pub(super) fn simulate_paste() -> bool {
             );
         }
         ok
+    }
+}
+
+fn vk_is_down(vk: u16) -> bool {
+    // SAFETY: `GetAsyncKeyState` takes a virtual-key code and returns key state bits.
+    unsafe { GetAsyncKeyState(i32::from(vk)) < 0 }
+}
+
+pub(super) fn are_modifiers_held(modifiers: global_hotkey::hotkey::Modifiers) -> bool {
+    (modifiers.contains(global_hotkey::hotkey::Modifiers::CONTROL) && vk_is_down(VK_CONTROL))
+        || (modifiers.contains(global_hotkey::hotkey::Modifiers::SHIFT) && vk_is_down(VK_SHIFT))
+        || (modifiers.contains(global_hotkey::hotkey::Modifiers::ALT) && vk_is_down(VK_MENU))
+        || (modifiers.contains(global_hotkey::hotkey::Modifiers::META)
+            && (vk_is_down(VK_LWIN) || vk_is_down(VK_RWIN)))
+}
+
+fn foreground_is_elevated() -> bool {
+    // SAFETY: Foreground window and PID queries are null/zero checked; integrity_level fails closed.
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_null() {
+            return false;
+        }
+        let mut fg_pid: u32 = 0;
+        let _ = GetWindowThreadProcessId(fg, &raw mut fg_pid);
+        if fg_pid == 0 {
+            return false;
+        }
+        let self_level = integrity_level(GetCurrentProcessId())
+            .unwrap_or(SECURITY_MANDATORY_MEDIUM_RID.cast_unsigned());
+        super::uipi_should_skip_paste(fg_pid, integrity_level(fg_pid), self_level)
+    }
+}
+
+pub(super) fn simulate_paste_foreground(
+    release_modifiers: global_hotkey::hotkey::Modifiers,
+) -> Result<(), &'static str> {
+    const fn key_event(vk: u16, scan: u16, flags: u32) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: scan,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }
+    }
+
+    if foreground_is_elevated() {
+        return Err("target elevated");
+    }
+
+    // SAFETY: Keyboard layout lookup and SendInput use initialized INPUT structs with matching count and cbSize.
+    unsafe {
+        let fg = GetForegroundWindow();
+        let fg_tid = if fg.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(fg, std::ptr::null_mut())
+        };
+        let hkl = GetKeyboardLayout(fg_tid);
+
+        let scan_for = |vk: u16| -> u16 {
+            u16::try_from(MapVirtualKeyExW(u32::from(vk), MAPVK_VK_TO_VSC, hkl)).unwrap_or(0)
+        };
+
+        let mut inputs: Vec<INPUT> = Vec::with_capacity(9);
+        if release_modifiers.contains(global_hotkey::hotkey::Modifiers::ALT) && vk_is_down(VK_MENU)
+        {
+            inputs.push(key_event(VK_MENU, scan_for(VK_MENU), KEYEVENTF_KEYUP));
+        }
+        if release_modifiers.contains(global_hotkey::hotkey::Modifiers::SHIFT)
+            && vk_is_down(VK_SHIFT)
+        {
+            inputs.push(key_event(VK_SHIFT, scan_for(VK_SHIFT), KEYEVENTF_KEYUP));
+        }
+        if release_modifiers.contains(global_hotkey::hotkey::Modifiers::META) {
+            if vk_is_down(VK_LWIN) {
+                inputs.push(key_event(VK_LWIN, scan_for(VK_LWIN), KEYEVENTF_KEYUP));
+            }
+            if vk_is_down(VK_RWIN) {
+                inputs.push(key_event(VK_RWIN, scan_for(VK_RWIN), KEYEVENTF_KEYUP));
+            }
+        }
+        if release_modifiers.contains(global_hotkey::hotkey::Modifiers::CONTROL)
+            && vk_is_down(VK_CONTROL)
+        {
+            inputs.push(key_event(VK_CONTROL, scan_for(VK_CONTROL), KEYEVENTF_KEYUP));
+        }
+
+        let ctrl_scan = scan_for(VK_CONTROL);
+        let v_scan = scan_for(VK_V);
+        inputs.push(key_event(VK_CONTROL, ctrl_scan, 0));
+        inputs.push(key_event(VK_V, v_scan, 0));
+        inputs.push(key_event(VK_V, v_scan, KEYEVENTF_KEYUP));
+        inputs.push(key_event(VK_CONTROL, ctrl_scan, KEYEVENTF_KEYUP));
+
+        let expected = u32::try_from(inputs.len()).unwrap_or(0);
+        let inserted = SendInput(
+            expected,
+            inputs.as_ptr(),
+            i32::try_from(std::mem::size_of::<INPUT>()).unwrap_or(0),
+        );
+        if inserted == expected {
+            Ok(())
+        } else {
+            log_message(
+                "WARN",
+                &format!("SendInput inserted {inserted}/{expected} events for Paste Next"),
+            );
+            Err("paste simulation failed")
+        }
     }
 }
 

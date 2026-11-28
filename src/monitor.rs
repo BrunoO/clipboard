@@ -1,32 +1,13 @@
-use crate::db::Database;
+use crate::db::{Database, SkipCaptureCandidate};
 use crate::media;
 use arboard::Clipboard;
 use eframe::egui;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hasher;
 use std::sync::mpsc::{Sender, SyncSender};
 use std::thread;
 use std::time::Duration;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
-const MAX_TEXT_LENGTH: usize = 500_000; // Limit to ~500 KB to avoid accidental huge pastes
-const MAX_IMAGE_PIXELS: usize = 40_000_000; // Limit to ~40 MP to guard memory
-
-fn compute_image_fingerprint(width: usize, height: usize, rgba: &[u8]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    hasher.write_usize(width);
-    hasher.write_usize(height);
-    hasher.write_usize(rgba.len());
-    if rgba.len() <= 65536 {
-        hasher.write(rgba);
-    } else {
-        hasher.write(&rgba[..16384]);
-        let mid = rgba.len() / 2;
-        hasher.write(&rgba[mid..mid + 16384]);
-        hasher.write(&rgba[rgba.len() - 16384..]);
-    }
-    hasher.finish()
-}
+pub(crate) const MAX_TEXT_LENGTH: usize = 500_000; // Limit to ~500 KB to avoid accidental huge pastes
 
 /// Starts the background thread that monitors the OS clipboard for text and image changes.
 ///
@@ -158,7 +139,7 @@ fn poll_clipboard_text(
     state.last_copied_text = Some(text.clone());
     state.last_copied_image_hash = None;
 
-    if db.take_if_skipped(&text) {
+    if db.take_if_skipped(&SkipCaptureCandidate::Text(&text)) {
         return PollOutcome::Handled;
     }
 
@@ -194,18 +175,22 @@ fn poll_clipboard_image(
     let expected_len = width.saturating_mul(height).saturating_mul(4);
     if width == 0
         || height == 0
-        || width.saturating_mul(height) > MAX_IMAGE_PIXELS
+        || width.saturating_mul(height) > media::MAX_IMAGE_PIXELS
         || img.bytes.len() != expected_len
     {
         return PollOutcome::NotAvailable;
     }
 
-    let fingerprint = compute_image_fingerprint(width, height, &img.bytes);
+    let fingerprint = media::image_fingerprint(width, height, &img.bytes);
     if state.last_copied_image_hash == Some(fingerprint) {
         return PollOutcome::Handled;
     }
     state.last_copied_image_hash = Some(fingerprint);
     state.last_copied_text = None;
+
+    if db.take_if_skipped(&SkipCaptureCandidate::Image(fingerprint)) {
+        return PollOutcome::Handled;
+    }
 
     let png_bytes = match media::rgba_to_png(width, height, &img.bytes) {
         Ok(bytes) => bytes,
