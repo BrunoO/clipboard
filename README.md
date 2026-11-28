@@ -100,9 +100,17 @@ Press the global **Paste Next** shortcut (`Cmd+Option+V` on macOS, `Ctrl+Alt+V` 
            ▼                                 ▼
 ┌────────────────────────────────────────────────────────────┐
 │                  eframe / egui GUI Window                  │
-│  - Instant search & history filter (text & images)         │
-│  - Interactive thumbnail preview & one-click copy back     │
-│  - Single item delete & Clear All                          │
+│  - Instant search, filters, pinning & Paste Stack          │
+│  - Interactive previews, annotations & one-click copy back │
+│  - Card menu transforms (live hover preview) & Settings    │
+└─────────────────────────────┬──────────────────────────────┘
+                              │
+                              ▼
+┌────────────────────────────────────────────────────────────┐
+│        Transform Engine & Sandboxed Rhai Scripting         │
+│  - Built-in transforms & AI prompt presets (transform.rs)  │
+│  - User *.rhai scripts in <app_data>/transforms/ (script.rs)│
+│  - Hardened sandbox: no FS/net/env, op & memory caps       │
 └────────────────────────────────────────────────────────────┘
 ```
 

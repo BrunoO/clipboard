@@ -1131,6 +1131,7 @@ impl ClipboardApp {
             ui.add_space(6.0);
 
             let log_path = crate::logging::log_file_path();
+            let log_dir = log_path.and_then(std::path::Path::parent);
             let path_str =
                 log_path.map_or_else(|| "(unavailable)".to_string(), |p| p.display().to_string());
 
@@ -1164,6 +1165,22 @@ impl ClipboardApp {
             ui.add_space(6.0);
 
             ui.horizontal(|ui| {
+                let open_enabled = log_dir.is_some();
+                if ui
+                    .add_enabled(
+                        open_enabled,
+                        egui::Button::new(format!("{} Open Folder", icons::ARROW_SQUARE_OUT)),
+                    )
+                    .on_hover_text("Open the folder containing the log file in your file manager")
+                    .clicked()
+                {
+                    if let Some(dir) = log_dir {
+                        if let Err(e) = crate::platform::open_directory(dir) {
+                            self.show_warning_toast(&format!("{} {e}", icons::WARNING));
+                        }
+                    }
+                }
+
                 let copy_enabled = log_path.is_some();
                 if ui
                     .add_enabled(
