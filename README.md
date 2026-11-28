@@ -16,7 +16,8 @@ CipherClipboard runs quietly in the background, instantly captures copied text a
 * **Cross-Platform Immediate-Mode GUI:** Responsive interface built with [`egui`](https://github.com/emilk/egui) / [`eframe`](https://github.com/emilk/egui) with Direct3D 12 / WGPU acceleration on Windows and high WCAG contrast themes (Dark, Light, System).
 * **Developer Utilities:** In-line syntax highlighting for 11 languages, interactive CSS/Hex/RGB/HSL color palette extraction, and built-in cryptographically secure password & passphrase generator.
 * **Text Transformations & AI Prompt Prep:** One-click card menu transformations (with live hover previews) for cleanup, case/line operations, JSON/Base64/URL tools, and **AI & Prompt** presets that sanitize and format code, logs, or spreadsheets before pasting into Microsoft 365 Copilot or AI coding agents.
-* **Global Hotkey & Fast Recall:** Configurable global summon shortcut (`Ctrl+Shift+V` / `Cmd+Shift+V`) with single-instance window restoration and optional auto-paste.
+* **Global Shortcuts & Fast Recall:** Unified keycap-pill shortcut recorders for **Toggle Window** (`Cmd+Shift+V` / `Ctrl+Shift+V`) with single-instance restoration and optional auto-paste, plus **Paste Next (Paste Stack)** (`Cmd+Option+V` / `Ctrl+Alt+V`) to paste multiple copied entries sequentially without opening the window.
+* **Paste Stack (LIFO / FIFO):** Paste copied text, secrets, or images one by one in **LIFO ↓** (newest-first, default) or **FIFO ↑** order by placing the directional `NEXT` marker on any older entry (hover button, right-click menu, or `Cmd/Ctrl+Shift+M`). Any new copy automatically resets back to LIFO.
 * **Lossless PNG Image Storage:** Efficient PNG encoding for clipboard images via [`image`](https://crates.io/crates/image).
 
 ---
@@ -32,6 +33,16 @@ Open the `⋯` menu on any text clipboard card to copy a transformed version wit
 * **Cleanup:** Strip formatting (HTML, Markdown, ANSI, zero-width chars), unwrap hard line breaks, collapse whitespace.
 * **Case & Lines:** `UPPERCASE`, `lowercase`, `Title Case`, `camelCase`, `snake_case`, `kebab-case`, sort, deduplicate, remove empty lines, join with commas.
 * **Developer & URL:** Prettify/minify JSON, Base64 encode/decode, OS-aware **Quote Path for Shell** (POSIX single quotes on macOS/Linux, double quotes on Windows), and strip URL tracking parameters (`utm_*`, `fbclid`, `gclid`, etc.).
+
+---
+
+## Paste Stack ("Paste Next")
+
+Press the global **Paste Next** shortcut (`Cmd+Option+V` on macOS, `Ctrl+Alt+V` on Windows/Linux — customizable or clearable in **Settings → Global Shortcuts**) to paste history entries sequentially into your focused app without showing the CipherClipboard window:
+
+* **LIFO ↓ (default):** Starts on your newest entry (`↓ NEXT`) and steps downward to older entries.
+* **FIFO ↑:** Place the marker on any older entry (1-click hover arrow on a card, right-click → **Paste next from here**, or `Cmd/Ctrl+Shift+M` on the selected card) to paste upward (`↑ NEXT`) back to the newest entry, then automatically return to **LIFO ↓**.
+* **Automatic reset:** Any new captured copy resets to **LIFO ↓** on that new entry; Paste Next's own writes and ignored concealed copies never reset the stack.
 
 ---
 
@@ -210,7 +221,7 @@ See [`docs/TESTING.md`](docs/TESTING.md) for the current test inventory and the 
 
 * **Monochrome Emoji & Symbol Rendering:** `egui` (`0.37`) rasterizes font glyphs via `ab_glyph` using monochrome vector outlines and does not support color emoji tables (`sbix`, `COLR`/`CPAL`, or `CBDT`). As a result, emojis and symbols in copied text render in the active theme's monochrome text color rather than full color. Invisible Unicode variation selectors (`U+FE0E`, `U+FE0F`) and zero-width joiners are stripped from UI previews to avoid missing-glyph (`□`) boxes, while the original text is preserved intact when copied back to the clipboard.
 * **Windows UIPI & Elevated Target Windows:** Windows User Interface Privilege Isolation (UIPI) blocks standard-privilege applications from injecting synthetic keystrokes (`Ctrl+V`) into elevated (Administrator) windows. CipherClipboard detects higher-integrity target windows, copies the item to the clipboard, and skips auto-paste—press `Ctrl+V` manually in the elevated window.
-* **Windows `Alt+Space` Hotkey Preset:** Selecting the optional `Alt+Space` global shortcut on Windows overrides the standard system-menu accelerator (`Alt+Space`) in other applications. Prefer the default `Ctrl+Shift+V` unless you explicitly want `Alt+Space`.
+* **Windows `Alt+Space` Global Shortcut:** Binding `Alt+Space` as a global shortcut on Windows overrides the standard system-menu accelerator in other applications. Prefer the default `Ctrl+Shift+V` / `Ctrl+Alt+V` unless you explicitly want `Alt+Space`.
 * **Linux Outgoing Concealed Markers:** On Linux (X11/Wayland), incoming concealed markers (`x-kde-passwordManagerHint` in `TARGETS`) are detected from password managers, but outgoing concealed markers cannot be attached by the underlying clipboard provider (`ConcealedMarkerSupport::DetectOnly`). Copied secrets are masked and scheduled for auto-clear, but third-party clipboard monitors without heuristic detection may observe the copy.
 
 ---
