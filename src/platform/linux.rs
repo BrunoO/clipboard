@@ -292,7 +292,7 @@ pub(super) fn simulate_paste_foreground(
         let v_kc = find_keycode(&s.conn, XK_V_LOWER)?;
 
         if !syms.is_empty() {
-            if let Ok(Ok(reply)) = s.conn.query_keymap().map(|c| c.reply()) {
+            if let Ok(Ok(reply)) = s.conn.query_keymap().map(x11rb::cookie::Cookie::reply) {
                 for &sym in &syms {
                     if let Some(kc) = find_keycode(&s.conn, sym) {
                         if keycode_is_pressed(&reply.keys, kc) {
