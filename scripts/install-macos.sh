@@ -10,6 +10,7 @@ APP_VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/version[[:space:]]*=[[
 APP_VERSION="${APP_VERSION:-0.1.0}"
 INSTALL_DIR="${1:-/Applications}"
 APP_BUNDLE="${INSTALL_DIR}/${APP_NAME}.app"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-CipherClipboard Local Dev}"
 
 echo "📦 Building ${APP_NAME} v${APP_VERSION} in release mode..."
 cargo build --release
@@ -59,6 +60,15 @@ cat << EOF > "${APP_BUNDLE}/Contents/Info.plist"
 </dict>
 </plist>
 EOF
+
+if security find-identity -p codesigning 2>/dev/null | grep -Fq "\"${CODESIGN_IDENTITY}\""; then
+    echo "🔏 Signing release binary and app bundle with \"${CODESIGN_IDENTITY}\"..."
+    codesign --force --deep --sign "${CODESIGN_IDENTITY}" "target/release/${APP_NAME}"
+    codesign --force --deep --sign "${CODESIGN_IDENTITY}" "${APP_BUNDLE}"
+else
+    echo "⚠️  Signing identity \"${CODESIGN_IDENTITY}\" not found in keychain; falling back to ad-hoc signature (Accessibility permission may need re-granting after rebuilds)."
+    codesign --force --deep --sign - "${APP_BUNDLE}"
+fi
 
 echo "🔄 Refreshing LaunchServices..."
 touch "${APP_BUNDLE}"
