@@ -1,6 +1,6 @@
 [package]
 name = "cipherclipboard"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 rust-version = "1.95"
 description = "A simple, encrypted cross-platform clipboard manager in Rust"
@@ -18,7 +18,7 @@ path = "src/main.rs"
 name = "CipherClipboard"
 identifier = "com.cipherclipboard.app"
 icon = ["assets/icon.icns"]
-version = "0.3.1"
+version = "0.3.2"
 copyright = "Copyright (c) 2026 BrunoO"
 category = "Utility"
 short_description = "Encrypted Clipboard Manager"
